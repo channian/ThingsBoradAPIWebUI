@@ -5,67 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kepware 點位管理系統</title>
     <style>
-        /* ── Reset & Base ────────────────────────── */
         :root {
-            --primary: #1976d2;
-            --primary-dark: #1565c0;
-            --primary-light: #e3f2fd;
-            --success: #2e7d32;
-            --success-bg: #e8f5e9;
-            --warning: #f57f17;
-            --warning-bg: #fff8e1;
-            --error: #c62828;
-            --error-bg: #ffebee;
-            --bg: #f0f2f5;
-            --card: #ffffff;
-            --text: #333333;
-            --text-light: #888888;
-            --border: #e0e0e0;
-            --radius: 8px;
+            --primary: #1976d2; --primary-dark: #1565c0; --primary-light: #e3f2fd;
+            --success: #2e7d32; --success-bg: #e8f5e9;
+            --warning: #f57f17; --warning-bg: #fff8e1;
+            --error: #c62828; --error-bg: #ffebee;
+            --bg: #f0f2f5; --card: #ffffff;
+            --text: #333333; --text-light: #888888;
+            --border: #e0e0e0; --radius: 8px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
-            background: var(--bg); color: var(--text); line-height: 1.6;
-        }
-
-        /* ── Header ──────────────────────────────── */
-        .header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 16px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+        .header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
         .header h1 { font-size: 22px; font-weight: 600; }
         .header .subtitle { font-size: 13px; opacity: 0.8; }
-
-        /* ── Container ───────────────────────────── */
         .container { max-width: 1200px; margin: 24px auto; padding: 0 24px; }
-
-        /* ── Card ─────────────────────────────────── */
-        .card {
-            background: var(--card); border-radius: var(--radius);
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 20px;
-        }
+        .card { background: var(--card); border-radius: var(--radius); box-shadow: 0 1px 4px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 20px; }
         .card-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--primary); }
-
-        /* ── Forms ────────────────────────────────── */
         .conn-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
         .form-group { display: flex; flex-direction: column; gap: 4px; }
         .form-group label { font-size: 12px; color: var(--text-light); font-weight: 500; }
-        .form-group input, .form-group select {
-            padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
-            font-size: 14px; outline: none; transition: border-color 0.2s;
-        }
-        .form-group input:focus { border-color: var(--primary); }
+        .form-group input, .form-group select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+        .form-group input:focus, .form-group select:focus { border-color: var(--primary); }
         .form-group.grow { flex: 1; min-width: 180px; }
         .form-group.small { min-width: 100px; max-width: 140px; }
-
-        /* ── Buttons ──────────────────────────────── */
-        .btn {
-            padding: 8px 20px; border: none; border-radius: 6px;
-            font-size: 14px; cursor: pointer; font-weight: 500;
-            transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
-        }
+        .btn { padding: 8px 20px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary { background: var(--primary); color: #fff; }
         .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
@@ -73,116 +37,51 @@
         .btn-success:hover:not(:disabled) { background: #1b5e20; }
         .btn-danger { background: var(--error); color: #fff; }
         .btn-danger:hover:not(:disabled) { background: #b71c1c; }
-        .btn-outline {
-            background: transparent; color: var(--primary);
-            border: 1px solid var(--primary);
-        }
+        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
         .btn-outline:hover:not(:disabled) { background: var(--primary-light); }
         .btn-sm { padding: 5px 12px; font-size: 13px; }
-
-        /* ── Connection Status ────────────────────── */
-        .conn-status {
-            padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500;
-        }
+        .conn-status { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; }
         .conn-status.connected { background: var(--success-bg); color: var(--success); }
         .conn-status.disconnected { background: #f5f5f5; color: var(--text-light); }
         .conn-status.connecting { background: var(--warning-bg); color: var(--warning); }
         .conn-status.error { background: var(--error-bg); color: var(--error); }
-
-        /* ── Tabs ─────────────────────────────────── */
-        .tabs {
-            display: flex; border-bottom: 2px solid var(--border);
-            margin: -20px -20px 20px -20px; padding: 0 20px;
-        }
-        .tab {
-            padding: 12px 24px; cursor: pointer; font-size: 14px; font-weight: 500;
-            color: var(--text-light); border-bottom: 2px solid transparent;
-            margin-bottom: -2px; transition: all 0.2s; user-select: none;
-        }
+        .tabs { display: flex; border-bottom: 2px solid var(--border); margin: -20px -20px 20px -20px; padding: 0 20px; }
+        .tab { padding: 12px 24px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-light); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; user-select: none; }
         .tab:hover { color: var(--primary); }
         .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-
-        /* ── Upload Zone ──────────────────────────── */
-        .upload-zone {
-            border: 2px dashed var(--border); border-radius: var(--radius);
-            padding: 32px; text-align: center; cursor: pointer;
-            transition: all 0.3s; margin-bottom: 16px;
-        }
-        .upload-zone:hover, .upload-zone.dragover {
-            border-color: var(--primary); background: var(--primary-light);
-        }
+        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 16px; }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: var(--primary-light); }
         .upload-icon { font-size: 36px; margin-bottom: 8px; }
         .upload-zone p { font-size: 14px; color: var(--text-light); }
         .upload-zone .link { color: var(--primary); text-decoration: underline; }
         .upload-hint { margin-top: 8px; font-weight: 500; color: var(--text) !important; }
-
-        /* ── Table ────────────────────────────────── */
         .section-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
         .table-wrapper { overflow-x: auto; margin-bottom: 16px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th {
-            background: #f5f7fa; padding: 10px 12px; text-align: left;
-            font-weight: 600; color: var(--text-light); border-bottom: 2px solid var(--border);
-            white-space: nowrap;
-        }
-        td {
-            padding: 8px 12px; border-bottom: 1px solid #f0f0f0;
-            max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
+        th { background: #f5f7fa; padding: 10px 12px; text-align: left; font-weight: 600; color: var(--text-light); border-bottom: 2px solid var(--border); white-space: nowrap; }
+        td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         tr:hover td { background: #fafbfc; }
         .checkbox-col { width: 40px; text-align: center; }
-
-        /* ── Controls ─────────────────────────────── */
         .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 16px; }
-        .checkbox-label {
-            display: flex; align-items: center; gap: 8px; font-size: 14px;
-            cursor: pointer; user-select: none;
-        }
-        .checkbox-label input[type="checkbox"] {
-            width: 18px; height: 18px; accent-color: var(--primary);
-        }
+        .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; }
+        .checkbox-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); }
         .settings-row { display: flex; gap: 12px; flex-wrap: wrap; }
-        .settings-toggle {
-            font-size: 13px; color: var(--primary); cursor: pointer;
-            text-decoration: underline; user-select: none;
-        }
-
-        /* ── Progress ─────────────────────────────── */
+        .settings-toggle { font-size: 13px; color: var(--primary); cursor: pointer; text-decoration: underline; user-select: none; }
         .progress-section { margin-top: 20px; }
-        .progress-bar-container {
-            width: 100%; height: 28px; background: #e8e8e8; border-radius: 14px;
-            position: relative; overflow: hidden; margin-bottom: 12px;
-        }
-        .progress-bar {
-            height: 100%; background: linear-gradient(90deg, var(--primary), #42a5f5);
-            border-radius: 14px; transition: width 0.3s ease; min-width: 0;
-        }
-        .progress-text {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 13px; font-weight: 600; color: var(--text);
-        }
+        .progress-bar-container { width: 100%; height: 28px; background: #e8e8e8; border-radius: 14px; position: relative; overflow: hidden; margin-bottom: 12px; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary), #42a5f5); border-radius: 14px; transition: width 0.3s ease; min-width: 0; }
+        .progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 600; color: var(--text); }
         .stats { display: flex; gap: 20px; margin-bottom: 12px; font-size: 14px; }
         .stat { font-weight: 500; }
         .stat.success { color: var(--success); }
         .stat.warning { color: var(--warning); }
         .stat.error { color: var(--error); }
-
-        /* ── Log Area ─────────────────────────────── */
-        .log-area {
-            background: #1e1e1e; color: #d4d4d4; border-radius: var(--radius);
-            padding: 12px 16px; font-family: "Cascadia Code", "Consolas", monospace;
-            font-size: 12px; max-height: 320px; overflow-y: auto; line-height: 1.8;
-        }
+        .log-area { background: #1e1e1e; color: #d4d4d4; border-radius: var(--radius); padding: 12px 16px; font-family: "Cascadia Code", "Consolas", monospace; font-size: 12px; max-height: 320px; overflow-y: auto; line-height: 1.8; }
         .log-info { color: #9cdcfe; }
         .log-success { color: #6a9955; }
         .log-warning { color: #dcdcaa; }
         .log-error { color: #f44747; }
-
-        /* ── Summary ──────────────────────────────── */
-        .summary-card {
-            background: var(--primary-light); border-radius: var(--radius);
-            padding: 20px; margin-top: 16px; text-align: center;
-        }
+        .summary-card { background: var(--primary-light); border-radius: var(--radius); padding: 20px; margin-top: 16px; text-align: center; }
         .summary-card h3 { margin-bottom: 16px; color: var(--primary); }
         .summary-stats { display: flex; justify-content: center; gap: 32px; flex-wrap: wrap; }
         .summary-stat { text-align: center; }
@@ -191,49 +90,29 @@
         .summary-stat.success .stat-value { color: var(--success); }
         .summary-stat.warning .stat-value { color: var(--warning); }
         .summary-stat.error .stat-value { color: var(--error); }
-
-        /* ── Pagination ───────────────────────────── */
-        .pagination {
-            display: flex; justify-content: center; align-items: center;
-            gap: 8px; margin-top: 16px;
-        }
+        .summary-actions { margin-top: 16px; }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
         .page-info { font-size: 13px; color: var(--text-light); margin: 0 12px; }
-
-        /* ── Alert ─────────────────────────────────── */
-        .alert {
-            padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px;
-            font-size: 14px;
-        }
+        .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 14px; }
         .alert-warning { background: var(--warning-bg); color: #e65100; }
-        .alert-error { background: var(--error-bg); color: var(--error); }
-
-        /* ── Confirm Dialog ────────────────────────── */
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.4); display: flex; align-items: center;
-            justify-content: center; z-index: 1000;
-        }
-        .modal-box {
-            background: #fff; border-radius: 12px; padding: 28px;
-            max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-        }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-box { background: #fff; border-radius: 12px; padding: 28px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
         .modal-box h3 { margin-bottom: 12px; }
         .modal-box p { margin-bottom: 20px; color: var(--text-light); font-size: 14px; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
-
-        /* ── Responsive ───────────────────────────── */
-        @media (max-width: 768px) {
-            .container { padding: 0 12px; }
-            .conn-form { flex-direction: column; }
-            .form-group.grow { min-width: 100%; }
-            .tabs { overflow-x: auto; }
-        }
+        .template-link { font-size: 13px; color: var(--primary); text-decoration: underline; cursor: pointer; margin-bottom: 12px; display: inline-block; }
+        .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        .badge-create { background: var(--success-bg); color: var(--success); }
+        .badge-delete, .badge-delete_direct { background: var(--error-bg); color: var(--error); }
+        .badge-dry { background: #f5f5f5; color: var(--text-light); }
+        .badge-live { background: var(--warning-bg); color: var(--warning); }
+        .history-empty { text-align: center; padding: 48px; color: var(--text-light); }
+        @media (max-width: 768px) { .container { padding: 0 12px; } .conn-form { flex-direction: column; } .form-group.grow { min-width: 100%; } .tabs { overflow-x: auto; } }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <!-- Header -->
     <header class="header">
         <div>
             <h1>Kepware 點位管理系統</h1>
@@ -256,8 +135,7 @@
                 </div>
                 <div class="form-group grow">
                     <label>密碼</label>
-                    <input v-model="conn.password" type="password"
-                           @keyup.enter="testConnection">
+                    <input v-model="conn.password" type="password" @keyup.enter="testConnection">
                 </div>
                 <button class="btn btn-primary" @click="testConnection"
                         :disabled="conn.status === 'connecting' || !conn.url || !conn.username">
@@ -270,238 +148,104 @@
         <!-- Main Tabs -->
         <div class="card">
             <div class="tabs">
-                <div class="tab" :class="{ active: activeTab === 'create' }"
-                     @click="activeTab = 'create'">
-                    批次新增
-                </div>
-                <div class="tab" :class="{ active: activeTab === 'delete' }"
-                     @click="activeTab = 'delete'">
-                    批次刪除
-                </div>
-                <div class="tab" :class="{ active: activeTab === 'query' }"
-                     @click="activeTab = 'query'">
-                    裝置查詢
-                </div>
+                <div class="tab" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">批次新增</div>
+                <div class="tab" :class="{ active: activeTab === 'delete' }" @click="activeTab = 'delete'">批次刪除</div>
+                <div class="tab" :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">裝置查詢</div>
+                <div class="tab" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'; loadHistory()">歷史紀錄</div>
             </div>
 
             <!-- =============== Create Tab =============== -->
             <div v-show="activeTab === 'create'">
-                <!-- Upload -->
-                <div class="upload-zone"
-                     :class="{ dragover: dragTarget === 'create' }"
-                     @dragover.prevent="dragTarget = 'create'"
-                     @dragleave="dragTarget = null"
-                     @drop.prevent="handleDrop('create', $event)"
-                     @click="$refs.createFileInput.click()">
-                    <input type="file" ref="createFileInput" accept=".csv"
-                           @change="handleFileSelect('create', $event)" hidden>
+                <a class="template-link" href="/api/templates/create">下載新增 CSV 範本</a>
+                <div class="upload-zone" :class="{ dragover: dragTarget === 'create' }"
+                     @dragover.prevent="dragTarget = 'create'" @dragleave="dragTarget = null"
+                     @drop.prevent="handleDrop('create', $event)" @click="$refs.createFileInput.click()">
+                    <input type="file" ref="createFileInput" accept=".csv" @change="handleFileSelect('create', $event)" hidden>
                     <div class="upload-icon">&#128194;</div>
                     <p>拖曳 CSV 檔案至此，或<span class="link">點擊選擇檔案</span></p>
                     <p v-if="create.fileName" class="upload-hint">{{ create.fileName }}</p>
                 </div>
-
-                <!-- Preview -->
                 <div v-if="create.preview.length">
-                    <div class="section-title">
-                        資料預覽（共 {{ create.totalRows }} 筆，顯示前 {{ create.preview.length }} 筆）
-                    </div>
+                    <div class="section-title">資料預覽（共 {{ create.totalRows }} 筆，顯示前 {{ create.preview.length }} 筆）</div>
                     <div class="table-wrapper">
                         <table>
-                            <thead><tr>
-                                <th v-for="h in create.headers" :key="h">{{ h }}</th>
-                            </tr></thead>
-                            <tbody><tr v-for="(row, i) in create.preview" :key="i">
-                                <td v-for="h in create.headers" :key="h">{{ row[h] || '' }}</td>
-                            </tr></tbody>
+                            <thead><tr><th v-for="h in create.headers" :key="h">{{ h }}</th></tr></thead>
+                            <tbody><tr v-for="(row, i) in create.preview" :key="i"><td v-for="h in create.headers" :key="h">{{ row[h] || '' }}</td></tr></tbody>
                         </table>
                     </div>
-
-                    <!-- Controls -->
                     <div class="controls">
-                        <label class="checkbox-label">
-                            <input type="checkbox" v-model="create.dryRun">
-                            DRY RUN 預演模式（不會真的新增）
-                        </label>
-                        <span class="settings-toggle" @click="create.showSettings = !create.showSettings">
-                            {{ create.showSettings ? '隱藏進階設定' : '進階設定' }}
-                        </span>
+                        <label class="checkbox-label"><input type="checkbox" v-model="create.dryRun"> DRY RUN 預演模式（不會真的新增）</label>
+                        <span class="settings-toggle" @click="create.showSettings = !create.showSettings">{{ create.showSettings ? '隱藏進階設定' : '進階設定' }}</span>
                     </div>
                     <div v-if="create.showSettings" class="settings-row" style="margin-bottom:16px">
-                        <div class="form-group small">
-                            <label>每筆間隔(秒)</label>
-                            <input type="number" v-model.number="create.settings.delay"
-                                   step="0.1" min="0">
-                        </div>
-                        <div class="form-group small">
-                            <label>批次大小</label>
-                            <input type="number" v-model.number="create.settings.batchSize" min="1">
-                        </div>
-                        <div class="form-group small">
-                            <label>批次暫停(秒)</label>
-                            <input type="number" v-model.number="create.settings.batchPause" min="0">
-                        </div>
+                        <div class="form-group small"><label>每筆間隔(秒)</label><input type="number" v-model.number="create.settings.delay" step="0.1" min="0"></div>
+                        <div class="form-group small"><label>批次大小</label><input type="number" v-model.number="create.settings.batchSize" min="1"></div>
+                        <div class="form-group small"><label>批次暫停(秒)</label><input type="number" v-model.number="create.settings.batchPause" min="0"></div>
                     </div>
-
-                    <div v-if="!create.dryRun && !create.running" class="alert alert-warning">
-                        注意：目前為 LIVE 模式，執行後將會真正新增裝置到 ThingsBoard！
-                    </div>
-
-                    <button class="btn btn-success"
-                            @click="startTask('create')"
-                            :disabled="create.running || conn.status !== 'connected'">
-                        {{ create.running ? '執行中...' : '開始新增' }}
-                    </button>
+                    <div v-if="!create.dryRun && !create.running" class="alert alert-warning">注意：目前為 LIVE 模式，執行後將會真正新增裝置到 ThingsBoard！</div>
+                    <button class="btn btn-success" @click="startTask('create')" :disabled="create.running || conn.status !== 'connected'">{{ create.running ? '執行中...' : '開始新增' }}</button>
                 </div>
-
-                <!-- Progress -->
                 <div v-if="create.taskId" class="progress-section">
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" :style="{ width: createProgress + '%' }"></div>
-                        <span class="progress-text">
-                            {{ create.progress.current }} / {{ create.progress.total }}
-                        </span>
-                    </div>
-                    <div class="stats">
-                        <span class="stat success">成功: {{ create.progress.success }}</span>
-                        <span class="stat warning">略過: {{ create.progress.skip }}</span>
-                        <span class="stat error">失敗: {{ create.progress.fail }}</span>
-                    </div>
-                    <div class="log-area" ref="createLogArea">
-                        <div v-for="(l, i) in create.logs" :key="i" :class="'log-' + l.level">
-                            {{ l.message }}
-                        </div>
-                    </div>
+                    <div class="progress-bar-container"><div class="progress-bar" :style="{ width: createProgress + '%' }"></div><span class="progress-text">{{ create.progress.current }} / {{ create.progress.total }}</span></div>
+                    <div class="stats"><span class="stat success">成功: {{ create.progress.success }}</span><span class="stat warning">略過: {{ create.progress.skip }}</span><span class="stat error">失敗: {{ create.progress.fail }}</span></div>
+                    <div class="log-area" ref="createLogArea"><div v-for="(l, i) in create.logs" :key="i" :class="'log-' + l.level">{{ l.message }}</div></div>
                     <div v-if="create.summary" class="summary-card">
                         <h3>新增作業完成</h3>
                         <div class="summary-stats">
-                            <div class="summary-stat">
-                                <div class="stat-value">{{ create.summary.total }}</div>
-                                <div class="stat-label">CSV 總筆數</div>
-                            </div>
-                            <div class="summary-stat success">
-                                <div class="stat-value">{{ create.summary.success }}</div>
-                                <div class="stat-label">成功新增</div>
-                            </div>
-                            <div class="summary-stat warning">
-                                <div class="stat-value">{{ create.summary.skip }}</div>
-                                <div class="stat-label">略過</div>
-                            </div>
-                            <div class="summary-stat error">
-                                <div class="stat-value">{{ create.summary.fail }}</div>
-                                <div class="stat-label">失敗</div>
-                            </div>
+                            <div class="summary-stat"><div class="stat-value">{{ create.summary.total }}</div><div class="stat-label">CSV 總筆數</div></div>
+                            <div class="summary-stat success"><div class="stat-value">{{ create.summary.success }}</div><div class="stat-label">成功新增</div></div>
+                            <div class="summary-stat warning"><div class="stat-value">{{ create.summary.skip }}</div><div class="stat-label">略過</div></div>
+                            <div class="summary-stat error"><div class="stat-value">{{ create.summary.fail }}</div><div class="stat-label">失敗</div></div>
                         </div>
+                        <div class="summary-actions"><a class="btn btn-outline btn-sm" :href="'/api/tasks/' + create.taskId + '/export'">下載結果明細 CSV</a></div>
                     </div>
                 </div>
             </div>
 
             <!-- =============== Delete Tab =============== -->
             <div v-show="activeTab === 'delete'">
-                <div class="upload-zone"
-                     :class="{ dragover: dragTarget === 'delete' }"
-                     @dragover.prevent="dragTarget = 'delete'"
-                     @dragleave="dragTarget = null"
-                     @drop.prevent="handleDrop('delete', $event)"
-                     @click="$refs.deleteFileInput.click()">
-                    <input type="file" ref="deleteFileInput" accept=".csv"
-                           @change="handleFileSelect('delete', $event)" hidden>
+                <a class="template-link" href="/api/templates/delete">下載刪除 CSV 範本</a>
+                <div class="upload-zone" :class="{ dragover: dragTarget === 'delete' }"
+                     @dragover.prevent="dragTarget = 'delete'" @dragleave="dragTarget = null"
+                     @drop.prevent="handleDrop('delete', $event)" @click="$refs.deleteFileInput.click()">
+                    <input type="file" ref="deleteFileInput" accept=".csv" @change="handleFileSelect('delete', $event)" hidden>
                     <div class="upload-icon">&#128465;</div>
                     <p>拖曳 CSV 檔案至此，或<span class="link">點擊選擇檔案</span></p>
                     <p v-if="del.fileName" class="upload-hint">{{ del.fileName }}</p>
                 </div>
-
                 <div v-if="del.preview.length">
-                    <div class="section-title">
-                        資料預覽（共 {{ del.totalRows }} 筆，顯示前 {{ del.preview.length }} 筆）
-                    </div>
+                    <div class="section-title">資料預覽（共 {{ del.totalRows }} 筆，顯示前 {{ del.preview.length }} 筆）</div>
                     <div class="table-wrapper">
                         <table>
-                            <thead><tr>
-                                <th v-for="h in del.headers" :key="h">{{ h }}</th>
-                            </tr></thead>
-                            <tbody><tr v-for="(row, i) in del.preview" :key="i">
-                                <td v-for="h in del.headers" :key="h">{{ row[h] || '' }}</td>
-                            </tr></tbody>
+                            <thead><tr><th v-for="h in del.headers" :key="h">{{ h }}</th></tr></thead>
+                            <tbody><tr v-for="(row, i) in del.preview" :key="i"><td v-for="h in del.headers" :key="h">{{ row[h] || '' }}</td></tr></tbody>
                         </table>
                     </div>
-
                     <div class="controls">
-                        <label class="checkbox-label">
-                            <input type="checkbox" v-model="del.dryRun">
-                            DRY RUN 預演模式（不會真的刪除）
-                        </label>
-                        <span class="settings-toggle" @click="del.showSettings = !del.showSettings">
-                            {{ del.showSettings ? '隱藏進階設定' : '進階設定' }}
-                        </span>
+                        <label class="checkbox-label"><input type="checkbox" v-model="del.dryRun"> DRY RUN 預演模式（不會真的刪除）</label>
+                        <span class="settings-toggle" @click="del.showSettings = !del.showSettings">{{ del.showSettings ? '隱藏進階設定' : '進階設定' }}</span>
                     </div>
                     <div v-if="del.showSettings" class="settings-row" style="margin-bottom:16px">
-                        <div class="form-group small">
-                            <label>每筆間隔(秒)</label>
-                            <input type="number" v-model.number="del.settings.delay"
-                                   step="0.1" min="0">
-                        </div>
-                        <div class="form-group small">
-                            <label>批次大小</label>
-                            <input type="number" v-model.number="del.settings.batchSize" min="1">
-                        </div>
-                        <div class="form-group small">
-                            <label>批次暫停(秒)</label>
-                            <input type="number" v-model.number="del.settings.batchPause" min="0">
-                        </div>
+                        <div class="form-group small"><label>每筆間隔(秒)</label><input type="number" v-model.number="del.settings.delay" step="0.1" min="0"></div>
+                        <div class="form-group small"><label>批次大小</label><input type="number" v-model.number="del.settings.batchSize" min="1"></div>
+                        <div class="form-group small"><label>批次暫停(秒)</label><input type="number" v-model.number="del.settings.batchPause" min="0"></div>
                     </div>
-
-                    <div v-if="!del.dryRun && !del.running" class="alert alert-warning">
-                        注意：目前為 LIVE 模式，執行後將會真正刪除 ThingsBoard 上的裝置！
-                    </div>
-
-                    <button class="btn btn-danger"
-                            @click="confirmDelete"
-                            :disabled="del.running || conn.status !== 'connected'">
-                        {{ del.running ? '執行中...' : '開始刪除' }}
-                    </button>
+                    <div v-if="!del.dryRun && !del.running" class="alert alert-warning">注意：目前為 LIVE 模式，執行後將會真正刪除 ThingsBoard 上的裝置！</div>
+                    <button class="btn btn-danger" @click="confirmDelete" :disabled="del.running || conn.status !== 'connected'">{{ del.running ? '執行中...' : '開始刪除' }}</button>
                 </div>
-
-                <!-- Progress -->
                 <div v-if="del.taskId" class="progress-section">
-                    <div class="progress-bar-container">
-                        <div class="progress-bar"
-                             :style="{ width: deleteProgress + '%',
-                                       background: 'linear-gradient(90deg, #c62828, #ef5350)' }">
-                        </div>
-                        <span class="progress-text">
-                            {{ del.progress.current }} / {{ del.progress.total }}
-                        </span>
-                    </div>
-                    <div class="stats">
-                        <span class="stat success">成功: {{ del.progress.success }}</span>
-                        <span class="stat warning">略過: {{ del.progress.skip }}</span>
-                        <span class="stat error">失敗: {{ del.progress.fail }}</span>
-                    </div>
-                    <div class="log-area" ref="deleteLogArea">
-                        <div v-for="(l, i) in del.logs" :key="i" :class="'log-' + l.level">
-                            {{ l.message }}
-                        </div>
-                    </div>
+                    <div class="progress-bar-container"><div class="progress-bar" :style="{ width: deleteProgress + '%', background: 'linear-gradient(90deg, #c62828, #ef5350)' }"></div><span class="progress-text">{{ del.progress.current }} / {{ del.progress.total }}</span></div>
+                    <div class="stats"><span class="stat success">成功: {{ del.progress.success }}</span><span class="stat warning">略過: {{ del.progress.skip }}</span><span class="stat error">失敗: {{ del.progress.fail }}</span></div>
+                    <div class="log-area" ref="deleteLogArea"><div v-for="(l, i) in del.logs" :key="i" :class="'log-' + l.level">{{ l.message }}</div></div>
                     <div v-if="del.summary" class="summary-card">
                         <h3>刪除作業完成</h3>
                         <div class="summary-stats">
-                            <div class="summary-stat">
-                                <div class="stat-value">{{ del.summary.total }}</div>
-                                <div class="stat-label">CSV 總筆數</div>
-                            </div>
-                            <div class="summary-stat success">
-                                <div class="stat-value">{{ del.summary.success }}</div>
-                                <div class="stat-label">成功刪除</div>
-                            </div>
-                            <div class="summary-stat warning">
-                                <div class="stat-value">{{ del.summary.skip }}</div>
-                                <div class="stat-label">略過</div>
-                            </div>
-                            <div class="summary-stat error">
-                                <div class="stat-value">{{ del.summary.fail }}</div>
-                                <div class="stat-label">失敗</div>
-                            </div>
+                            <div class="summary-stat"><div class="stat-value">{{ del.summary.total }}</div><div class="stat-label">CSV 總筆數</div></div>
+                            <div class="summary-stat success"><div class="stat-value">{{ del.summary.success }}</div><div class="stat-label">成功刪除</div></div>
+                            <div class="summary-stat warning"><div class="stat-value">{{ del.summary.skip }}</div><div class="stat-label">略過</div></div>
+                            <div class="summary-stat error"><div class="stat-value">{{ del.summary.fail }}</div><div class="stat-label">失敗</div></div>
                         </div>
+                        <div class="summary-actions"><a class="btn btn-outline btn-sm" :href="'/api/tasks/' + del.taskId + '/export'">下載結果明細 CSV</a></div>
                     </div>
                 </div>
             </div>
@@ -510,91 +254,77 @@
             <div v-show="activeTab === 'query'">
                 <div class="controls" style="margin-bottom: 16px;">
                     <div class="form-group grow">
-                        <label>搜尋裝置名稱</label>
-                        <input v-model="query.search" placeholder="輸入關鍵字搜尋..."
-                               @keyup.enter="queryDevices(0)">
+                        <label>搜尋（名稱 / Type / Label）</label>
+                        <input v-model="query.search" placeholder="輸入關鍵字搜尋..." @keyup.enter="queryDevices(0)">
                     </div>
-                    <button class="btn btn-primary" @click="queryDevices(0)"
-                            :disabled="conn.status !== 'connected' || query.loading">
-                        {{ query.loading ? '查詢中...' : '查詢' }}
-                    </button>
-                    <button class="btn btn-danger btn-sm"
-                            v-if="query.selected.length"
-                            @click="confirmDeleteSelected">
-                        刪除已選 ({{ query.selected.length }})
-                    </button>
+                    <div class="form-group small">
+                        <label>每頁筆數</label>
+                        <select v-model.number="query.pageSize">
+                            <option :value="20">20</option><option :value="50">50</option><option :value="100">100</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" @click="queryDevices(0)" :disabled="conn.status !== 'connected' || query.loading">{{ query.loading ? '查詢中...' : '查詢' }}</button>
+                    <button class="btn btn-outline btn-sm" @click="exportDevices" :disabled="conn.status !== 'connected'" v-if="query.totalElements > 0">匯出全部 CSV</button>
+                    <button class="btn btn-danger btn-sm" v-if="query.selected.length" @click="confirmDeleteSelected">刪除已選 ({{ query.selected.length }})</button>
                 </div>
-
                 <div v-if="query.devices.length" class="table-wrapper">
                     <table>
                         <thead><tr>
-                            <th class="checkbox-col">
-                                <input type="checkbox"
-                                       :checked="isAllSelected"
-                                       @change="toggleSelectAll">
-                            </th>
-                            <th>Name</th>
-                            <th>Type</th>
-                            <th>Label</th>
-                            <th>建立時間</th>
+                            <th class="checkbox-col"><input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll"></th>
+                            <th>Name</th><th>Type</th><th>Label</th><th>建立時間</th>
                         </tr></thead>
                         <tbody>
                             <tr v-for="d in query.devices" :key="d.id.id">
-                                <td class="checkbox-col">
-                                    <input type="checkbox" :value="d.id.id"
-                                           v-model="query.selected">
-                                </td>
-                                <td>{{ d.name }}</td>
-                                <td>{{ d.type }}</td>
-                                <td>{{ d.label || '-' }}</td>
-                                <td>{{ formatTime(d.createdTime) }}</td>
+                                <td class="checkbox-col"><input type="checkbox" :value="d.id.id" v-model="query.selected"></td>
+                                <td>{{ d.name }}</td><td>{{ d.type }}</td><td>{{ d.label || '-' }}</td><td>{{ formatTime(d.createdTime) }}</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-
                 <div v-if="query.totalElements > 0" class="pagination">
-                    <button class="btn btn-outline btn-sm"
-                            @click="queryDevices(query.page - 1)"
-                            :disabled="query.page <= 0">
-                        上一頁
-                    </button>
-                    <span class="page-info">
-                        第 {{ query.page + 1 }} / {{ query.totalPages }} 頁
-                        （共 {{ query.totalElements }} 筆）
-                    </span>
-                    <button class="btn btn-outline btn-sm"
-                            @click="queryDevices(query.page + 1)"
-                            :disabled="!query.hasNext">
-                        下一頁
-                    </button>
+                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page - 1)" :disabled="query.page <= 0">上一頁</button>
+                    <span class="page-info">第 {{ query.page + 1 }} / {{ query.totalPages }} 頁（共 {{ query.totalElements }} 筆）</span>
+                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page + 1)" :disabled="!query.hasNext">下一頁</button>
                 </div>
-
-                <div v-if="query.searched && !query.devices.length && !query.loading"
-                     style="text-align:center; padding:40px; color:var(--text-light);">
-                    查無裝置
-                </div>
-
-                <!-- Direct delete progress -->
+                <div v-if="query.searched && !query.devices.length && !query.loading" style="text-align:center; padding:40px; color:var(--text-light);">查無裝置</div>
                 <div v-if="query.taskId" class="progress-section" style="margin-top:16px">
-                    <div class="log-area" ref="queryLogArea">
-                        <div v-for="(l, i) in query.logs" :key="i" :class="'log-' + l.level">
-                            {{ l.message }}
-                        </div>
-                    </div>
+                    <div class="log-area" ref="queryLogArea"><div v-for="(l, i) in query.logs" :key="i" :class="'log-' + l.level">{{ l.message }}</div></div>
                     <div v-if="query.summary" class="summary-card">
                         <h3>刪除完成</h3>
                         <div class="summary-stats">
-                            <div class="summary-stat success">
-                                <div class="stat-value">{{ query.summary.success }}</div>
-                                <div class="stat-label">成功</div>
-                            </div>
-                            <div class="summary-stat error">
-                                <div class="stat-value">{{ query.summary.fail }}</div>
-                                <div class="stat-label">失敗</div>
-                            </div>
+                            <div class="summary-stat success"><div class="stat-value">{{ query.summary.success }}</div><div class="stat-label">成功</div></div>
+                            <div class="summary-stat error"><div class="stat-value">{{ query.summary.fail }}</div><div class="stat-label">失敗</div></div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- =============== History Tab =============== -->
+            <div v-show="activeTab === 'history'">
+                <div v-if="history.length" class="table-wrapper">
+                    <table>
+                        <thead><tr>
+                            <th>時間</th><th>操作</th><th>模式</th><th>CSV 檔案</th>
+                            <th>總計</th><th>成功</th><th>失敗</th><th>略過</th><th>明細</th>
+                        </tr></thead>
+                        <tbody>
+                            <tr v-for="h in history" :key="h.task_id">
+                                <td>{{ formatISOTime(h.started_at) }}</td>
+                                <td><span class="badge" :class="'badge-' + h.type">{{ typeLabel(h.type) }}</span></td>
+                                <td><span class="badge" :class="h.dry_run ? 'badge-dry' : 'badge-live'">{{ h.dry_run ? 'DRY RUN' : 'LIVE' }}</span></td>
+                                <td :title="h.csv_filename">{{ truncate(h.csv_filename, 30) }}</td>
+                                <td>{{ h.total }}</td>
+                                <td style="color:var(--success)">{{ h.success }}</td>
+                                <td style="color:var(--error)">{{ h.fail }}</td>
+                                <td style="color:var(--warning)">{{ h.skip }}</td>
+                                <td><a :href="'/api/tasks/' + h.task_id + '/export'" class="btn btn-outline btn-sm" v-if="hasTaskInMemory(h.task_id)">CSV</a><span v-else style="color:var(--text-light); font-size:12px">已過期</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div v-if="!history.length" class="history-empty">尚無操作紀錄</div>
+                <div v-if="history.length" style="margin-top:12px; text-align:right;">
+                    <button class="btn btn-outline btn-sm" @click="clearHistory">清除所有紀錄</button>
                 </div>
             </div>
         </div>
@@ -607,9 +337,7 @@
             <p>{{ modal.message }}</p>
             <div class="modal-actions">
                 <button class="btn btn-outline" @click="modal.show = false">取消</button>
-                <button class="btn btn-danger" @click="modal.onConfirm(); modal.show = false">
-                    確認執行
-                </button>
+                <button class="btn btn-danger" @click="modal.onConfirm(); modal.show = false">確認執行</button>
             </div>
         </div>
     </div>
@@ -621,117 +349,51 @@ const { createApp, ref, reactive, computed, nextTick, watch } = Vue
 
 createApp({
     setup() {
-        // ── Connection State ────────────────
-        const conn = reactive({
-            url: '',
-            username: '',
-            password: '',
-            token: null,
-            status: 'disconnected'
-        })
-
-        const connStatusText = computed(() => ({
-            disconnected: '未連線',
-            connecting: '連線中...',
-            connected: '已連線',
-            error: '連線失敗'
-        })[conn.status])
-
-        // ── Active Tab ──────────────────────
+        const conn = reactive({ url: '', username: '', password: '', token: null, status: 'disconnected' })
+        const connStatusText = computed(() => ({ disconnected: '未連線', connecting: '連線中...', connected: '已連線', error: '連線失敗' })[conn.status])
         const activeTab = ref('create')
         const dragTarget = ref(null)
 
-        // ── Operation States ────────────────
         function newOpState(defaults = {}) {
             return reactive({
-                uploadId: null,
-                fileName: null,
-                headers: [],
-                preview: [],
-                totalRows: 0,
-                dryRun: true,
-                running: false,
-                taskId: null,
-                showSettings: false,
+                uploadId: null, fileName: null, headers: [], preview: [], totalRows: 0,
+                dryRun: true, running: false, taskId: null, showSettings: false,
                 progress: { current: 0, total: 0, success: 0, fail: 0, skip: 0 },
-                logs: [],
-                summary: null,
+                logs: [], summary: null,
                 settings: { delay: 0.2, batchSize: 50, batchPause: 5 },
                 ...defaults
             })
         }
         const create = newOpState()
-        const del = newOpState({ settings: { delay: 0.2, batchSize: 50, batchPause: 5 } })
+        const del = newOpState()
 
-        // ── Query State ─────────────────────
         const query = reactive({
-            search: '',
-            devices: [],
-            page: 0,
-            pageSize: 20,
-            totalPages: 0,
-            totalElements: 0,
-            hasNext: false,
-            loading: false,
-            searched: false,
-            selected: [],
-            taskId: null,
-            logs: [],
-            summary: null,
+            search: '', devices: [], page: 0, pageSize: 20,
+            totalPages: 0, totalElements: 0, hasNext: false,
+            loading: false, searched: false, selected: [],
+            taskId: null, logs: [], summary: null,
         })
 
-        // ── Modal ───────────────────────────
-        const modal = reactive({
-            show: false,
-            title: '',
-            message: '',
-            onConfirm: () => {}
-        })
+        const history = ref([])
 
-        // ── Refs ────────────────────────────
+        const modal = reactive({ show: false, title: '', message: '', onConfirm: () => {} })
         const createLogArea = ref(null)
         const deleteLogArea = ref(null)
         const queryLogArea = ref(null)
 
-        // ── Computed ────────────────────────
-        const createProgress = computed(() => {
-            if (create.progress.total === 0) return 0
-            return Math.round(create.progress.current / create.progress.total * 100)
-        })
-        const deleteProgress = computed(() => {
-            if (del.progress.total === 0) return 0
-            return Math.round(del.progress.current / del.progress.total * 100)
-        })
-        const isAllSelected = computed(() => {
-            return query.devices.length > 0 &&
-                   query.devices.every(d => query.selected.includes(d.id.id))
-        })
-
-        // ── Methods ─────────────────────────
+        const createProgress = computed(() => create.progress.total === 0 ? 0 : Math.round(create.progress.current / create.progress.total * 100))
+        const deleteProgress = computed(() => del.progress.total === 0 ? 0 : Math.round(del.progress.current / del.progress.total * 100))
+        const isAllSelected = computed(() => query.devices.length > 0 && query.devices.every(d => query.selected.includes(d.id.id)))
 
         async function testConnection() {
             conn.status = 'connecting'
             try {
-                const resp = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        tb_url: conn.url,
-                        username: conn.username,
-                        password: conn.password
-                    })
-                })
-                if (!resp.ok) {
-                    const err = await resp.json()
-                    throw new Error(err.detail || 'Login failed')
-                }
+                const resp = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tb_url: conn.url, username: conn.username, password: conn.password }) })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Login failed') }
                 const data = await resp.json()
                 conn.token = data.token
                 conn.status = 'connected'
-            } catch (e) {
-                conn.status = 'error'
-                alert('連線失敗: ' + e.message)
-            }
+            } catch (e) { conn.status = 'error'; alert('連線失敗: ' + e.message) }
         }
 
         async function uploadCSV(operation, file) {
@@ -739,86 +401,35 @@ createApp({
             const formData = new FormData()
             formData.append('file', file)
             try {
-                const resp = await fetch('/api/csv/upload', {
-                    method: 'POST',
-                    body: formData
-                })
-                if (!resp.ok) {
-                    const err = await resp.json()
-                    throw new Error(err.detail || 'Upload failed')
-                }
+                const resp = await fetch('/api/csv/upload', { method: 'POST', body: formData })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Upload failed') }
                 const data = await resp.json()
-                state.uploadId = data.upload_id
-                state.headers = data.headers
-                state.preview = data.preview
-                state.totalRows = data.total_rows
-                state.fileName = data.filename
-                // Reset previous task state
-                state.taskId = null
-                state.logs = []
-                state.summary = null
+                state.uploadId = data.upload_id; state.headers = data.headers; state.preview = data.preview
+                state.totalRows = data.total_rows; state.fileName = data.filename
+                state.taskId = null; state.logs = []; state.summary = null
                 state.progress = { current: 0, total: 0, success: 0, fail: 0, skip: 0 }
-            } catch (e) {
-                alert('CSV 上傳失敗: ' + e.message)
-            }
+            } catch (e) { alert('CSV 上傳失敗: ' + e.message) }
         }
 
-        function handleFileSelect(op, event) {
-            const file = event.target.files[0]
-            if (file) uploadCSV(op, file)
-        }
-
-        function handleDrop(op, event) {
-            dragTarget.value = null
-            const file = event.dataTransfer.files[0]
-            if (file && file.name.endsWith('.csv')) {
-                uploadCSV(op, file)
-            } else {
-                alert('請上傳 .csv 檔案')
-            }
-        }
+        function handleFileSelect(op, event) { const file = event.target.files[0]; if (file) uploadCSV(op, file) }
+        function handleDrop(op, event) { dragTarget.value = null; const file = event.dataTransfer.files[0]; if (file && file.name.endsWith('.csv')) { uploadCSV(op, file) } else { alert('請上傳 .csv 檔案') } }
 
         async function startTask(operation) {
             const state = operation === 'create' ? create : del
-            if (!state.uploadId) return
-            if (conn.status !== 'connected') {
-                alert('請先連線 ThingsBoard')
-                return
-            }
-
-            state.running = true
-            state.logs = []
-            state.summary = null
+            if (!state.uploadId || conn.status !== 'connected') return
+            state.running = true; state.logs = []; state.summary = null
             state.progress = { current: 0, total: 0, success: 0, fail: 0, skip: 0 }
-
             try {
-                const resp = await fetch('/api/tasks/execute', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        upload_id: state.uploadId,
-                        operation: operation,
-                        dry_run: state.dryRun,
-                        tb_url: conn.url,
-                        tb_username: conn.username,
-                        tb_password: conn.password,
-                        delay: state.settings.delay,
-                        batch_size: state.settings.batchSize,
-                        batch_pause: state.settings.batchPause,
-                    })
-                })
-                if (!resp.ok) {
-                    const err = await resp.json()
-                    throw new Error(err.detail || 'Execute failed')
-                }
+                const resp = await fetch('/api/tasks/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ upload_id: state.uploadId, operation, dry_run: state.dryRun,
+                        tb_url: conn.url, tb_username: conn.username, tb_password: conn.password,
+                        delay: state.settings.delay, batch_size: state.settings.batchSize, batch_pause: state.settings.batchPause,
+                        csv_filename: state.fileName || '' }) })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Execute failed') }
                 const data = await resp.json()
                 state.taskId = data.task_id
-                connectSSE(data.task_id, state,
-                           operation === 'create' ? createLogArea : deleteLogArea)
-            } catch (e) {
-                state.running = false
-                alert('啟動任務失敗: ' + e.message)
-            }
+                connectSSE(data.task_id, state, operation === 'create' ? createLogArea : deleteLogArea)
+            } catch (e) { state.running = false; alert('啟動任務失敗: ' + e.message) }
         }
 
         function connectSSE(taskId, state, logAreaRef) {
@@ -827,151 +438,99 @@ createApp({
                 const data = JSON.parse(event.data)
                 if (data.type === 'log') {
                     state.logs.push({ level: data.level, message: data.message })
-                    nextTick(() => {
-                        if (logAreaRef.value) {
-                            logAreaRef.value.scrollTop = logAreaRef.value.scrollHeight
-                        }
-                    })
+                    nextTick(() => { if (logAreaRef.value) logAreaRef.value.scrollTop = logAreaRef.value.scrollHeight })
                 } else if (data.type === 'progress') {
-                    state.progress = {
-                        current: data.current,
-                        total: data.total,
-                        success: data.success,
-                        fail: data.fail,
-                        skip: data.skip
-                    }
+                    state.progress = { current: data.current, total: data.total, success: data.success, fail: data.fail, skip: data.skip }
                 } else if (data.type === 'complete') {
-                    state.summary = {
-                        total: data.total,
-                        success: data.success,
-                        fail: data.fail,
-                        skip: data.skip
-                    }
-                    state.running = false
-                    evtSource.close()
+                    state.summary = { total: data.total, success: data.success, fail: data.fail, skip: data.skip }
+                    state.running = false; evtSource.close()
                 }
             }
-            evtSource.onerror = () => {
-                state.running = false
-                evtSource.close()
-            }
+            evtSource.onerror = () => { state.running = false; evtSource.close() }
         }
 
         function confirmDelete() {
-            if (del.dryRun) {
-                startTask('delete')
-                return
-            }
-            modal.title = '確認刪除'
-            modal.message = `即將以 LIVE 模式刪除 ${del.totalRows} 筆裝置，此操作無法復原！確定要繼續嗎？`
-            modal.onConfirm = () => startTask('delete')
-            modal.show = true
+            if (del.dryRun) { startTask('delete'); return }
+            modal.title = '確認刪除'; modal.message = `即將以 LIVE 模式刪除 ${del.totalRows} 筆裝置，此操作無法復原！確定要繼續嗎？`
+            modal.onConfirm = () => startTask('delete'); modal.show = true
         }
 
-        // ── Query Methods ───────────────────
         async function queryDevices(page) {
-            if (conn.status !== 'connected') {
-                alert('請先連線 ThingsBoard')
-                return
-            }
-            query.loading = true
-            query.page = Math.max(0, page)
+            if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
+            query.loading = true; query.page = Math.max(0, page)
             try {
-                const resp = await fetch('/api/devices/query', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        tb_url: conn.url,
-                        tb_token: conn.token,
-                        page: query.page,
-                        page_size: query.pageSize,
-                        text_search: query.search || null
-                    })
-                })
+                const resp = await fetch('/api/devices/query', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token, page: query.page, page_size: query.pageSize, text_search: query.search || null }) })
                 if (!resp.ok) throw new Error('Query failed')
                 const data = await resp.json()
-                query.devices = data.data || []
-                query.totalPages = data.totalPages || 0
-                query.totalElements = data.totalElements || 0
-                query.hasNext = data.hasNext || false
-                query.searched = true
-                query.selected = []
-            } catch (e) {
-                alert('查詢失敗: ' + e.message)
-            } finally {
-                query.loading = false
-            }
+                query.devices = data.data || []; query.totalPages = data.totalPages || 0
+                query.totalElements = data.totalElements || 0; query.hasNext = data.hasNext || false
+                query.searched = true; query.selected = []
+            } catch (e) { alert('查詢失敗: ' + e.message) } finally { query.loading = false }
         }
 
-        function toggleSelectAll() {
-            if (isAllSelected.value) {
-                query.selected = []
-            } else {
-                query.selected = query.devices.map(d => d.id.id)
-            }
-        }
+        function toggleSelectAll() { if (isAllSelected.value) { query.selected = [] } else { query.selected = query.devices.map(d => d.id.id) } }
 
         function confirmDeleteSelected() {
-            modal.title = '確認刪除已選裝置'
-            modal.message = `即將刪除 ${query.selected.length} 筆裝置，此操作無法復原！`
-            modal.onConfirm = () => deleteSelected()
-            modal.show = true
+            modal.title = '確認刪除已選裝置'; modal.message = `即將刪除 ${query.selected.length} 筆裝置，此操作無法復原！`
+            modal.onConfirm = () => deleteSelected(); modal.show = true
         }
 
         async function deleteSelected() {
             if (!query.selected.length) return
-            query.logs = []
-            query.summary = null
+            query.logs = []; query.summary = null
             try {
-                const resp = await fetch('/api/devices/delete-direct', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        tb_url: conn.url,
-                        tb_username: conn.username,
-                        tb_password: conn.password,
-                        device_ids: query.selected,
-                        dry_run: false
-                    })
-                })
+                const resp = await fetch('/api/devices/delete-direct', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_username: conn.username, tb_password: conn.password, device_ids: query.selected, dry_run: false }) })
                 if (!resp.ok) throw new Error('Delete failed')
-                const data = await resp.json()
-                query.taskId = data.task_id
+                const data = await resp.json(); query.taskId = data.task_id
                 connectSSE(data.task_id, query, queryLogArea)
-            } catch (e) {
-                alert('刪除失敗: ' + e.message)
-            }
+            } catch (e) { alert('刪除失敗: ' + e.message) }
         }
 
-        function formatTime(ts) {
-            if (!ts) return '-'
-            return new Date(ts).toLocaleString('zh-TW')
-        }
-
-        // ── Load saved connection from localStorage ──
-        const saved = localStorage.getItem('tb_conn')
-        if (saved) {
+        async function exportDevices() {
             try {
-                const s = JSON.parse(saved)
-                conn.url = s.url || ''
-                conn.username = s.username || ''
-            } catch (e) {}
+                const resp = await fetch('/api/devices/export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token, text_search: query.search || null }) })
+                if (!resp.ok) throw new Error('Export failed')
+                const blob = await resp.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a'); a.href = url
+                a.download = resp.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] || 'devices_export.csv'
+                a.click(); URL.revokeObjectURL(url)
+            } catch (e) { alert('匯出失敗: ' + e.message) }
         }
-        watch(() => [conn.url, conn.username], () => {
-            localStorage.setItem('tb_conn', JSON.stringify({
-                url: conn.url, username: conn.username
-            }))
-        })
+
+        async function loadHistory() {
+            try { const resp = await fetch('/api/history'); history.value = await resp.json() } catch (e) {}
+        }
+
+        async function clearHistory() {
+            if (!confirm('確定要清除所有歷史紀錄嗎？')) return
+            try { await fetch('/api/history', { method: 'DELETE' }); history.value = [] } catch (e) {}
+        }
+
+        function hasTaskInMemory(taskId) {
+            // 結果 CSV 僅在伺服器未重啟時可下載
+            return true // 讓連結顯示，下載失敗會收到 404
+        }
+
+        function formatTime(ts) { if (!ts) return '-'; return new Date(ts).toLocaleString('zh-TW') }
+        function formatISOTime(iso) { if (!iso) return '-'; return new Date(iso).toLocaleString('zh-TW') }
+        function typeLabel(t) { return { create: '新增', delete: '刪除', delete_direct: '直接刪除' }[t] || t }
+        function truncate(str, len) { if (!str) return '-'; return str.length > len ? str.substring(0, len) + '...' : str }
+
+        const saved = localStorage.getItem('tb_conn')
+        if (saved) { try { const s = JSON.parse(saved); conn.url = s.url || ''; conn.username = s.username || '' } catch (e) {} }
+        watch(() => [conn.url, conn.username], () => { localStorage.setItem('tb_conn', JSON.stringify({ url: conn.url, username: conn.username })) })
 
         return {
-            conn, connStatusText, activeTab, dragTarget,
-            create, del, query, modal,
-            createLogArea, deleteLogArea, queryLogArea,
-            createProgress, deleteProgress, isAllSelected,
-            testConnection, handleFileSelect, handleDrop,
-            startTask, confirmDelete,
-            queryDevices, toggleSelectAll, confirmDeleteSelected,
-            formatTime,
+            conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal,
+            createLogArea, deleteLogArea, queryLogArea, createProgress, deleteProgress, isAllSelected,
+            testConnection, handleFileSelect, handleDrop, startTask, confirmDelete,
+            queryDevices, toggleSelectAll, confirmDeleteSelected, exportDevices,
+            loadHistory, clearHistory, hasTaskInMemory,
+            formatTime, formatISOTime, typeLabel, truncate,
         }
     }
 }).mount('#app')

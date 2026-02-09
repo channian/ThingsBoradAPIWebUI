@@ -3,6 +3,7 @@
 背景任務管理器
 - 將批次新增/刪除包裝成背景任務
 - 透過 Queue 推送即時事件給 SSE 端點
+- 記錄每筆處理結果供匯出
 """
 
 import queue
@@ -10,6 +11,7 @@ import threading
 import uuid
 import time
 import random
+import datetime
 import json
 import logging
 from typing import Dict, Optional, List
@@ -33,6 +35,12 @@ class Task:
         self.progress = {"current": 0, "total": 0,
                          "success": 0, "fail": 0, "skip": 0}
         self.summary: Optional[dict] = None
+        # 新增：結果追蹤
+        self.results: list = []        # 每筆處理結果
+        self.started_at: Optional[str] = None
+        self.ended_at: Optional[str] = None
+        self.csv_filename: str = ""
+        self.on_complete = None        # 完成回呼
 
     def push_log(self, level: str, message: str):
         entry = {"level": level, "message": message}
@@ -48,8 +56,20 @@ class Task:
 
     def push_complete(self, summary: dict):
         self.summary = summary
+        self.ended_at = datetime.datetime.now().isoformat()
         self.events.put({"type": "complete", **summary})
         self.done = True
+        if self.on_complete:
+            try:
+                self.on_complete(self)
+            except Exception as e:
+                log.error(f"on_complete callback error: {e}")
+
+    def add_result(self, name: str, status: str, detail: str = ""):
+        """記錄單筆處理結果 (status: success/skip/fail)"""
+        self.results.append({
+            "name": name, "status": status, "detail": detail
+        })
 
 
 # ── 任務管理器 ─────────────────────────────────────────
@@ -76,6 +96,7 @@ class TaskManager:
 
 def execute_batch_create(task: Task):
     """背景執行批次新增"""
+    task.started_at = datetime.datetime.now().isoformat()
     params = task.params
     rows: List[dict] = params["rows"]
     dry_run: bool = params.get("dry_run", True)
@@ -83,7 +104,6 @@ def execute_batch_create(task: Task):
     batch_size: int = params.get("batch_size", 50)
     batch_pause: float = params.get("batch_pause", 5)
 
-    # 建立 TB 連線
     client = ThingsBoardClient(params["tb_url"])
     try:
         client.login(params["tb_username"], params["tb_password"])
@@ -114,6 +134,7 @@ def execute_batch_create(task: Task):
 
         if not d_name:
             skip += 1
+            task.add_result("(空白)", "skip", "名稱為空")
             task.push_progress(idx, total, success, fail, skip)
             continue
 
@@ -123,12 +144,14 @@ def execute_batch_create(task: Task):
             if existing:
                 task.push_log("warning", f"[略過] 裝置已存在: {d_name}")
                 skip += 1
+                task.add_result(d_name, "skip", "裝置已存在")
                 task.push_progress(idx, total, success, fail, skip)
                 _throttle(delay, idx, success, batch_size, batch_pause, task)
                 continue
         except Exception as e:
             task.push_log("error", f"[異常] 查詢 {d_name} 失敗: {e}")
             fail += 1
+            task.add_result(d_name, "fail", f"查詢異常: {e}")
             task.push_progress(idx, total, success, fail, skip)
             continue
 
@@ -136,6 +159,7 @@ def execute_batch_create(task: Task):
         if dry_run:
             task.push_log("info", f"[預演] 模擬新增: {d_name} (Profile: {d_type})")
             success += 1
+            task.add_result(d_name, "success", f"預演 | Profile: {d_type}")
         else:
             try:
                 payload = {
@@ -148,13 +172,16 @@ def execute_batch_create(task: Task):
                 if resp.status_code == 200:
                     task.push_log("success", f"[成功] 已建立: {d_name} | Profile: {d_type}")
                     success += 1
+                    task.add_result(d_name, "success", f"Profile: {d_type}")
                 else:
-                    task.push_log("error",
-                                  f"[失敗] 新增 {d_name} (HTTP {resp.status_code}): {resp.text}")
+                    msg = f"HTTP {resp.status_code}: {resp.text}"
+                    task.push_log("error", f"[失敗] 新增 {d_name} ({msg})")
                     fail += 1
+                    task.add_result(d_name, "fail", msg)
             except Exception as e:
                 task.push_log("error", f"[異常] 連線錯誤: {e}")
                 fail += 1
+                task.add_result(d_name, "fail", f"連線異常: {e}")
 
         task.push_progress(idx, total, success, fail, skip)
         _throttle(delay, idx, success, batch_size, batch_pause, task)
@@ -170,6 +197,7 @@ def execute_batch_create(task: Task):
 
 def execute_batch_delete(task: Task):
     """背景執行批次刪除"""
+    task.started_at = datetime.datetime.now().isoformat()
     params = task.params
     rows: List[dict] = params["rows"]
     dry_run: bool = params.get("dry_run", True)
@@ -205,6 +233,7 @@ def execute_batch_delete(task: Task):
 
         if not target_name:
             skip += 1
+            task.add_result("(空白)", "skip", "名稱為空")
             task.push_progress(idx, total, success, fail, skip)
             continue
 
@@ -214,12 +243,14 @@ def execute_batch_delete(task: Task):
         except Exception as e:
             task.push_log("error", f"[異常] 查詢 {target_name} 失敗: {e}")
             fail += 1
+            task.add_result(target_name, "fail", f"查詢異常: {e}")
             task.push_progress(idx, total, success, fail, skip)
             continue
 
         if not device_info:
             task.push_log("warning", f"[略過] 系統無此裝置: {target_name}")
             skip += 1
+            task.add_result(target_name, "skip", "系統無此裝置")
             task.push_progress(idx, total, success, fail, skip)
             _throttle(delay, idx, success, batch_size, batch_pause, task)
             continue
@@ -233,6 +264,8 @@ def execute_batch_delete(task: Task):
                           f"[阻擋] 型別不符 ({target_name}): "
                           f"CSV[{target_type}] vs 系統[{real_type}]，保留不刪")
             skip += 1
+            task.add_result(target_name, "skip",
+                            f"型別不符: CSV[{target_type}] vs 系統[{real_type}]")
             task.push_progress(idx, total, success, fail, skip)
             _throttle(delay, idx, success, batch_size, batch_pause, task)
             continue
@@ -241,24 +274,29 @@ def execute_batch_delete(task: Task):
         if dry_run:
             task.push_log("info", f"[預演] 模擬刪除: {target_name} (Type: {real_type})")
             success += 1
+            task.add_result(target_name, "success", f"預演 | Type: {real_type}")
         else:
             try:
                 resp = client.delete_device(real_id)
                 if resp.status_code == 200:
                     task.push_log("success", f"[成功] 已刪除: {target_name}")
                     success += 1
+                    task.add_result(target_name, "success", f"Type: {real_type}")
                 elif resp.status_code == 429:
                     task.push_log("error",
                                   f"[流量限制] 刪除 {target_name} 失敗 (429)，系統冷卻中...")
                     fail += 1
+                    task.add_result(target_name, "fail", "429 流量限制")
                     time.sleep(5)
                 else:
-                    task.push_log("error",
-                                  f"[失敗] 刪除 {target_name} (HTTP {resp.status_code}): {resp.text}")
+                    msg = f"HTTP {resp.status_code}: {resp.text}"
+                    task.push_log("error", f"[失敗] 刪除 {target_name} ({msg})")
                     fail += 1
+                    task.add_result(target_name, "fail", msg)
             except Exception as e:
                 task.push_log("error", f"[異常] 連線錯誤: {e}")
                 fail += 1
+                task.add_result(target_name, "fail", f"連線異常: {e}")
 
         task.push_progress(idx, total, success, fail, skip)
         _throttle(delay, idx, success, batch_size, batch_pause, task)

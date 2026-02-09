@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import queue
+import uuid
+import datetime
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -50,10 +52,55 @@ task_manager = TaskManager()
 # 暫存上傳的 CSV 資料 (upload_id -> rows)
 csv_store: dict = {}
 
+# ── 路徑常數 ──────────────────────────────────────────
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+# ── 歷史紀錄管理 ──────────────────────────────────────
+
+def _load_history() -> list:
+    if not os.path.exists(HISTORY_FILE):
+        return []
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_history(records: list):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+
+
+def _append_history(task):
+    """任務完成後寫入歷史紀錄"""
+    records = _load_history()
+    entry = {
+        "task_id": task.id,
+        "type": task.type,
+        "dry_run": task.params.get("dry_run", True),
+        "csv_filename": task.csv_filename,
+        "started_at": task.started_at,
+        "ended_at": task.ended_at,
+        "total": task.summary.get("total", 0) if task.summary else 0,
+        "success": task.summary.get("success", 0) if task.summary else 0,
+        "fail": task.summary.get("fail", 0) if task.summary else 0,
+        "skip": task.summary.get("skip", 0) if task.summary else 0,
+    }
+    records.insert(0, entry)  # 最新在最前
+    records = records[:200]   # 保留最近 200 筆
+    _save_history(records)
+    log.info(f"歷史紀錄已儲存: {task.type} | {task.csv_filename}")
+
+
 # ── 靜態檔案 ───────────────────────────────────────────
-
-STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
-
 
 @app.get("/")
 async def serve_index():
@@ -81,6 +128,7 @@ class ExecuteRequest(BaseModel):
     delay: float = 0.2
     batch_size: int = 50
     batch_pause: float = 5
+    csv_filename: str = ""
 
 
 class DeviceQueryRequest(BaseModel):
@@ -88,6 +136,12 @@ class DeviceQueryRequest(BaseModel):
     tb_token: str
     page: int = 0
     page_size: int = 20
+    text_search: Optional[str] = None
+
+
+class DeviceExportRequest(BaseModel):
+    tb_url: str
+    tb_token: str
     text_search: Optional[str] = None
 
 
@@ -147,18 +201,14 @@ async def upload_csv(file: UploadFile = File(...)):
         for k, v in row.items():
             if k and k.strip():
                 cleaned[k.strip()] = (v or "").strip()
-        # 跳過全空行
         if any(cleaned.values()):
             cleaned_rows.append(cleaned)
 
     rows = cleaned_rows
 
-    # 產生 upload_id 並暫存
-    import uuid
     upload_id = uuid.uuid4().hex[:8]
     csv_store[upload_id] = rows
 
-    # 回傳預覽 (前 10 筆)
     preview = rows[:10]
     return {
         "upload_id": upload_id,
@@ -188,6 +238,8 @@ async def execute_task(req: ExecuteRequest):
         "batch_size": req.batch_size,
         "batch_pause": req.batch_pause,
     })
+    task.csv_filename = req.csv_filename
+    task.on_complete = _append_history
 
     executor = execute_batch_create if req.operation == "create" else execute_batch_delete
     task_manager.run_in_background(task, executor)
@@ -205,7 +257,6 @@ async def stream_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     async def event_generator():
-        # 先推送歷史紀錄 (供斷線重連)
         for entry in list(task.log_history):
             yield f"data: {json.dumps({'type': 'log', **entry}, ensure_ascii=False)}\n\n"
         if task.progress["total"] > 0:
@@ -214,7 +265,6 @@ async def stream_task(task_id: str):
             yield f"data: {json.dumps({'type': 'complete', **task.summary}, ensure_ascii=False)}\n\n"
             return
 
-        # 即時推送新事件
         while True:
             try:
                 event = task.events.get_nowait()
@@ -240,7 +290,6 @@ async def stream_task(task_id: str):
 
 @app.get("/api/tasks/{task_id}/status")
 async def task_status(task_id: str):
-    """查詢任務目前狀態"""
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -253,11 +302,78 @@ async def task_status(task_id: str):
     }
 
 
+# ── API: 任務結果匯出 CSV ─────────────────────────────
+
+@app.get("/api/tasks/{task_id}/export")
+async def export_task_results(task_id: str):
+    """匯出任務的逐筆處理結果為 CSV"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["name", "status", "detail"])
+    for r in task.results:
+        writer.writerow([r["name"], r["status"], r["detail"]])
+
+    content = output.getvalue().encode("utf-8-sig")  # BOM for Excel
+    op_name = {"create": "新增", "delete": "刪除"}.get(task.type, task.type)
+    filename = f"result_{op_name}_{task.id}.csv"
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── API: 歷史紀錄 ─────────────────────────────────────
+
+@app.get("/api/history")
+async def get_history():
+    return _load_history()
+
+
+@app.delete("/api/history")
+async def clear_history():
+    _save_history([])
+    return {"success": True}
+
+
+# ── API: CSV 範本下載 ─────────────────────────────────
+
+@app.get("/api/templates/{template_type}")
+async def download_template(template_type: str):
+    """下載 CSV 範本"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    if template_type == "create":
+        writer.writerow(["name", "type", "label", "description"])
+        writer.writerow(["Device-001", "MyDeviceProfile", "裝置標籤", "說明文字"])
+        writer.writerow(["Device-002", "MyDeviceProfile", "裝置標籤", "說明文字"])
+        filename = "template_create.csv"
+    elif template_type == "delete":
+        writer.writerow(["name", "type"])
+        writer.writerow(["Device-001", "MyDeviceProfile"])
+        writer.writerow(["Device-002", "MyDeviceProfile"])
+        filename = "template_delete.csv"
+    else:
+        raise HTTPException(status_code=404, detail="Unknown template type")
+
+    content = output.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── API: 裝置查詢 ─────────────────────────────────────
 
 @app.post("/api/devices/query")
 async def query_devices(req: DeviceQueryRequest):
-    """查詢 ThingsBoard 裝置列表"""
     client = ThingsBoardClient(req.tb_url)
     client.set_token(req.tb_token)
     try:
@@ -271,16 +387,58 @@ async def query_devices(req: DeviceQueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── API: 裝置清單匯出 CSV ─────────────────────────────
+
+@app.post("/api/devices/export")
+async def export_devices(req: DeviceExportRequest):
+    """匯出 ThingsBoard 裝置清單為 CSV（最多 2000 筆）"""
+    client = ThingsBoardClient(req.tb_url)
+    client.set_token(req.tb_token)
+
+    all_devices = []
+    page = 0
+    while True:
+        result = client.get_devices_page(
+            page=page, page_size=200,
+            text_search=req.text_search,
+        )
+        devices = result.get("data", [])
+        all_devices.extend(devices)
+        if not result.get("hasNext", False) or len(all_devices) >= 2000:
+            break
+        page += 1
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["name", "type", "label", "createdTime"])
+    for d in all_devices:
+        created = datetime.datetime.fromtimestamp(
+            d.get("createdTime", 0) / 1000
+        ).strftime("%Y-%m-%d %H:%M:%S") if d.get("createdTime") else ""
+        writer.writerow([
+            d.get("name", ""),
+            d.get("type", ""),
+            d.get("label", ""),
+            created,
+        ])
+
+    content = output.getvalue().encode("utf-8-sig")
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    filename = f"devices_export_{today}.csv"
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── API: 直接刪除裝置 ─────────────────────────────────
 
 @app.post("/api/devices/delete-direct")
 async def delete_devices_direct(req: DirectDeleteRequest):
-    """直接刪除指定的裝置 (用於裝置查詢頁面的勾選刪除)"""
-    # 把 device_ids 轉成假的 row 格式，復用 batch delete
-    rows = [{"name": "__direct__", "id": did} for did in req.device_ids]
-
     task = task_manager.create_task("delete_direct", {
-        "rows": rows,
+        "rows": [],
         "device_ids": req.device_ids,
         "dry_run": req.dry_run,
         "tb_url": req.tb_url,
@@ -290,8 +448,12 @@ async def delete_devices_direct(req: DirectDeleteRequest):
         "batch_size": 50,
         "batch_pause": 3,
     })
+    task.csv_filename = "(查詢頁面直接刪除)"
+    task.on_complete = _append_history
 
     def _exec_direct_delete(task):
+        import datetime as dt
+        task.started_at = dt.datetime.now().isoformat()
         params = task.params
         device_ids = params["device_ids"]
         dry_run = params.get("dry_run", True)
@@ -314,19 +476,23 @@ async def delete_devices_direct(req: DirectDeleteRequest):
             if dry_run:
                 task.push_log("info", f"[預演] 模擬刪除 ID: {did}")
                 success += 1
+                task.add_result(did, "success", "預演")
             else:
                 try:
                     resp = client.delete_device(did)
                     if resp.status_code == 200:
                         task.push_log("success", f"[成功] 已刪除 ID: {did}")
                         success += 1
+                        task.add_result(did, "success", "")
                     else:
                         task.push_log("error",
                                       f"[失敗] ID: {did} (HTTP {resp.status_code})")
                         fail += 1
+                        task.add_result(did, "fail", f"HTTP {resp.status_code}")
                 except Exception as e:
                     task.push_log("error", f"[異常] {e}")
                     fail += 1
+                    task.add_result(did, "fail", str(e))
             task.push_progress(idx, total, success, fail, 0)
 
         task.push_complete({"total": total, "success": success,
