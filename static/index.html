@@ -6,137 +6,240 @@
     <title>Kepware 點位管理系統</title>
     <style>
         :root {
-            --primary: #1976d2; --primary-dark: #1565c0; --primary-light: #e3f2fd;
-            --success: #2e7d32; --success-bg: #e8f5e9;
-            --warning: #f57f17; --warning-bg: #fff8e1;
-            --error: #c62828; --error-bg: #ffebee;
-            --bg: #f0f2f5; --card: #ffffff;
-            --text: #333333; --text-light: #888888;
-            --border: #e0e0e0; --radius: 8px;
-            --table-header-bg: #f5f7fa; --table-hover: #fafbfc;
-            --progress-bg: #e8e8e8; --modal-bg: #ffffff;
-            --input-bg: #ffffff;
+            --primary: #2563eb; --primary-dark: #1d4ed8; --primary-light: #eff6ff;
+            --primary-glow: rgba(37, 99, 235, 0.12);
+            --success: #16a34a; --success-bg: #f0fdf4;
+            --warning: #d97706; --warning-bg: #fffbeb;
+            --error: #dc2626; --error-bg: #fef2f2;
+            --bg: #f1f5f9; --card: #ffffff;
+            --text: #1e293b; --text-secondary: #64748b; --text-light: #94a3b8;
+            --border: #e2e8f0; --border-light: #f1f5f9;
+            --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+            --table-header-bg: #f8fafc; --table-hover: #f1f5f9; --table-stripe: #fafbfc;
+            --progress-bg: #e2e8f0; --modal-bg: #ffffff;
+            --input-bg: #ffffff; --input-border: #cbd5e1;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -2px rgba(0,0,0,0.05);
+            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.05);
+            --header-from: #1e40af; --header-to: #3b82f6;
         }
         [data-theme="dark"] {
-            --primary: #64b5f6; --primary-dark: #42a5f5; --primary-light: #1a2332;
-            --success: #66bb6a; --success-bg: #1b2e1b;
-            --warning: #ffa726; --warning-bg: #2e2510;
-            --error: #ef5350; --error-bg: #2e1515;
-            --bg: #121212; --card: #1e1e1e;
-            --text: #e0e0e0; --text-light: #9e9e9e;
-            --border: #333333;
-            --table-header-bg: #252525; --table-hover: #252525;
-            --progress-bg: #333333; --modal-bg: #1e1e1e;
-            --input-bg: #2a2a2a;
+            --primary: #60a5fa; --primary-dark: #3b82f6; --primary-light: #172554;
+            --primary-glow: rgba(96, 165, 250, 0.1);
+            --success: #4ade80; --success-bg: #052e16;
+            --warning: #fbbf24; --warning-bg: #422006;
+            --error: #f87171; --error-bg: #450a0a;
+            --bg: #0f172a; --card: #1e293b;
+            --text: #e2e8f0; --text-secondary: #94a3b8; --text-light: #64748b;
+            --border: #334155; --border-light: #1e293b;
+            --table-header-bg: #1e293b; --table-hover: #334155; --table-stripe: #233044;
+            --progress-bg: #334155; --modal-bg: #1e293b;
+            --input-bg: #0f172a; --input-border: #475569;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+            --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.3), 0 2px 4px -2px rgba(0,0,0,0.2);
+            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.4), 0 4px 6px -4px rgba(0,0,0,0.2);
+            --header-from: #1e3a5f; --header-to: #2563eb;
         }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-        .header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-        .header h1 { font-size: 22px; font-weight: 600; }
-        .header .subtitle { font-size: 13px; opacity: 0.8; }
-        .container { max-width: 1200px; margin: 24px auto; padding: 0 24px; }
-        .card { background: var(--card); border-radius: var(--radius); box-shadow: 0 1px 4px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 20px; }
-        .card-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--primary); }
-        .conn-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-        .form-group { display: flex; flex-direction: column; gap: 4px; }
-        .form-group label { font-size: 12px; color: var(--text-light); font-weight: 500; }
-        .form-group input, .form-group select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s; background: var(--input-bg); color: var(--text); }
-        .form-group input:focus, .form-group select:focus { border-color: var(--primary); }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+        /* ===== Header ===== */
+        .header { background: linear-gradient(135deg, var(--header-from) 0%, var(--header-to) 100%); color: #fff; padding: 20px 32px; display: flex; align-items: center; gap: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); position: relative; overflow: hidden; }
+        .header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 300px; height: 300px; background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, transparent 70%); pointer-events: none; }
+        .header-icon { width: 40px; height: 40px; background: rgba(255,255,255,0.15); border-radius: 10px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); flex-shrink: 0; }
+        .header-icon svg { width: 22px; height: 22px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+        .header .subtitle { font-size: 12px; opacity: 0.7; font-weight: 400; margin-top: 1px; }
+        .theme-toggle { margin-left: auto; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 7px 16px; border-radius: 20px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; transition: all 0.2s; white-space: nowrap; backdrop-filter: blur(4px); }
+        .theme-toggle:hover { background: rgba(255,255,255,0.22); transform: translateY(-1px); }
+
+        /* ===== Layout ===== */
+        .container { max-width: 1200px; margin: 28px auto; padding: 0 24px; }
+
+        /* ===== Cards ===== */
+        .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; margin-bottom: 24px; border: 1px solid var(--border-light); transition: box-shadow 0.2s; }
+        .card:hover { box-shadow: var(--shadow-md); }
+        .card-title { font-size: 14px; font-weight: 600; margin-bottom: 18px; color: var(--primary); display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .card-title svg { width: 18px; height: 18px; fill: none; stroke: var(--primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+        /* ===== Forms ===== */
+        .conn-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        .form-group label { font-size: 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+        .form-group input, .form-group select { padding: 9px 14px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 14px; outline: none; transition: all 0.2s; background: var(--input-bg); color: var(--text); }
+        .form-group input:focus, .form-group select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
         .form-group.grow { flex: 1; min-width: 180px; }
         .form-group.small { min-width: 100px; max-width: 140px; }
-        .btn { padding: 8px 20px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ===== Buttons ===== */
+        .btn { padding: 9px 20px; border: none; border-radius: var(--radius-xs); font-size: 14px; cursor: pointer; font-weight: 600; transition: all 0.2s; display: inline-flex; align-items: center; gap: 7px; }
+        .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+        .btn:active:not(:disabled) { transform: translateY(0); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
         .btn-primary { background: var(--primary); color: #fff; }
         .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
         .btn-success { background: var(--success); color: #fff; }
-        .btn-success:hover:not(:disabled) { background: #1b5e20; }
+        .btn-success:hover:not(:disabled) { background: #15803d; }
         .btn-danger { background: var(--error); color: #fff; }
-        .btn-danger:hover:not(:disabled) { background: #b71c1c; }
-        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+        .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+        .btn-outline { background: transparent; color: var(--primary); border: 1.5px solid var(--primary); }
         .btn-outline:hover:not(:disabled) { background: var(--primary-light); }
-        .btn-sm { padding: 5px 12px; font-size: 13px; }
-        .conn-status { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; }
+        .btn-sm { padding: 6px 14px; font-size: 13px; border-radius: var(--radius-xs); }
+
+        /* ===== Connection Status ===== */
+        .conn-status { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+        .conn-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
         .conn-status.connected { background: var(--success-bg); color: var(--success); }
+        .conn-status.connected::before { background: var(--success); box-shadow: 0 0 6px var(--success); }
         .conn-status.disconnected { background: var(--table-header-bg); color: var(--text-light); }
-        .conn-status.connecting { background: var(--warning-bg); color: var(--warning); }
+        .conn-status.disconnected::before { background: var(--text-light); }
+        .conn-status.connecting { background: var(--warning-bg); color: var(--warning); animation: pulse-status 1.5s infinite; }
+        .conn-status.connecting::before { background: var(--warning); }
         .conn-status.error { background: var(--error-bg); color: var(--error); }
-        .tabs { display: flex; border-bottom: 2px solid var(--border); margin: -20px -20px 20px -20px; padding: 0 20px; }
-        .tab { padding: 12px 24px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-light); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; user-select: none; }
-        .tab:hover { color: var(--primary); }
+        .conn-status.error::before { background: var(--error); }
+        @keyframes pulse-status { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+        /* ===== Tabs ===== */
+        .tabs { display: flex; border-bottom: 2px solid var(--border); margin: -24px -24px 24px -24px; padding: 0 24px; gap: 4px; }
+        .tab { padding: 14px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-light); border-bottom: 2.5px solid transparent; margin-bottom: -2px; transition: all 0.2s; user-select: none; display: flex; align-items: center; gap: 7px; }
+        .tab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .tab:hover { color: var(--primary); background: var(--primary-glow); }
         .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 16px; }
-        .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: var(--primary-light); }
-        .upload-icon { font-size: 36px; margin-bottom: 8px; }
-        .upload-zone p { font-size: 14px; color: var(--text-light); }
-        .upload-zone .link { color: var(--primary); text-decoration: underline; }
-        .upload-hint { margin-top: 8px; font-weight: 500; color: var(--text) !important; }
-        .section-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
-        .table-wrapper { overflow-x: auto; margin-bottom: 16px; }
+
+        /* ===== Upload Zone ===== */
+        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 40px 32px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 20px; background: var(--table-header-bg); }
+        .upload-zone:hover { border-color: var(--primary); background: var(--primary-light); }
+        .upload-zone.dragover { border-color: var(--primary); background: var(--primary-light); transform: scale(1.01); }
+        .upload-icon { margin-bottom: 12px; }
+        .upload-icon svg { width: 48px; height: 48px; fill: none; stroke: var(--text-light); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: all 0.3s; }
+        .upload-zone:hover .upload-icon svg { stroke: var(--primary); transform: translateY(-2px); }
+        .upload-zone p { font-size: 14px; color: var(--text-secondary); }
+        .upload-zone .link { color: var(--primary); text-decoration: underline; font-weight: 600; }
+        .upload-hint { margin-top: 8px; font-weight: 600; color: var(--text) !important; }
+
+        /* ===== Template Link ===== */
+        .template-link { font-size: 13px; color: var(--primary); cursor: pointer; margin-bottom: 14px; display: inline-flex; align-items: center; gap: 5px; font-weight: 500; text-decoration: none; padding: 4px 0; border-bottom: 1px dashed var(--primary); transition: all 0.2s; }
+        .template-link:hover { opacity: 0.8; }
+        .template-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+        /* ===== Section ===== */
+        .section-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.3px; }
+
+        /* ===== Tables ===== */
+        .table-wrapper { overflow-x: auto; margin-bottom: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th { background: var(--table-header-bg); padding: 10px 12px; text-align: left; font-weight: 600; color: var(--text-light); border-bottom: 2px solid var(--border); white-space: nowrap; }
-        td { padding: 8px 12px; border-bottom: 1px solid var(--border); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        tr:hover td { background: var(--table-hover); }
-        .checkbox-col { width: 40px; text-align: center; }
+        th { background: var(--table-header-bg); padding: 11px 14px; text-align: left; font-weight: 700; color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+        td { padding: 10px 14px; border-bottom: 1px solid var(--border-light); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        tbody tr { transition: background 0.15s; }
+        tbody tr:nth-child(even) { background: var(--table-stripe); }
+        tbody tr:hover { background: var(--table-hover); }
+        .checkbox-col { width: 44px; text-align: center; }
+        .checkbox-col input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+
+        /* ===== Controls ===== */
         .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 16px; }
-        .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; }
+        .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; font-weight: 500; }
         .checkbox-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); }
         .settings-row { display: flex; gap: 12px; flex-wrap: wrap; }
-        .settings-toggle { font-size: 13px; color: var(--primary); cursor: pointer; text-decoration: underline; user-select: none; }
-        .progress-section { margin-top: 20px; }
-        .progress-bar-container { width: 100%; height: 28px; background: var(--progress-bg); border-radius: 14px; position: relative; overflow: hidden; margin-bottom: 12px; }
-        .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary), #42a5f5); border-radius: 14px; transition: width 0.3s ease; min-width: 0; }
-        .progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 600; color: var(--text); }
-        .stats { display: flex; gap: 20px; margin-bottom: 12px; font-size: 14px; }
-        .stat { font-weight: 500; }
+        .settings-toggle { font-size: 13px; color: var(--primary); cursor: pointer; user-select: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+        .settings-toggle:hover { text-decoration: underline; }
+
+        /* ===== Progress ===== */
+        .progress-section { margin-top: 24px; }
+        .progress-bar-container { width: 100%; height: 32px; background: var(--progress-bg); border-radius: 16px; position: relative; overflow: hidden; margin-bottom: 14px; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); border-radius: 16px; transition: width 0.4s ease; min-width: 0; position: relative; overflow: hidden; }
+        .progress-bar::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(255,255,255,0.08) 8px, rgba(255,255,255,0.08) 16px); animation: progress-stripe 0.8s linear infinite; }
+        @keyframes progress-stripe { 0% { background-position: 0 0; } 100% { background-position: 32px 0; } }
+        .progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 700; color: var(--text); z-index: 1; text-shadow: 0 1px 2px rgba(255,255,255,0.3); }
+        .stats { display: flex; gap: 24px; margin-bottom: 14px; font-size: 14px; }
+        .stat { font-weight: 600; display: flex; align-items: center; gap: 4px; }
         .stat.success { color: var(--success); }
         .stat.warning { color: var(--warning); }
         .stat.error { color: var(--error); }
-        .log-area { background: #1e1e1e; color: #d4d4d4; border-radius: var(--radius); padding: 12px 16px; font-family: "Cascadia Code", "Consolas", monospace; font-size: 12px; max-height: 320px; overflow-y: auto; line-height: 1.8; }
-        .log-info { color: #9cdcfe; }
-        .log-success { color: #6a9955; }
-        .log-warning { color: #dcdcaa; }
-        .log-error { color: #f44747; }
-        .summary-card { background: var(--primary-light); border-radius: var(--radius); padding: 20px; margin-top: 16px; text-align: center; }
-        .summary-card h3 { margin-bottom: 16px; color: var(--primary); }
-        .summary-stats { display: flex; justify-content: center; gap: 32px; flex-wrap: wrap; }
+
+        /* ===== Log Area ===== */
+        .log-area { background: #0f172a; color: #cbd5e1; border-radius: var(--radius-sm); padding: 16px 20px; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 12px; max-height: 340px; overflow-y: auto; line-height: 1.9; border: 1px solid #1e293b; }
+        .log-area::-webkit-scrollbar { width: 6px; }
+        .log-area::-webkit-scrollbar-track { background: transparent; }
+        .log-area::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .log-info { color: #7dd3fc; }
+        .log-success { color: #86efac; }
+        .log-warning { color: #fde68a; }
+        .log-error { color: #fca5a5; }
+
+        /* ===== Summary Card ===== */
+        .summary-card { background: var(--primary-light); border-radius: var(--radius); padding: 28px; margin-top: 20px; text-align: center; border: 1px solid var(--border); }
+        .summary-card h3 { margin-bottom: 20px; color: var(--primary); font-size: 18px; font-weight: 700; }
+        .summary-stats { display: flex; justify-content: center; gap: 40px; flex-wrap: wrap; }
         .summary-stat { text-align: center; }
-        .summary-stat .stat-value { font-size: 28px; font-weight: 700; color: var(--text); }
-        .summary-stat .stat-label { font-size: 12px; color: var(--text-light); margin-top: 4px; }
+        .summary-stat .stat-value { font-size: 32px; font-weight: 800; color: var(--text); }
+        .summary-stat .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
         .summary-stat.success .stat-value { color: var(--success); }
         .summary-stat.warning .stat-value { color: var(--warning); }
         .summary-stat.error .stat-value { color: var(--error); }
-        .summary-actions { margin-top: 16px; }
-        .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
-        .page-info { font-size: 13px; color: var(--text-light); margin: 0 12px; }
-        .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 14px; }
-        .alert-warning { background: var(--warning-bg); color: #e65100; }
-        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-        .modal-box { background: var(--modal-bg); border-radius: 12px; padding: 28px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-        .modal-box h3 { margin-bottom: 12px; }
-        .modal-box p { margin-bottom: 20px; color: var(--text-light); font-size: 14px; }
+        .summary-actions { margin-top: 20px; }
+
+        /* ===== Pagination ===== */
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-light); }
+        .page-info { font-size: 13px; color: var(--text-secondary); margin: 0 16px; font-weight: 500; }
+
+        /* ===== Alert ===== */
+        .alert { padding: 12px 16px; border-radius: var(--radius-sm); margin-bottom: 16px; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+        .alert svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+        .alert-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); border-left: 4px solid var(--warning); }
+
+        /* ===== Modal ===== */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-box { background: var(--modal-bg); border-radius: var(--radius); padding: 32px; max-width: 460px; width: 90%; box-shadow: var(--shadow-lg); border: 1px solid var(--border); }
+        .modal-box h3 { margin-bottom: 12px; font-size: 18px; font-weight: 700; }
+        .modal-box p { margin-bottom: 24px; color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
-        .template-link { font-size: 13px; color: var(--primary); text-decoration: underline; cursor: pointer; margin-bottom: 12px; display: inline-block; }
-        .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+
+        /* ===== Badges ===== */
+        .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; letter-spacing: 0.2px; }
         .badge-create { background: var(--success-bg); color: var(--success); }
         .badge-delete, .badge-delete_direct { background: var(--error-bg); color: var(--error); }
-        .badge-dry { background: var(--table-header-bg); color: var(--text-light); }
+        .badge-dry { background: var(--table-header-bg); color: var(--text-light); border: 1px solid var(--border); }
         .badge-live { background: var(--warning-bg); color: var(--warning); }
-        .history-empty { text-align: center; padding: 48px; color: var(--text-light); }
-        .theme-toggle { margin-left: auto; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 14px; display: flex; align-items: center; gap: 6px; transition: background 0.2s; white-space: nowrap; }
-        .theme-toggle:hover { background: rgba(255,255,255,0.25); }
-        @media (max-width: 768px) { .container { padding: 0 12px; } .conn-form { flex-direction: column; } .form-group.grow { min-width: 100%; } .tabs { overflow-x: auto; } }
+
+        /* ===== History ===== */
+        .history-empty { text-align: center; padding: 60px; color: var(--text-light); }
+        .history-empty svg { width: 48px; height: 48px; fill: none; stroke: var(--border); stroke-width: 1.5; margin-bottom: 12px; }
+
+        /* ===== Footer ===== */
+        .footer { text-align: center; padding: 20px; color: var(--text-light); font-size: 12px; }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .container { padding: 0 12px; margin: 16px auto; }
+            .header { padding: 16px 20px; }
+            .header h1 { font-size: 18px; }
+            .header-icon { display: none; }
+            .conn-form { flex-direction: column; }
+            .form-group.grow { min-width: 100%; }
+            .tabs { overflow-x: auto; padding: 0 16px; gap: 0; }
+            .tab { padding: 12px 16px; font-size: 13px; }
+            .summary-stats { gap: 24px; }
+        }
     </style>
 </head>
 <body>
 
 <div id="app">
     <header class="header">
+        <div class="header-icon">
+            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
         <div>
             <h1>Kepware 點位管理系統</h1>
             <div class="subtitle">ThingsBoard Device Management</div>
         </div>
         <button class="theme-toggle" @click="toggleTheme">
-            <span>{{ theme === 'light' ? '&#9790;' : '&#9728;' }}</span>
+            <span v-html="theme === 'light' ? '&#9790;' : '&#9728;&#65039;'"></span>
             {{ theme === 'light' ? '深色模式' : '淺色模式' }}
         </button>
     </header>
@@ -144,7 +247,10 @@
     <main class="container">
         <!-- Connection Panel -->
         <div class="card">
-            <div class="card-title">連線設定</div>
+            <div class="card-title">
+                <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                連線設定
+            </div>
             <div class="conn-form">
                 <div class="form-group grow">
                     <label>ThingsBoard URL</label>
@@ -160,6 +266,7 @@
                 </div>
                 <button class="btn btn-primary" @click="testConnection"
                         :disabled="conn.status === 'connecting' || !conn.url || !conn.username">
+                    <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
                     {{ conn.status === 'connecting' ? '連線中...' : '測試連線' }}
                 </button>
                 <span class="conn-status" :class="conn.status">{{ connStatusText }}</span>
@@ -169,20 +276,35 @@
         <!-- Main Tabs -->
         <div class="card">
             <div class="tabs">
-                <div class="tab" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">批次新增</div>
-                <div class="tab" :class="{ active: activeTab === 'delete' }" @click="activeTab = 'delete'">批次刪除</div>
-                <div class="tab" :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">裝置查詢</div>
-                <div class="tab" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'; loadHistory()">歷史紀錄</div>
+                <div class="tab" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                    批次新增
+                </div>
+                <div class="tab" :class="{ active: activeTab === 'delete' }" @click="activeTab = 'delete'">
+                    <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    批次刪除
+                </div>
+                <div class="tab" :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    裝置查詢
+                </div>
+                <div class="tab" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'; loadHistory()">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    歷史紀錄
+                </div>
             </div>
 
             <!-- =============== Create Tab =============== -->
             <div v-show="activeTab === 'create'">
-                <a class="template-link" href="/api/templates/create">下載新增 CSV 範本</a>
+                <a class="template-link" href="/api/templates/create">
+                    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    下載新增 CSV 範本
+                </a>
                 <div class="upload-zone" :class="{ dragover: dragTarget === 'create' }"
                      @dragover.prevent="dragTarget = 'create'" @dragleave="dragTarget = null"
                      @drop.prevent="handleDrop('create', $event)" @click="$refs.createFileInput.click()">
                     <input type="file" ref="createFileInput" accept=".csv" @change="handleFileSelect('create', $event)" hidden>
-                    <div class="upload-icon">&#128194;</div>
+                    <div class="upload-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
                     <p>拖曳 CSV 檔案至此，或<span class="link">點擊選擇檔案</span></p>
                     <p v-if="create.fileName" class="upload-hint">{{ create.fileName }}</p>
                 </div>
@@ -196,15 +318,21 @@
                     </div>
                     <div class="controls">
                         <label class="checkbox-label"><input type="checkbox" v-model="create.dryRun"> DRY RUN 預演模式（不會真的新增）</label>
-                        <span class="settings-toggle" @click="create.showSettings = !create.showSettings">{{ create.showSettings ? '隱藏進階設定' : '進階設定' }}</span>
+                        <span class="settings-toggle" @click="create.showSettings = !create.showSettings">{{ create.showSettings ? '&#9650; 隱藏進階設定' : '&#9660; 進階設定' }}</span>
                     </div>
                     <div v-if="create.showSettings" class="settings-row" style="margin-bottom:16px">
                         <div class="form-group small"><label>每筆間隔(秒)</label><input type="number" v-model.number="create.settings.delay" step="0.1" min="0"></div>
                         <div class="form-group small"><label>批次大小</label><input type="number" v-model.number="create.settings.batchSize" min="1"></div>
                         <div class="form-group small"><label>批次暫停(秒)</label><input type="number" v-model.number="create.settings.batchPause" min="0"></div>
                     </div>
-                    <div v-if="!create.dryRun && !create.running" class="alert alert-warning">注意：目前為 LIVE 模式，執行後將會真正新增裝置到 ThingsBoard！</div>
-                    <button class="btn btn-success" @click="startTask('create')" :disabled="create.running || conn.status !== 'connected'">{{ create.running ? '執行中...' : '開始新增' }}</button>
+                    <div v-if="!create.dryRun && !create.running" class="alert alert-warning">
+                        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        注意：目前為 LIVE 模式，執行後將會真正新增裝置到 ThingsBoard！
+                    </div>
+                    <button class="btn btn-success" @click="startTask('create')" :disabled="create.running || conn.status !== 'connected'">
+                        <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        {{ create.running ? '執行中...' : '開始新增' }}
+                    </button>
                 </div>
                 <div v-if="create.taskId" class="progress-section">
                     <div class="progress-bar-container"><div class="progress-bar" :style="{ width: createProgress + '%' }"></div><span class="progress-text">{{ create.progress.current }} / {{ create.progress.total }}</span></div>
@@ -218,19 +346,27 @@
                             <div class="summary-stat warning"><div class="stat-value">{{ create.summary.skip }}</div><div class="stat-label">略過</div></div>
                             <div class="summary-stat error"><div class="stat-value">{{ create.summary.fail }}</div><div class="stat-label">失敗</div></div>
                         </div>
-                        <div class="summary-actions"><a class="btn btn-outline btn-sm" :href="'/api/tasks/' + create.taskId + '/export'">下載結果明細 CSV</a></div>
+                        <div class="summary-actions">
+                            <a class="btn btn-outline btn-sm" :href="'/api/tasks/' + create.taskId + '/export'">
+                                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                下載結果明細 CSV
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- =============== Delete Tab =============== -->
             <div v-show="activeTab === 'delete'">
-                <a class="template-link" href="/api/templates/delete">下載刪除 CSV 範本</a>
+                <a class="template-link" href="/api/templates/delete">
+                    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    下載刪除 CSV 範本
+                </a>
                 <div class="upload-zone" :class="{ dragover: dragTarget === 'delete' }"
                      @dragover.prevent="dragTarget = 'delete'" @dragleave="dragTarget = null"
                      @drop.prevent="handleDrop('delete', $event)" @click="$refs.deleteFileInput.click()">
                     <input type="file" ref="deleteFileInput" accept=".csv" @change="handleFileSelect('delete', $event)" hidden>
-                    <div class="upload-icon">&#128465;</div>
+                    <div class="upload-icon"><svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></div>
                     <p>拖曳 CSV 檔案至此，或<span class="link">點擊選擇檔案</span></p>
                     <p v-if="del.fileName" class="upload-hint">{{ del.fileName }}</p>
                 </div>
@@ -244,18 +380,24 @@
                     </div>
                     <div class="controls">
                         <label class="checkbox-label"><input type="checkbox" v-model="del.dryRun"> DRY RUN 預演模式（不會真的刪除）</label>
-                        <span class="settings-toggle" @click="del.showSettings = !del.showSettings">{{ del.showSettings ? '隱藏進階設定' : '進階設定' }}</span>
+                        <span class="settings-toggle" @click="del.showSettings = !del.showSettings">{{ del.showSettings ? '&#9650; 隱藏進階設定' : '&#9660; 進階設定' }}</span>
                     </div>
                     <div v-if="del.showSettings" class="settings-row" style="margin-bottom:16px">
                         <div class="form-group small"><label>每筆間隔(秒)</label><input type="number" v-model.number="del.settings.delay" step="0.1" min="0"></div>
                         <div class="form-group small"><label>批次大小</label><input type="number" v-model.number="del.settings.batchSize" min="1"></div>
                         <div class="form-group small"><label>批次暫停(秒)</label><input type="number" v-model.number="del.settings.batchPause" min="0"></div>
                     </div>
-                    <div v-if="!del.dryRun && !del.running" class="alert alert-warning">注意：目前為 LIVE 模式，執行後將會真正刪除 ThingsBoard 上的裝置！</div>
-                    <button class="btn btn-danger" @click="confirmDelete" :disabled="del.running || conn.status !== 'connected'">{{ del.running ? '執行中...' : '開始刪除' }}</button>
+                    <div v-if="!del.dryRun && !del.running" class="alert alert-warning">
+                        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        注意：目前為 LIVE 模式，執行後將會真正刪除 ThingsBoard 上的裝置！
+                    </div>
+                    <button class="btn btn-danger" @click="confirmDelete" :disabled="del.running || conn.status !== 'connected'">
+                        <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        {{ del.running ? '執行中...' : '開始刪除' }}
+                    </button>
                 </div>
                 <div v-if="del.taskId" class="progress-section">
-                    <div class="progress-bar-container"><div class="progress-bar" :style="{ width: deleteProgress + '%', background: 'linear-gradient(90deg, #c62828, #ef5350)' }"></div><span class="progress-text">{{ del.progress.current }} / {{ del.progress.total }}</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar" :style="{ width: deleteProgress + '%', background: 'linear-gradient(90deg, var(--error), #ef5350)' }"></div><span class="progress-text">{{ del.progress.current }} / {{ del.progress.total }}</span></div>
                     <div class="stats"><span class="stat success">成功: {{ del.progress.success }}</span><span class="stat warning">略過: {{ del.progress.skip }}</span><span class="stat error">失敗: {{ del.progress.fail }}</span></div>
                     <div class="log-area" ref="deleteLogArea"><div v-for="(l, i) in del.logs" :key="i" :class="'log-' + l.level">{{ l.message }}</div></div>
                     <div v-if="del.summary" class="summary-card">
@@ -266,14 +408,19 @@
                             <div class="summary-stat warning"><div class="stat-value">{{ del.summary.skip }}</div><div class="stat-label">略過</div></div>
                             <div class="summary-stat error"><div class="stat-value">{{ del.summary.fail }}</div><div class="stat-label">失敗</div></div>
                         </div>
-                        <div class="summary-actions"><a class="btn btn-outline btn-sm" :href="'/api/tasks/' + del.taskId + '/export'">下載結果明細 CSV</a></div>
+                        <div class="summary-actions">
+                            <a class="btn btn-outline btn-sm" :href="'/api/tasks/' + del.taskId + '/export'">
+                                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                下載結果明細 CSV
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- =============== Query Tab =============== -->
             <div v-show="activeTab === 'query'">
-                <div class="controls" style="margin-bottom: 16px;">
+                <div class="controls" style="margin-bottom: 18px;">
                     <div class="form-group grow">
                         <label>搜尋（名稱 / Type / Label）</label>
                         <input v-model="query.search" placeholder="輸入關鍵字搜尋..." @keyup.enter="queryDevices(0)">
@@ -284,9 +431,18 @@
                             <option :value="20">20</option><option :value="50">50</option><option :value="100">100</option>
                         </select>
                     </div>
-                    <button class="btn btn-primary" @click="queryDevices(0)" :disabled="conn.status !== 'connected' || query.loading">{{ query.loading ? '查詢中...' : '查詢' }}</button>
-                    <button class="btn btn-outline btn-sm" @click="exportDevices" :disabled="conn.status !== 'connected'" v-if="query.totalElements > 0">匯出全部 CSV</button>
-                    <button class="btn btn-danger btn-sm" v-if="query.selected.length" @click="confirmDeleteSelected">刪除已選 ({{ query.selected.length }})</button>
+                    <button class="btn btn-primary" @click="queryDevices(0)" :disabled="conn.status !== 'connected' || query.loading">
+                        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        {{ query.loading ? '查詢中...' : '查詢' }}
+                    </button>
+                    <button class="btn btn-outline btn-sm" @click="exportDevices" :disabled="conn.status !== 'connected'" v-if="query.totalElements > 0">
+                        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        匯出全部 CSV
+                    </button>
+                    <button class="btn btn-danger btn-sm" v-if="query.selected.length" @click="confirmDeleteSelected">
+                        <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        刪除已選 ({{ query.selected.length }})
+                    </button>
                 </div>
                 <div v-if="query.devices.length" class="table-wrapper">
                     <table>
@@ -303,11 +459,20 @@
                     </table>
                 </div>
                 <div v-if="query.totalElements > 0" class="pagination">
-                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page - 1)" :disabled="query.page <= 0">上一頁</button>
+                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page - 1)" :disabled="query.page <= 0">
+                        <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+                        上一頁
+                    </button>
                     <span class="page-info">第 {{ query.page + 1 }} / {{ query.totalPages }} 頁（共 {{ query.totalElements }} 筆）</span>
-                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page + 1)" :disabled="!query.hasNext">下一頁</button>
+                    <button class="btn btn-outline btn-sm" @click="queryDevices(query.page + 1)" :disabled="!query.hasNext">
+                        下一頁
+                        <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
                 </div>
-                <div v-if="query.searched && !query.devices.length && !query.loading" style="text-align:center; padding:40px; color:var(--text-light);">查無裝置</div>
+                <div v-if="query.searched && !query.devices.length && !query.loading" style="text-align:center; padding:48px; color:var(--text-light);">
+                    <svg viewBox="0 0 24 24" style="width:40px; height:40px; fill:none; stroke:var(--border); stroke-width:1.5; margin-bottom:8px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <div>查無裝置</div>
+                </div>
                 <div v-if="query.taskId" class="progress-section" style="margin-top:16px">
                     <div class="log-area" ref="queryLogArea"><div v-for="(l, i) in query.logs" :key="i" :class="'log-' + l.level">{{ l.message }}</div></div>
                     <div v-if="query.summary" class="summary-card">
@@ -335,21 +500,35 @@
                                 <td><span class="badge" :class="h.dry_run ? 'badge-dry' : 'badge-live'">{{ h.dry_run ? 'DRY RUN' : 'LIVE' }}</span></td>
                                 <td :title="h.csv_filename">{{ truncate(h.csv_filename, 30) }}</td>
                                 <td>{{ h.total }}</td>
-                                <td style="color:var(--success)">{{ h.success }}</td>
-                                <td style="color:var(--error)">{{ h.fail }}</td>
-                                <td style="color:var(--warning)">{{ h.skip }}</td>
-                                <td><a :href="'/api/tasks/' + h.task_id + '/export'" class="btn btn-outline btn-sm" v-if="hasTaskInMemory(h.task_id)">CSV</a><span v-else style="color:var(--text-light); font-size:12px">已過期</span></td>
+                                <td style="color:var(--success); font-weight:600">{{ h.success }}</td>
+                                <td style="color:var(--error); font-weight:600">{{ h.fail }}</td>
+                                <td style="color:var(--warning); font-weight:600">{{ h.skip }}</td>
+                                <td>
+                                    <a :href="'/api/tasks/' + h.task_id + '/export'" class="btn btn-outline btn-sm" v-if="hasTaskInMemory(h.task_id)">
+                                        <svg viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        CSV
+                                    </a>
+                                    <span v-else style="color:var(--text-light); font-size:12px">已過期</span>
+                                </td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-                <div v-if="!history.length" class="history-empty">尚無操作紀錄</div>
-                <div v-if="history.length" style="margin-top:12px; text-align:right;">
-                    <button class="btn btn-outline btn-sm" @click="clearHistory">清除所有紀錄</button>
+                <div v-if="!history.length" class="history-empty">
+                    <svg viewBox="0 0 24 24" style="display:block; margin:0 auto 12px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    尚無操作紀錄
+                </div>
+                <div v-if="history.length" style="margin-top:14px; text-align:right;">
+                    <button class="btn btn-outline btn-sm" @click="clearHistory">
+                        <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        清除所有紀錄
+                    </button>
                 </div>
             </div>
         </div>
     </main>
+
+    <footer class="footer">Kepware 點位管理系統 &mdash; ThingsBoard Device Management</footer>
 
     <!-- Confirm Dialog -->
     <div class="modal-overlay" v-if="modal.show" @click.self="modal.show = false">
@@ -358,7 +537,10 @@
             <p>{{ modal.message }}</p>
             <div class="modal-actions">
                 <button class="btn btn-outline" @click="modal.show = false">取消</button>
-                <button class="btn btn-danger" @click="modal.onConfirm(); modal.show = false">確認執行</button>
+                <button class="btn btn-danger" @click="modal.onConfirm(); modal.show = false">
+                    <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                    確認執行
+                </button>
             </div>
         </div>
     </div>
@@ -540,8 +722,7 @@ createApp({
         }
 
         function hasTaskInMemory(taskId) {
-            // 結果 CSV 僅在伺服器未重啟時可下載
-            return true // 讓連結顯示，下載失敗會收到 404
+            return true
         }
 
         function formatTime(ts) { if (!ts) return '-'; return new Date(ts).toLocaleString('zh-TW') }
