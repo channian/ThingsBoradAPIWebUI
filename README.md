@@ -207,3 +207,133 @@ New-NetFirewallRule -DisplayName "Kepware Web UI" -Direction Inbound -Port 9000 
 ```
 
 然後透過 `http://<伺服器IP>:9000` 存取。
+
+---
+
+## 舊版桌面應用程式（參考）
+
+> 以下記錄的是本專案 Web 版開發前的桌面版本架構，使用 CustomTkinter + DuckDB 實作。
+> 目前已由 Web 版取代，保留此文件作為後續 PostgreSQL 整合的設計參考。
+
+### 桌面版架構
+
+```
+Desktop Version (已停用)
+├── tag_manager_v3.py      # 資料層：DuckDB CRUD + CSV 匯入匯出
+├── tag_manager_ui.py      # 主視窗：左側選單 + 頁面切換框架
+├── import_page.py         # 匯入頁面：四步驟匯入流程
+├── settings_page.py       # 設定頁面：下拉選單/預設值/DB 設定
+├── config_manager.py      # 設定管理：config.json 讀寫
+├── data_validator.py      # 資料驗證：CSV 格式/欄位/地址檢查
+├── address_page.py        # Address 管理頁面（未提供）
+└── config.json            # 設定檔：下拉選單選項/預設值/DB路徑
+```
+
+| 層級 | 技術 |
+|------|------|
+| 前端 | CustomTkinter（Python 桌面 GUI） |
+| 資料庫 | DuckDB（本地嵌入式） |
+| 設定 | config.json |
+
+### 資料庫結構（DuckDB）
+
+桌面版使用三張資料表：
+
+**tags 主表** — 儲存所有 Kepware 點位資訊
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| tag_id | INTEGER PK | 自動遞增 |
+| tagname | VARCHAR UNIQUE | 點位名稱（必填） |
+| description | VARCHAR | 描述 |
+| node_name | VARCHAR | 節點名稱 |
+| driver_type | VARCHAR | PLC/OPC 類型 |
+| address | VARCHAR | PLC 位址 |
+| tabname | VARCHAR | 頁籤名稱 |
+| zone | VARCHAR | 區域 |
+| bu | VARCHAR | 事業單位 |
+| site | VARCHAR | 廠區 |
+| floor | VARCHAR | 樓層 |
+| owner | VARCHAR | 負責人 |
+| department | VARCHAR | 部門 |
+| data_type | VARCHAR | 資料類型 |
+| created_date | TIMESTAMP | 建立時間 |
+| updated_date | TIMESTAMP | 更新時間 |
+
+**projects 專案表**
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| project_id | INTEGER PK | 自動遞增 |
+| project_name | VARCHAR UNIQUE | 專案名稱 |
+| created_date | TIMESTAMP | 建立時間 |
+
+**tag_projects 關聯表**（多對多）
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| tag_id | INTEGER FK | 關聯 tags |
+| project_id | INTEGER FK | 關聯 projects |
+| date | DATE | 關聯日期 |
+
+### 匯入流程（四步驟）
+
+桌面版的匯入頁面實作了完整的四步驟流程，後續整合至 Web 版時可參考：
+
+1. **選擇 CSV** — 瀏覽檔案 + 自動觸發 DataValidator 驗證
+2. **檢查重複** — 比對 DB 中現有 tagname，列出重複項目與所屬專案
+3. **分配 Address** — PLC 點位自動分配可用的 D/E 系列位址（支援預覽/正式執行）
+4. **匯入資料庫** — 指定專案名稱、重複處理策略（skip 略過 / update 更新）
+
+### 設定管理（config.json）
+
+桌面版透過 `config.json` 集中管理所有可設定項目：
+
+**下拉選單選項（dropdown_options）**
+
+管理 12 個欄位的下拉選單：
+
+| 欄位 | 範例選項 |
+|------|----------|
+| driver_type | Zone1_PLC, Zone2_PLC, OPC, Modbus |
+| node_name | Node1, Node2, Node3 |
+| zone | ZoneA, ZoneB, ZoneC, ZoneD |
+| bu | BU1, BU2, BU3 |
+| site | Site1, Site2, Site3 |
+| floor | 1F, 2F, 3F, B1, B2 |
+| owner | Ray, John, Mary, Tom |
+| department | Engineering, Production, Maintenance, QA |
+| data_type | Float, Bool, Word, Short, Long, DWord, BCD, LBCD |
+| system | SCADA, MES, DCS, PLC |
+| tabname | Main, Alarm, Trend, Control |
+| memory_type | D, E |
+
+**預設值（defaults）** — 各欄位新增時自動填入的預設值
+
+**資料庫設定（database）** — DB 路徑、自動備份開關、備份保留天數
+
+### 資料驗證（DataValidator）
+
+匯入前自動執行五項驗證：
+
+| 檢查項目 | 類型 | 說明 |
+|----------|------|------|
+| 必填欄位 | Error | tagname 必須存在 |
+| tagname 檢查 | Error | 空值、CSV 內部重複、特殊字元 |
+| 選項值檢查 | Warning | 值是否在 config.json 允許的下拉選單範圍內 |
+| Address 格式 | Error | PLC 位址格式驗證（D/E 系列、偶數規則、範圍檢查） |
+| DataType-Address 對應 | Error | Bool 必須用 Bit 地址（D00000.00）、非 Bool 不可用 Bit 地址 |
+
+### Web 版整合規劃
+
+後續計畫將桌面版功能整合至 Web 版：
+
+| 桌面版功能 | Web 版對應 | 狀態 |
+|------------|------------|------|
+| CSV → ThingsBoard 批次操作 | `app/main.py` + `app/task_manager.py` | 已完成 |
+| DuckDB 主檔管理 | 預計改為 PostgreSQL | 規劃中 |
+| config.json 設定管理 | 預計改為 Web API + 設定頁面 | 規劃中 |
+| 下拉選單管理 UI | 預計新增「設定」分頁 | 規劃中 |
+| DataValidator 驗證 | 預計整合至 CSV 上傳流程 | 規劃中 |
+| Address 自動分配 | 預計整合至匯入流程 | 規劃中 |
+| 匯入四步驟流程 | 預計重新設計為 Web 版 | 規劃中 |
