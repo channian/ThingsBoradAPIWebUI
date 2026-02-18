@@ -27,6 +27,7 @@ from app.task_manager import (
     execute_batch_create,
     execute_batch_delete,
 )
+from app.config_manager import ConfigManager
 
 # ── Logging ────────────────────────────────────────────
 
@@ -58,8 +59,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
+
+config_manager = ConfigManager(CONFIG_FILE)
 
 
 # ── 歷史紀錄管理 ──────────────────────────────────────
@@ -151,6 +155,31 @@ class DirectDeleteRequest(BaseModel):
     tb_password: str
     device_ids: list
     dry_run: bool = True
+
+
+class DropdownUpdateRequest(BaseModel):
+    field: str
+    values: list
+
+
+class DropdownValueRequest(BaseModel):
+    field: str
+    value: str
+
+
+class DefaultsUpdateRequest(BaseModel):
+    defaults: dict
+
+
+class MappingRuleUpdateRequest(BaseModel):
+    rule_name: str
+    mapping: dict
+
+
+class DeviceProfileCheckRequest(BaseModel):
+    tb_url: str
+    tb_token: str
+    type_names: list
 
 
 # ── API: 認證 ──────────────────────────────────────────
@@ -500,3 +529,114 @@ async def delete_devices_direct(req: DirectDeleteRequest):
 
     task_manager.run_in_background(task, _exec_direct_delete)
     return {"task_id": task.id}
+
+
+# ── API: 設定管理 ─────────────────────────────────────
+
+@app.get("/api/config")
+async def get_config():
+    """取得完整設定"""
+    return config_manager.get_all()
+
+
+@app.get("/api/config/dropdown")
+async def get_dropdown_options():
+    """取得所有下拉選項"""
+    return config_manager.get_dropdown_options()
+
+
+@app.put("/api/config/dropdown")
+async def update_dropdown_field(req: DropdownUpdateRequest):
+    """更新指定欄位的下拉選項列表"""
+    config_manager.set_dropdown_field(req.field, req.values)
+    return {"success": True, "field": req.field, "values": req.values}
+
+
+@app.post("/api/config/dropdown/add")
+async def add_dropdown_value(req: DropdownValueRequest):
+    """新增一個下拉選項值"""
+    added = config_manager.add_dropdown_value(req.field, req.value)
+    if not added:
+        raise HTTPException(status_code=409, detail=f"值 '{req.value}' 已存在於 '{req.field}'")
+    return {"success": True}
+
+
+@app.post("/api/config/dropdown/remove")
+async def remove_dropdown_value(req: DropdownValueRequest):
+    """移除一個下拉選項值"""
+    removed = config_manager.remove_dropdown_value(req.field, req.value)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"值 '{req.value}' 不存在於 '{req.field}'")
+    return {"success": True}
+
+
+@app.get("/api/config/defaults")
+async def get_defaults():
+    """取得預設值"""
+    return config_manager.get_defaults()
+
+
+@app.put("/api/config/defaults")
+async def update_defaults(req: DefaultsUpdateRequest):
+    """更新預設值"""
+    config_manager.set_defaults(req.defaults)
+    return {"success": True}
+
+
+@app.get("/api/config/mapping")
+async def get_mapping_rules():
+    """取得所有映射規則"""
+    return config_manager.get_mapping_rules()
+
+
+@app.put("/api/config/mapping")
+async def update_mapping_rule(req: MappingRuleUpdateRequest):
+    """更新指定映射規則"""
+    config_manager.set_mapping_rule(req.rule_name, req.mapping)
+    return {"success": True, "rule_name": req.rule_name}
+
+
+@app.delete("/api/config/mapping/{rule_name}")
+async def delete_mapping_rule(rule_name: str):
+    """刪除映射規則"""
+    deleted = config_manager.delete_mapping_rule(rule_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"規則 '{rule_name}' 不存在")
+    return {"success": True}
+
+
+# ── API: DeviceProfile 驗證 ──────────────────────────
+
+@app.post("/api/device-profiles/check")
+async def check_device_profiles(req: DeviceProfileCheckRequest):
+    """檢查指定的 type 名稱是否為合法的 DeviceProfile"""
+    client = ThingsBoardClient(req.tb_url)
+    client.set_token(req.tb_token)
+    try:
+        existing_profiles = client.get_all_device_profile_names()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"無法取得 DeviceProfile 列表: {e}")
+
+    results = {}
+    for name in req.type_names:
+        results[name] = name in existing_profiles
+
+    return {
+        "existing_profiles": existing_profiles,
+        "check_results": results,
+        "total_checked": len(req.type_names),
+        "valid_count": sum(1 for v in results.values() if v),
+        "invalid_count": sum(1 for v in results.values() if not v),
+    }
+
+
+@app.post("/api/device-profiles/list")
+async def list_device_profiles(req: DeviceQueryRequest):
+    """列出 ThingsBoard 上所有的 DeviceProfile"""
+    client = ThingsBoardClient(req.tb_url)
+    client.set_token(req.tb_token)
+    try:
+        existing_profiles = client.get_all_device_profile_names()
+        return {"profiles": existing_profiles, "total": len(existing_profiles)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"無法取得 DeviceProfile 列表: {e}")

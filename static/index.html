@@ -210,6 +210,46 @@
         .history-empty { text-align: center; padding: 60px; color: var(--text-light); }
         .history-empty svg { width: 48px; height: 48px; fill: none; stroke: var(--border); stroke-width: 1.5; margin-bottom: 12px; }
 
+        /* ===== Settings Tab ===== */
+        .settings-section { margin-bottom: 28px; }
+        .settings-section-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+        .settings-section-title svg { width: 18px; height: 18px; fill: none; stroke: var(--primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .dropdown-field { background: var(--table-header-bg); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px; border: 1px solid var(--border-light); }
+        .dropdown-field-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .dropdown-field-name { font-weight: 700; font-size: 14px; color: var(--primary); }
+        .tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 32px; }
+        .tag-item { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; font-size: 13px; transition: all 0.15s; }
+        .tag-item:hover { border-color: var(--error); }
+        .tag-remove { cursor: pointer; color: var(--text-light); font-size: 16px; line-height: 1; transition: color 0.15s; font-weight: 700; }
+        .tag-remove:hover { color: var(--error); }
+        .tag-add-form { display: flex; gap: 6px; margin-top: 8px; }
+        .tag-add-form input { flex: 1; padding: 6px 10px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; }
+        .tag-add-form input:focus { border-color: var(--primary); }
+        .mapping-table { width: 100%; margin-top: 8px; }
+        .mapping-table td { padding: 6px 10px; }
+        .mapping-table input { width: 100%; padding: 6px 10px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; }
+        .mapping-table input:focus { border-color: var(--primary); }
+        .mapping-add-row { display: flex; gap: 8px; margin-top: 8px; }
+        .mapping-add-row input { flex: 1; padding: 6px 10px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; }
+        .defaults-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+        .defaults-item { display: flex; flex-direction: column; gap: 4px; }
+        .defaults-item label { font-size: 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+        .defaults-item input, .defaults-item select { padding: 8px 12px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; }
+        .defaults-item input:focus, .defaults-item select:focus { border-color: var(--primary); }
+
+        /* ===== DeviceProfile Check ===== */
+        .dp-check-results { margin-top: 12px; }
+        .dp-check-item { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; margin: 3px; border-radius: 16px; font-size: 13px; font-weight: 500; }
+        .dp-check-valid { background: var(--success-bg); color: var(--success); }
+        .dp-check-invalid { background: var(--error-bg); color: var(--error); }
+        .dp-summary { display: flex; gap: 16px; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+
+        /* ===== Sub Tabs ===== */
+        .sub-tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+        .sub-tab { padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-light); border: 1.5px solid var(--border); border-radius: 20px; transition: all 0.2s; user-select: none; }
+        .sub-tab:hover { color: var(--primary); border-color: var(--primary); }
+        .sub-tab.active { color: #fff; background: var(--primary); border-color: var(--primary); }
+
         /* ===== Footer ===== */
         .footer { text-align: center; padding: 20px; color: var(--text-light); font-size: 12px; }
 
@@ -292,6 +332,10 @@
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     歷史紀錄
                 </div>
+                <div class="tab" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'; loadConfig()">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    設定
+                </div>
             </div>
 
             <!-- =============== Create Tab =============== -->
@@ -315,6 +359,27 @@
                             <thead><tr><th v-for="h in create.headers" :key="h">{{ h }}</th></tr></thead>
                             <tbody><tr v-for="(row, i) in create.preview" :key="i"><td v-for="h in create.headers" :key="h">{{ row[h] || '' }}</td></tr></tbody>
                         </table>
+                    </div>
+                    <!-- DeviceProfile 驗證 -->
+                    <div v-if="create.headers.includes('type')" style="margin-bottom: 16px;">
+                        <button class="btn btn-outline btn-sm" @click="checkDeviceProfiles" :disabled="conn.status !== 'connected' || dpCheck.loading" style="margin-bottom: 10px;">
+                            <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                            {{ dpCheck.loading ? '驗證中...' : '驗證 DeviceProfile' }}
+                        </button>
+                        <div v-if="dpCheck.checked" class="dp-check-results">
+                            <div class="dp-summary">
+                                <span style="color: var(--success)">有效: {{ dpCheck.validCount }}</span>
+                                <span style="color: var(--error)" v-if="dpCheck.invalidCount > 0">無效: {{ dpCheck.invalidCount }}</span>
+                                <span v-if="dpCheck.invalidCount === 0" style="color: var(--success)">全部 Profile 皆存在</span>
+                            </div>
+                            <div>
+                                <span v-for="(valid, name) in dpCheck.results" :key="name"
+                                      class="dp-check-item" :class="valid ? 'dp-check-valid' : 'dp-check-invalid'">
+                                    <span v-html="valid ? '&#10003;' : '&#10007;'"></span>
+                                    {{ name }}
+                                </span>
+                            </div>
+                        </div>
                     </div>
                     <div class="controls">
                         <label class="checkbox-label"><input type="checkbox" v-model="create.dryRun"> DRY RUN 預演模式（不會真的新增）</label>
@@ -525,6 +590,168 @@
                     </button>
                 </div>
             </div>
+
+            <!-- =============== Settings Tab =============== -->
+            <div v-show="activeTab === 'settings'">
+                <div class="sub-tabs">
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'dropdown' }" @click="settingsSubTab = 'dropdown'">下拉選項管理</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
+                </div>
+
+                <!-- Dropdown Options Management -->
+                <div v-show="settingsSubTab === 'dropdown'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+                            下拉選項管理
+                        </div>
+                        <div v-for="(values, field) in configData.dropdown_options" :key="field" class="dropdown-field">
+                            <div class="dropdown-field-header">
+                                <span class="dropdown-field-name">{{ field }}</span>
+                                <span style="font-size:12px; color:var(--text-light)">{{ values.length }} 個選項</span>
+                            </div>
+                            <div class="tag-list">
+                                <span v-for="(val, vi) in values" :key="vi" class="tag-item">
+                                    {{ val }}
+                                    <span class="tag-remove" @click="removeDropdownValue(field, val)">&times;</span>
+                                </span>
+                                <span v-if="!values.length" style="color:var(--text-light); font-size:13px;">（尚無選項）</span>
+                            </div>
+                            <div class="tag-add-form">
+                                <input :placeholder="'新增 ' + field + ' 選項...'"
+                                       v-model="newTagValues[field]"
+                                       @keyup.enter="addDropdownValue(field)">
+                                <button class="btn btn-primary btn-sm" @click="addDropdownValue(field)">
+                                    <svg viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    新增
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Add new field -->
+                        <div style="margin-top: 16px; display: flex; gap: 8px; align-items: center;">
+                            <input v-model="newFieldName" placeholder="新欄位名稱..." style="padding: 8px 12px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; flex: 1; max-width: 240px;">
+                            <button class="btn btn-outline btn-sm" @click="addNewField">
+                                <svg viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                新增欄位
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Defaults Management -->
+                <div v-show="settingsSubTab === 'defaults'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                            欄位預設值
+                        </div>
+                        <div class="defaults-grid">
+                            <div v-for="(val, field) in configData.defaults" :key="field" class="defaults-item">
+                                <label>{{ field }}</label>
+                                <select v-if="configData.dropdown_options[field]"
+                                        v-model="configData.defaults[field]"
+                                        @change="saveDefaults">
+                                    <option value="">（不設定）</option>
+                                    <option v-for="opt in configData.dropdown_options[field]" :key="opt" :value="opt">{{ opt }}</option>
+                                </select>
+                                <input v-else v-model="configData.defaults[field]"
+                                       @blur="saveDefaults"
+                                       placeholder="預設值...">
+                            </div>
+                        </div>
+                        <!-- Add new default -->
+                        <div style="margin-top: 16px; display: flex; gap: 8px; align-items: center;">
+                            <input v-model="newDefaultField" placeholder="欄位名稱..." style="padding: 8px 12px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; max-width: 200px;">
+                            <input v-model="newDefaultValue" placeholder="預設值..." style="padding: 8px 12px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; max-width: 200px;">
+                            <button class="btn btn-outline btn-sm" @click="addNewDefault">
+                                <svg viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                新增
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mapping Rules Management -->
+                <div v-show="settingsSubTab === 'mapping'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                            映射規則（前綴 → 值）
+                        </div>
+                        <div v-for="(mapping, ruleName) in configData.mapping_rules" :key="ruleName" class="dropdown-field">
+                            <div class="dropdown-field-header">
+                                <span class="dropdown-field-name">{{ ruleName }}</span>
+                                <button class="btn btn-outline btn-sm" style="padding: 3px 10px; font-size: 12px;" @click="deleteMappingRule(ruleName)">
+                                    <svg viewBox="0 0 24 24" style="width:12px;height:12px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    刪除規則
+                                </button>
+                            </div>
+                            <div class="table-wrapper" style="margin-bottom:8px">
+                                <table class="mapping-table">
+                                    <thead><tr><th style="width:40%">前綴 (Key)</th><th style="width:40%">對應值 (Value)</th><th style="width:20%">操作</th></tr></thead>
+                                    <tbody>
+                                        <tr v-for="(val, key) in mapping" :key="key">
+                                            <td><code style="background:var(--primary-light); padding:2px 8px; border-radius:4px; font-size:13px;">{{ key }}</code></td>
+                                            <td><code style="background:var(--success-bg); padding:2px 8px; border-radius:4px; font-size:13px;">{{ val }}</code></td>
+                                            <td><button class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:11px; color:var(--error); border-color:var(--error);" @click="removeMappingEntry(ruleName, key)">移除</button></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="mapping-add-row">
+                                <input :placeholder="'前綴...'" v-model="newMappingEntries[ruleName + '_key']">
+                                <input :placeholder="'對應值...'" v-model="newMappingEntries[ruleName + '_val']" @keyup.enter="addMappingEntry(ruleName)">
+                                <button class="btn btn-primary btn-sm" @click="addMappingEntry(ruleName)">新增</button>
+                            </div>
+                        </div>
+                        <!-- Add new mapping rule -->
+                        <div style="margin-top: 16px; display: flex; gap: 8px; align-items: center;">
+                            <input v-model="newRuleName" placeholder="新規則名稱（如 zone_prefix）..." style="padding: 8px 12px; border: 1.5px solid var(--input-border); border-radius: var(--radius-xs); font-size: 13px; background: var(--input-bg); color: var(--text); outline: none; flex: 1; max-width: 300px;">
+                            <button class="btn btn-outline btn-sm" @click="addNewMappingRule">
+                                <svg viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                新增規則
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DeviceProfile List -->
+                <div v-show="settingsSubTab === 'profiles'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                            ThingsBoard DeviceProfile 列表
+                        </div>
+                        <button class="btn btn-primary btn-sm" @click="loadDeviceProfiles" :disabled="conn.status !== 'connected' || dpList.loading" style="margin-bottom: 14px;">
+                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            {{ dpList.loading ? '載入中...' : '從 ThingsBoard 載入' }}
+                        </button>
+                        <div v-if="conn.status !== 'connected'" class="alert alert-warning" style="margin-bottom:14px">
+                            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            請先在上方連線 ThingsBoard 後再載入 DeviceProfile
+                        </div>
+                        <div v-if="dpList.profiles.length" class="table-wrapper">
+                            <table>
+                                <thead><tr><th>#</th><th>Profile 名稱</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="(p, i) in dpList.profiles" :key="i">
+                                        <td>{{ i + 1 }}</td>
+                                        <td>{{ p }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="dpList.loaded && !dpList.profiles.length" style="text-align:center; padding:32px; color:var(--text-light);">
+                            ThingsBoard 上尚無 DeviceProfile
+                        </div>
+                        <div v-if="dpList.profiles.length" style="margin-top:8px; font-size:13px; color:var(--text-secondary);">
+                            共 {{ dpList.profiles.length }} 個 DeviceProfile
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -579,6 +806,29 @@ createApp({
 
         const history = ref([])
 
+        // ── Settings State ──
+        const settingsSubTab = ref('dropdown')
+        const configData = reactive({
+            dropdown_options: {},
+            defaults: {},
+            mapping_rules: {},
+        })
+        const newTagValues = reactive({})
+        const newFieldName = ref('')
+        const newDefaultField = ref('')
+        const newDefaultValue = ref('')
+        const newMappingEntries = reactive({})
+        const newRuleName = ref('')
+
+        // ── DeviceProfile Check State ──
+        const dpCheck = reactive({
+            loading: false, checked: false,
+            results: {}, validCount: 0, invalidCount: 0,
+        })
+        const dpList = reactive({
+            loading: false, loaded: false, profiles: [],
+        })
+
         const theme = ref(localStorage.getItem('tb_theme') || 'light')
         document.documentElement.setAttribute('data-theme', theme.value)
         function toggleTheme() {
@@ -619,6 +869,8 @@ createApp({
                 state.totalRows = data.total_rows; state.fileName = data.filename
                 state.taskId = null; state.logs = []; state.summary = null
                 state.progress = { current: 0, total: 0, success: 0, fail: 0, skip: 0 }
+                csv_store_local[operation] = data.preview  // store for DP check
+                dpCheck.checked = false  // reset DP check on new upload
             } catch (e) { alert('CSV 上傳失敗: ' + e.message) }
         }
 
@@ -721,6 +973,177 @@ createApp({
             try { await fetch('/api/history', { method: 'DELETE' }); history.value = [] } catch (e) {}
         }
 
+        // ── Config Functions ──
+        async function loadConfig() {
+            try {
+                const resp = await fetch('/api/config')
+                if (!resp.ok) throw new Error('Failed to load config')
+                const data = await resp.json()
+                configData.dropdown_options = data.dropdown_options || {}
+                configData.defaults = data.defaults || {}
+                configData.mapping_rules = data.mapping_rules || {}
+            } catch (e) { console.error('載入設定失敗:', e) }
+        }
+
+        async function addDropdownValue(field) {
+            const val = (newTagValues[field] || '').trim()
+            if (!val) return
+            try {
+                const resp = await fetch('/api/config/dropdown/add', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ field, value: val })
+                })
+                if (!resp.ok) { const err = await resp.json(); alert(err.detail || '新增失敗'); return }
+                configData.dropdown_options[field].push(val)
+                newTagValues[field] = ''
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function removeDropdownValue(field, val) {
+            try {
+                const resp = await fetch('/api/config/dropdown/remove', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ field, value: val })
+                })
+                if (!resp.ok) return
+                const idx = configData.dropdown_options[field].indexOf(val)
+                if (idx !== -1) configData.dropdown_options[field].splice(idx, 1)
+            } catch (e) { alert('移除失敗: ' + e.message) }
+        }
+
+        async function addNewField() {
+            const name = newFieldName.value.trim()
+            if (!name) return
+            if (configData.dropdown_options[name]) { alert('欄位已存在'); return }
+            try {
+                const resp = await fetch('/api/config/dropdown', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ field: name, values: [] })
+                })
+                if (!resp.ok) return
+                configData.dropdown_options[name] = []
+                newFieldName.value = ''
+            } catch (e) { alert('新增欄位失敗: ' + e.message) }
+        }
+
+        async function saveDefaults() {
+            try {
+                await fetch('/api/config/defaults', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ defaults: configData.defaults })
+                })
+            } catch (e) { console.error('儲存預設值失敗:', e) }
+        }
+
+        async function addNewDefault() {
+            const field = newDefaultField.value.trim()
+            const val = newDefaultValue.value.trim()
+            if (!field) return
+            configData.defaults[field] = val
+            await saveDefaults()
+            newDefaultField.value = ''
+            newDefaultValue.value = ''
+        }
+
+        async function addMappingEntry(ruleName) {
+            const key = (newMappingEntries[ruleName + '_key'] || '').trim()
+            const val = (newMappingEntries[ruleName + '_val'] || '').trim()
+            if (!key || !val) return
+            configData.mapping_rules[ruleName][key] = val
+            try {
+                await fetch('/api/config/mapping', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rule_name: ruleName, mapping: configData.mapping_rules[ruleName] })
+                })
+                newMappingEntries[ruleName + '_key'] = ''
+                newMappingEntries[ruleName + '_val'] = ''
+            } catch (e) { alert('新增映射失敗: ' + e.message) }
+        }
+
+        async function removeMappingEntry(ruleName, key) {
+            delete configData.mapping_rules[ruleName][key]
+            // Force Vue reactivity
+            configData.mapping_rules[ruleName] = { ...configData.mapping_rules[ruleName] }
+            try {
+                await fetch('/api/config/mapping', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rule_name: ruleName, mapping: configData.mapping_rules[ruleName] })
+                })
+            } catch (e) { alert('移除映射失敗: ' + e.message) }
+        }
+
+        async function addNewMappingRule() {
+            const name = newRuleName.value.trim()
+            if (!name) return
+            if (configData.mapping_rules[name]) { alert('規則已存在'); return }
+            configData.mapping_rules[name] = {}
+            try {
+                await fetch('/api/config/mapping', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rule_name: name, mapping: {} })
+                })
+                newRuleName.value = ''
+            } catch (e) { alert('新增規則失敗: ' + e.message) }
+        }
+
+        async function deleteMappingRule(ruleName) {
+            if (!confirm(`確定要刪除映射規則「${ruleName}」嗎？`)) return
+            try {
+                const resp = await fetch('/api/config/mapping/' + encodeURIComponent(ruleName), { method: 'DELETE' })
+                if (resp.ok) {
+                    delete configData.mapping_rules[ruleName]
+                    // Force Vue reactivity
+                    configData.mapping_rules = { ...configData.mapping_rules }
+                }
+            } catch (e) { alert('刪除失敗: ' + e.message) }
+        }
+
+        // ── DeviceProfile Functions ──
+        async function checkDeviceProfiles() {
+            if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
+            dpCheck.loading = true; dpCheck.checked = false
+            // Extract unique type values from CSV store
+            const allRows = csv_store_local['create'] || create.preview
+            const typeSet = new Set()
+            for (const row of allRows) {
+                const t = row['type'] || row['Type'] || ''
+                if (t.trim()) typeSet.add(t.trim())
+            }
+            if (typeSet.size === 0) { dpCheck.loading = false; alert('CSV 中無 type 欄位資料'); return }
+            try {
+                const resp = await fetch('/api/device-profiles/check', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token, type_names: [...typeSet] })
+                })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Check failed') }
+                const data = await resp.json()
+                dpCheck.results = data.check_results
+                dpCheck.validCount = data.valid_count
+                dpCheck.invalidCount = data.invalid_count
+                dpCheck.checked = true
+            } catch (e) { alert('DeviceProfile 驗證失敗: ' + e.message) }
+            finally { dpCheck.loading = false }
+        }
+
+        async function loadDeviceProfiles() {
+            if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
+            dpList.loading = true
+            try {
+                const resp = await fetch('/api/device-profiles/list', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token })
+                })
+                if (!resp.ok) throw new Error('Failed to load profiles')
+                const data = await resp.json()
+                dpList.profiles = data.profiles || []
+                dpList.loaded = true
+            } catch (e) { alert('載入 DeviceProfile 失敗: ' + e.message) }
+            finally { dpList.loading = false }
+        }
+
+        // local CSV store for DeviceProfile check (stores all rows, not just preview)
+        const csv_store_local = reactive({})
+
         function hasTaskInMemory(taskId) {
             return true
         }
@@ -741,6 +1164,14 @@ createApp({
             queryDevices, toggleSelectAll, confirmDeleteSelected, exportDevices,
             loadHistory, clearHistory, hasTaskInMemory,
             formatTime, formatISOTime, typeLabel, truncate,
+            // Settings
+            settingsSubTab, configData, newTagValues, newFieldName, newDefaultField, newDefaultValue,
+            newMappingEntries, newRuleName,
+            loadConfig, addDropdownValue, removeDropdownValue, addNewField,
+            saveDefaults, addNewDefault,
+            addMappingEntry, removeMappingEntry, addNewMappingRule, deleteMappingRule,
+            // DeviceProfile
+            dpCheck, dpList, checkDeviceProfiles, loadDeviceProfiles,
         }
     }
 }).mount('#app')

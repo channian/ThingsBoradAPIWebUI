@@ -94,3 +94,40 @@ class ThingsBoardClient:
             headers=self._headers,
             timeout=10,
         )
+
+    # ── DeviceProfile ─────────────────────────────────
+
+    def get_device_profiles(self, page: int = 0, page_size: int = 100,
+                            text_search: str = None) -> dict:
+        """分頁取得 DeviceProfile 列表"""
+        params = {
+            "pageSize": page_size,
+            "page": page,
+            "sortProperty": "name",
+            "sortOrder": "ASC",
+        }
+        if text_search:
+            params["textSearch"] = text_search
+        resp = requests.get(
+            f"{self.base_url}/api/deviceProfiles",
+            headers=self._headers,
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_all_device_profile_names(self) -> list:
+        """取得所有 DeviceProfile 名稱列表"""
+        names = []
+        page = 0
+        while True:
+            result = self.get_device_profiles(page=page, page_size=100)
+            for dp in result.get("data", []):
+                names.append(dp.get("name", ""))
+            if not result.get("hasNext", False):
+                break
+            page += 1
+            if page > 50:  # 安全上限
+                break
+        return names
