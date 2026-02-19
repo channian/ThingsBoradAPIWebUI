@@ -361,7 +361,7 @@
                         </table>
                     </div>
                     <!-- DeviceProfile 驗證 -->
-                    <div v-if="create.headers.some(h => h.toLowerCase() === 'type')" style="margin-bottom: 16px;">
+                    <div v-if="hasTypeHeader" style="margin-bottom: 16px;">
                         <button class="btn btn-outline btn-sm" @click="checkDeviceProfiles" :disabled="conn.status !== 'connected' || dpCheck.loading" style="margin-bottom: 10px;">
                             <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
                             {{ dpCheck.loading ? '驗證中...' : '驗證 DeviceProfile' }}
@@ -845,6 +845,12 @@ createApp({
         const createProgress = computed(() => create.progress.total === 0 ? 0 : Math.round(create.progress.current / create.progress.total * 100))
         const deleteProgress = computed(() => del.progress.total === 0 ? 0 : Math.round(del.progress.current / del.progress.total * 100))
         const isAllSelected = computed(() => query.devices.length > 0 && query.devices.every(d => query.selected.includes(d.id.id)))
+        const hasTypeHeader = computed(() => {
+            for (let i = 0; i < create.headers.length; i++) {
+                if (create.headers[i].toLowerCase() === 'type') return true
+            }
+            return false
+        })
 
         async function testConnection() {
             conn.status = 'connecting'
@@ -1160,7 +1166,7 @@ createApp({
 
         return {
             conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal, theme,
-            createLogArea, deleteLogArea, queryLogArea, createProgress, deleteProgress, isAllSelected,
+            createLogArea, deleteLogArea, queryLogArea, createProgress, deleteProgress, isAllSelected, hasTypeHeader,
             testConnection, handleFileSelect, handleDrop, startTask, confirmDelete, toggleTheme,
             queryDevices, toggleSelectAll, confirmDeleteSelected, exportDevices,
             loadHistory, clearHistory, hasTaskInMemory,
