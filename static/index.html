@@ -361,7 +361,7 @@
                         </table>
                     </div>
                     <!-- DeviceProfile 驗證 -->
-                    <div v-if="create.headers.includes('type')" style="margin-bottom: 16px;">
+                    <div v-if="create.headers.some(h => h.toLowerCase() === 'type')" style="margin-bottom: 16px;">
                         <button class="btn btn-outline btn-sm" @click="checkDeviceProfiles" :disabled="conn.status !== 'connected' || dpCheck.loading" style="margin-bottom: 10px;">
                             <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
                             {{ dpCheck.loading ? '驗證中...' : '驗證 DeviceProfile' }}
@@ -1102,11 +1102,12 @@ createApp({
         async function checkDeviceProfiles() {
             if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
             dpCheck.loading = true; dpCheck.checked = false
-            // Extract unique type values from CSV store
+            // Extract unique type values from CSV store (case-insensitive key lookup)
             const allRows = csv_store_local['create'] || create.preview
             const typeSet = new Set()
             for (const row of allRows) {
-                const t = row['type'] || row['Type'] || ''
+                const typeKey = Object.keys(row).find(k => k.toLowerCase() === 'type')
+                const t = typeKey ? (row[typeKey] || '') : ''
                 if (t.trim()) typeSet.add(t.trim())
             }
             if (typeSet.size === 0) { dpCheck.loading = false; alert('CSV 中無 type 欄位資料'); return }
