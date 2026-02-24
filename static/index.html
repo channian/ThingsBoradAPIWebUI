@@ -381,6 +381,18 @@
                             </div>
                         </div>
                     </div>
+                    <!-- CSV 內部 name 重複警告 -->
+                    <div v-if="create.duplicateNames.length" class="alert alert-warning" style="flex-wrap: wrap;">
+                        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <div>
+                            <strong>CSV 中有 {{ create.duplicateNames.length }} 個重複的 name：</strong>
+                            <div style="margin-top: 6px;">
+                                <span v-for="d in create.duplicateNames" :key="d.name" class="dp-check-item dp-check-invalid" style="font-size: 12px;">
+                                    {{ d.name }} ({{ d.count }}次)
+                                </span>
+                            </div>
+                        </div>
+                    </div>
                     <div class="controls">
                         <label class="checkbox-label"><input type="checkbox" v-model="create.dryRun"> DRY RUN 預演模式（不會真的新增）</label>
                         <span class="settings-toggle" @click="create.showSettings = !create.showSettings">{{ create.showSettings ? '&#9650; 隱藏進階設定' : '&#9660; 進階設定' }}</span>
@@ -442,6 +454,18 @@
                             <thead><tr><th v-for="h in del.headers" :key="h">{{ h }}</th></tr></thead>
                             <tbody><tr v-for="(row, i) in del.preview" :key="i"><td v-for="h in del.headers" :key="h">{{ row[h] || '' }}</td></tr></tbody>
                         </table>
+                    </div>
+                    <!-- CSV 內部 name 重複警告（刪除頁） -->
+                    <div v-if="del.duplicateNames.length" class="alert alert-warning" style="flex-wrap: wrap;">
+                        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <div>
+                            <strong>CSV 中有 {{ del.duplicateNames.length }} 個重複的 name：</strong>
+                            <div style="margin-top: 6px;">
+                                <span v-for="d in del.duplicateNames" :key="d.name" class="dp-check-item dp-check-invalid" style="font-size: 12px;">
+                                    {{ d.name }} ({{ d.count }}次)
+                                </span>
+                            </div>
+                        </div>
                     </div>
                     <div class="controls">
                         <label class="checkbox-label"><input type="checkbox" v-model="del.dryRun"> DRY RUN 預演模式（不會真的刪除）</label>
@@ -787,6 +811,7 @@ createApp({
         function newOpState(defaults = {}) {
             return reactive({
                 uploadId: null, fileName: null, headers: [], preview: [], totalRows: 0,
+                uniqueTypes: [], duplicateNames: [],
                 dryRun: true, running: false, taskId: null, showSettings: false,
                 progress: { current: 0, total: 0, success: 0, fail: 0, skip: 0 },
                 logs: [], summary: null,
@@ -845,12 +870,7 @@ createApp({
         const createProgress = computed(() => create.progress.total === 0 ? 0 : Math.round(create.progress.current / create.progress.total * 100))
         const deleteProgress = computed(() => del.progress.total === 0 ? 0 : Math.round(del.progress.current / del.progress.total * 100))
         const isAllSelected = computed(() => query.devices.length > 0 && query.devices.every(d => query.selected.includes(d.id.id)))
-        const hasTypeHeader = computed(() => {
-            for (let i = 0; i < create.headers.length; i++) {
-                if (create.headers[i].toLowerCase() === 'type') return true
-            }
-            return false
-        })
+        const hasTypeHeader = computed(() => create.uniqueTypes.length > 0)
 
         async function testConnection() {
             conn.status = 'connecting'
@@ -873,9 +893,10 @@ createApp({
                 const data = await resp.json()
                 state.uploadId = data.upload_id; state.headers = data.headers; state.preview = data.preview
                 state.totalRows = data.total_rows; state.fileName = data.filename
+                state.uniqueTypes = data.unique_types || []
+                state.duplicateNames = data.duplicate_names || []
                 state.taskId = null; state.logs = []; state.summary = null
                 state.progress = { current: 0, total: 0, success: 0, fail: 0, skip: 0 }
-                csv_store_local[operation] = data.preview  // store for DP check
                 dpCheck.checked = false  // reset DP check on new upload
             } catch (e) { alert('CSV 上傳失敗: ' + e.message) }
         }
@@ -1108,19 +1129,13 @@ createApp({
         async function checkDeviceProfiles() {
             if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
             dpCheck.loading = true; dpCheck.checked = false
-            // Extract unique type values from CSV store (case-insensitive key lookup)
-            const allRows = csv_store_local['create'] || create.preview
-            const typeSet = new Set()
-            for (const row of allRows) {
-                const typeKey = Object.keys(row).find(k => k.toLowerCase() === 'type')
-                const t = typeKey ? (row[typeKey] || '') : ''
-                if (t.trim()) typeSet.add(t.trim())
-            }
-            if (typeSet.size === 0) { dpCheck.loading = false; alert('CSV 中無 type 欄位資料'); return }
+            // Use uniqueTypes from backend (covers ALL CSV rows)
+            const types = create.uniqueTypes || []
+            if (types.length === 0) { dpCheck.loading = false; alert('CSV 中無 type 欄位資料'); return }
             try {
                 const resp = await fetch('/api/device-profiles/check', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token, type_names: [...typeSet] })
+                    body: JSON.stringify({ tb_url: conn.url, tb_token: conn.token, type_names: types })
                 })
                 if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Check failed') }
                 const data = await resp.json()
@@ -1147,9 +1162,6 @@ createApp({
             } catch (e) { alert('載入 DeviceProfile 失敗: ' + e.message) }
             finally { dpList.loading = false }
         }
-
-        // local CSV store for DeviceProfile check (stores all rows, not just preview)
-        const csv_store_local = reactive({})
 
         function hasTaskInMemory(taskId) {
             return true

@@ -239,12 +239,48 @@ async def upload_csv(file: UploadFile = File(...)):
     csv_store[upload_id] = rows
 
     preview = rows[:10]
+
+    # 提取不重複的 type 值（供 DeviceProfile 驗證）
+    type_key = None
+    for h in headers:
+        if h.lower() == "type":
+            type_key = h
+            break
+    unique_types = []
+    if type_key:
+        seen_types = set()
+        for row in rows:
+            t = (row.get(type_key) or "").strip()
+            if t and t not in seen_types:
+                seen_types.add(t)
+                unique_types.append(t)
+
+    # 檢查 name 重複（CSV 內部）
+    name_key = None
+    for h in headers:
+        if h.lower() == "name":
+            name_key = h
+            break
+    duplicate_names = []
+    if name_key:
+        name_counts = {}
+        for row in rows:
+            n = (row.get(name_key) or "").strip()
+            if n:
+                name_counts[n] = name_counts.get(n, 0) + 1
+        duplicate_names = [
+            {"name": n, "count": c}
+            for n, c in name_counts.items() if c > 1
+        ]
+
     return {
         "upload_id": upload_id,
         "headers": headers,
         "preview": preview,
         "total_rows": len(rows),
         "filename": file.filename,
+        "unique_types": unique_types,
+        "duplicate_names": duplicate_names,
     }
 
 
