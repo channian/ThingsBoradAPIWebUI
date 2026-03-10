@@ -332,6 +332,10 @@
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     歷史紀錄
                 </div>
+                <div class="tab" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">
+                    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    點位匯入
+                </div>
                 <div class="tab" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'; loadConfig()">
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     設定
@@ -615,6 +619,206 @@
                 </div>
             </div>
 
+            <!-- =============== Import Tab =============== -->
+            <div v-show="activeTab === 'import'">
+                <div class="sub-tabs">
+                    <div class="sub-tab" :class="{ active: importSubTab === 'upload' }" @click="importSubTab = 'upload'">1. CSV 上傳</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'staging' }" @click="importSubTab = 'staging'; loadStaging()">2. 暫存資料</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. TB 建點</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'pg' }" @click="importSubTab = 'pg'; derivePG()">4. PG 匯入</div>
+                </div>
+
+                <!-- Step 1: CSV Upload to Staging -->
+                <div v-show="importSubTab === 'upload'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            上傳 CSV 至 PG 暫存表
+                        </div>
+                        <!-- PG 連線狀態 -->
+                        <div style="margin-bottom: 16px;">
+                            <button class="btn btn-outline btn-sm" @click="testPGConnection" :disabled="pgConn.testing">
+                                <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                {{ pgConn.testing ? '測試中...' : '測試 PG 連線' }}
+                            </button>
+                            <span class="conn-status" :class="pgConn.status" style="margin-left: 8px;">{{ pgConn.statusText }}</span>
+                        </div>
+                        <div class="upload-zone" :class="{ dragover: dragTarget === 'import' }"
+                             @dragover.prevent="dragTarget = 'import'" @dragleave="dragTarget = null"
+                             @drop.prevent="handleImportDrop($event)" @click="$refs.importFileInput.click()">
+                            <input type="file" ref="importFileInput" accept=".csv" @change="handleImportFile($event)" hidden>
+                            <div class="upload-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+                            <p>拖曳 CSV 至此，或<span class="link">點擊選擇</span>（14 欄盤點表 + 選填 device_profile）</p>
+                            <p v-if="imp.fileName" class="upload-hint">{{ imp.fileName }}</p>
+                        </div>
+                        <div v-if="imp.preview.length">
+                            <div class="section-title">預覽（共 {{ imp.totalRows }} 筆，顯示前 {{ imp.preview.length }} 筆）</div>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead><tr><th v-for="h in imp.headers" :key="h">{{ h }}</th></tr></thead>
+                                    <tbody><tr v-for="(row, i) in imp.preview" :key="i"><td v-for="h in imp.headers" :key="h">{{ row[h] || '' }}</td></tr></tbody>
+                                </table>
+                            </div>
+                            <div v-if="imp.duplicateNames.length" class="alert alert-warning" style="flex-wrap:wrap">
+                                <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                <div>
+                                    <strong>CSV 中有 {{ imp.duplicateNames.length }} 個重複的 Tag Name：</strong>
+                                    <div style="margin-top:6px;">
+                                        <span v-for="d in imp.duplicateNames" :key="d.name" class="dp-check-item dp-check-invalid" style="font-size:12px">{{ d.name }} ({{ d.count }}次)</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn btn-success" @click="importToStaging" :disabled="imp.importing || pgConn.status !== 'connected'" style="margin-top:12px">
+                                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                {{ imp.importing ? '匯入中...' : '匯入暫存表' }}
+                            </button>
+                            <div v-if="imp.result" class="summary-card" style="margin-top:16px">
+                                <h3>匯入完成</h3>
+                                <div class="summary-stats">
+                                    <div class="summary-stat"><div class="stat-value">{{ imp.result.total }}</div><div class="stat-label">CSV 總筆</div></div>
+                                    <div class="summary-stat success"><div class="stat-value">{{ imp.result.inserted }}</div><div class="stat-label">新增</div></div>
+                                    <div class="summary-stat warning"><div class="stat-value">{{ imp.result.skipped }}</div><div class="stat-label">略過</div></div>
+                                </div>
+                                <div v-if="imp.result.errors.length" style="margin-top:12px; text-align:left; max-height:150px; overflow-y:auto; font-size:13px;">
+                                    <div v-for="e in imp.result.errors" :key="e.tag_name" style="color:var(--warning); padding:2px 0;">{{ e.tag_name }}: {{ e.reason }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Staging Data View -->
+                <div v-show="importSubTab === 'staging'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                            暫存表資料 (scada_tag_config)
+                        </div>
+                        <div class="controls" style="margin-bottom:12px">
+                            <div class="form-group small">
+                                <label>TB 狀態</label>
+                                <select v-model="staging.filterTb" @change="loadStaging()">
+                                    <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
+                                </select>
+                            </div>
+                            <div class="form-group small">
+                                <label>PG 狀態</label>
+                                <select v-model="staging.filterPg" @change="loadStaging()">
+                                    <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary btn-sm" @click="loadStaging()">
+                                <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                重新整理
+                            </button>
+                            <span style="font-size:13px; color:var(--text-secondary)">共 {{ staging.total }} 筆</span>
+                        </div>
+                        <div v-if="staging.data.length" class="table-wrapper">
+                            <table>
+                                <thead><tr>
+                                    <th>ID</th><th>Tag Name</th><th>Site</th><th>System</th>
+                                    <th>Node Name</th><th>I/O Device</th><th>TB</th><th>PG</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="r in staging.data" :key="r.id">
+                                        <td>{{ r.id }}</td>
+                                        <td :title="r.tag_name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
+                                        <td>{{ r.site }}</td><td>{{ r.system_code }}</td>
+                                        <td>{{ r.scada_node_name }}</td><td>{{ r.io_device }}</td>
+                                        <td><span class="badge" :class="'badge-' + (r.tb_status === 'done' ? 'create' : r.tb_status === 'skip' ? 'dry' : 'delete')">{{ r.tb_status }}</span></td>
+                                        <td><span class="badge" :class="'badge-' + (r.pg_status === 'done' ? 'create' : r.pg_status === 'skip' ? 'dry' : 'delete')">{{ r.pg_status }}</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="staging.total > staging.pageSize" class="pagination">
+                            <button class="btn btn-outline btn-sm" @click="staging.page--; loadStaging()" :disabled="staging.page <= 0">上一頁</button>
+                            <span class="page-info">第 {{ staging.page + 1 }} / {{ staging.totalPages }} 頁</span>
+                            <button class="btn btn-outline btn-sm" @click="staging.page++; loadStaging()" :disabled="staging.page >= staging.totalPages - 1">下一頁</button>
+                        </div>
+                        <div v-if="!staging.data.length && !staging.loading" style="text-align:center; padding:40px; color:var(--text-light)">暫存表無資料</div>
+                    </div>
+                </div>
+
+                <!-- Step 3: TB Device Creation Preview -->
+                <div v-show="importSubTab === 'tb'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                            TB 建點推導預覽（tb_status = pending）
+                        </div>
+                        <button class="btn btn-primary btn-sm" @click="deriveTB()" :disabled="tbDerive.loading" style="margin-bottom:14px">
+                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            {{ tbDerive.loading ? '推導中...' : '重新推導' }}
+                        </button>
+                        <div v-if="tbDerive.data.length" class="table-wrapper">
+                            <table>
+                                <thead><tr>
+                                    <th>Tag Name</th><th>TB Name</th><th>TB Type (DeviceProfile)</th>
+                                    <th>TB Label</th><th>來源</th><th>Profile 存在</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="r in tbDerive.data" :key="r.id">
+                                        <td :title="r.tag_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
+                                        <td>{{ r.tb_name }}</td>
+                                        <td><code style="font-size:12px">{{ r.tb_type }}</code></td>
+                                        <td :title="r.tb_label" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
+                                        <td><span class="badge" :class="r.source === 'csv' ? 'badge-create' : 'badge-dry'">{{ r.source === 'csv' ? '手動' : '推導' }}</span></td>
+                                        <td>
+                                            <span v-if="r.profile_exists" style="color:var(--success)">&#10003;</span>
+                                            <span v-else style="color:var(--error)">&#10007;</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="!tbDerive.data.length && !tbDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
+                            無 pending 狀態的暫存資料
+                        </div>
+                        <div v-if="tbDerive.data.length" style="margin-top:14px; font-size:13px; color:var(--text-secondary)">
+                            共 {{ tbDerive.data.length }} 筆待建點，
+                            <span style="color:var(--success)">{{ tbDerive.data.filter(r => r.profile_exists).length }} 個 Profile 存在</span>，
+                            <span style="color:var(--error)">{{ tbDerive.data.filter(r => !r.profile_exists).length }} 個不存在</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 4: PG Formal Import Preview -->
+                <div v-show="importSubTab === 'pg'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2z"/><path d="M2 6.5C2 8.98 6.48 11 12 11s10-2.02 10-4.5"/><path d="M2 11.5c0 2.49 4.48 4.5 10 4.5s10-2.01 10-4.5"/></svg>
+                            PG 正式表推導預覽（pg_status = pending）
+                        </div>
+                        <button class="btn btn-primary btn-sm" @click="derivePG()" :disabled="pgDerive.loading" style="margin-bottom:14px">
+                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            {{ pgDerive.loading ? '推導中...' : '重新推導' }}
+                        </button>
+                        <div v-if="pgDerive.data.length" class="table-wrapper">
+                            <table>
+                                <thead><tr>
+                                    <th>tagname</th><th>zone</th><th>bu</th><th>site</th>
+                                    <th>floor</th><th>system</th><th>tabname</th>
+                                    <th>driver</th><th>department</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="r in pgDerive.data" :key="r.id">
+                                        <td :title="r.tagname" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tagname }}</td>
+                                        <td>{{ r.zone || '-' }}</td><td>{{ r.bu || '-' }}</td><td>{{ r.site || '-' }}</td>
+                                        <td>{{ r.floor || '-' }}</td><td>{{ r.system || '-' }}</td>
+                                        <td><code style="font-size:12px">{{ r.tabname || '-' }}</code></td>
+                                        <td>{{ r.driver_type || '-' }}</td><td>{{ r.department || '-' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="!pgDerive.data.length && !pgDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
+                            無 pending 狀態的暫存資料
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- =============== Settings Tab =============== -->
             <div v-show="activeTab === 'settings'">
                 <div class="sub-tabs">
@@ -622,6 +826,7 @@
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
@@ -775,6 +980,107 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- PG Reference Tables Management -->
+                <div v-show="settingsSubTab === 'reftables'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2z"/></svg>
+                            PG 參照表管理
+                        </div>
+                        <div class="sub-tabs" style="margin-bottom:16px">
+                            <div class="sub-tab" :class="{ active: refTab === 'location' }" @click="refTab = 'location'">Location</div>
+                            <div class="sub-tab" :class="{ active: refTab === 'ownership' }" @click="refTab = 'ownership'">Ownership</div>
+                            <div class="sub-tab" :class="{ active: refTab === 'device' }" @click="refTab = 'device'">Device</div>
+                            <div class="sub-tab" :class="{ active: refTab === 'system' }" @click="refTab = 'system'">System</div>
+                            <div class="sub-tab" :class="{ active: refTab === 'tbprofile' }" @click="refTab = 'tbprofile'">TB Profile</div>
+                        </div>
+
+                        <!-- Location Config -->
+                        <div v-show="refTab === 'location'">
+                            <div class="mapping-add-row" style="margin-bottom:12px">
+                                <input v-model="refForm.loc_bu" placeholder="BU">
+                                <input v-model="refForm.loc_site" placeholder="Site">
+                                <input v-model="refForm.loc_zone" placeholder="Zone">
+                                <button class="btn btn-primary btn-sm" @click="addRefLocation">新增</button>
+                            </div>
+                            <div v-if="refData.locations.length" class="table-wrapper">
+                                <table><thead><tr><th>ID</th><th>BU</th><th>Site</th><th>Zone</th><th>操作</th></tr></thead>
+                                <tbody><tr v-for="r in refData.locations" :key="r.id">
+                                    <td>{{ r.id }}</td><td>{{ r.bu }}</td><td>{{ r.site }}</td><td>{{ r.zone }}</td>
+                                    <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteRef('location_config', r.id)">刪除</button></td>
+                                </tr></tbody></table>
+                            </div>
+                        </div>
+
+                        <!-- Ownership Config -->
+                        <div v-show="refTab === 'ownership'">
+                            <div class="mapping-add-row" style="margin-bottom:12px">
+                                <input v-model="refForm.own_dept" placeholder="Department">
+                                <input v-model="refForm.own_owner" placeholder="Data Owner">
+                                <button class="btn btn-primary btn-sm" @click="addRefOwnership">新增</button>
+                            </div>
+                            <div v-if="refData.ownerships.length" class="table-wrapper">
+                                <table><thead><tr><th>ID</th><th>Department</th><th>Data Owner</th><th>操作</th></tr></thead>
+                                <tbody><tr v-for="r in refData.ownerships" :key="r.id">
+                                    <td>{{ r.id }}</td><td>{{ r.department }}</td><td>{{ r.data_owner }}</td>
+                                    <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteRef('ownership_config', r.id)">刪除</button></td>
+                                </tr></tbody></table>
+                            </div>
+                        </div>
+
+                        <!-- Device Config -->
+                        <div v-show="refTab === 'device'">
+                            <div class="mapping-add-row" style="margin-bottom:12px">
+                                <input v-model="refForm.dev_name" placeholder="Device Name">
+                                <input v-model="refForm.dev_driver" placeholder="Driver Type">
+                                <input v-model="refForm.dev_site" placeholder="Site (選填)">
+                                <input v-model="refForm.dev_system" placeholder="System (選填)">
+                                <button class="btn btn-primary btn-sm" @click="addRefDevice">新增</button>
+                            </div>
+                            <div v-if="refData.devices.length" class="table-wrapper">
+                                <table><thead><tr><th>ID</th><th>Device Name</th><th>Driver Type</th><th>Site</th><th>System</th><th>操作</th></tr></thead>
+                                <tbody><tr v-for="r in refData.devices" :key="r.id">
+                                    <td>{{ r.id }}</td><td>{{ r.device_name }}</td><td>{{ r.driver_type }}</td>
+                                    <td>{{ r.site || '-' }}</td><td>{{ r.system_code || '-' }}</td>
+                                    <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteRef('device_config', r.id)">刪除</button></td>
+                                </tr></tbody></table>
+                            </div>
+                        </div>
+
+                        <!-- System Config -->
+                        <div v-show="refTab === 'system'">
+                            <div class="mapping-add-row" style="margin-bottom:12px">
+                                <input v-model="refForm.sys_code" placeholder="System Code">
+                                <input v-model="refForm.sys_name" placeholder="System Name (選填)">
+                                <button class="btn btn-primary btn-sm" @click="addRefSystem">新增</button>
+                            </div>
+                            <div v-if="refData.systems.length" class="table-wrapper">
+                                <table><thead><tr><th>ID</th><th>System Code</th><th>System Name</th><th>操作</th></tr></thead>
+                                <tbody><tr v-for="r in refData.systems" :key="r.id">
+                                    <td>{{ r.id }}</td><td>{{ r.system_code }}</td><td>{{ r.system_name || '-' }}</td>
+                                    <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteRef('system_config', r.id)">刪除</button></td>
+                                </tr></tbody></table>
+                            </div>
+                        </div>
+
+                        <!-- TB Device Profile -->
+                        <div v-show="refTab === 'tbprofile'">
+                            <div class="mapping-add-row" style="margin-bottom:12px">
+                                <input v-model="refForm.tbp_name" placeholder="Profile Name (TB type)">
+                                <input v-model="refForm.tbp_desc" placeholder="Description (= tabname)">
+                                <button class="btn btn-primary btn-sm" @click="addRefTbProfile">新增</button>
+                            </div>
+                            <div v-if="refData.tbProfiles.length" class="table-wrapper">
+                                <table><thead><tr><th>ID</th><th>Profile Name</th><th>Description (tabname)</th><th>操作</th></tr></thead>
+                                <tbody><tr v-for="r in refData.tbProfiles" :key="r.id">
+                                    <td>{{ r.id }}</td><td>{{ r.name }}</td><td>{{ r.description || '-' }}</td>
+                                    <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteRef('tb_device_profile', r.id)">刪除</button></td>
+                                </tr></tbody></table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </main>
@@ -830,6 +1136,33 @@ createApp({
         })
 
         const history = ref([])
+
+        // ── Import State ──
+        const importSubTab = ref('upload')
+        const pgConn = reactive({ status: 'disconnected', statusText: '未連線', testing: false })
+        const imp = reactive({
+            uploadId: null, fileName: null, headers: [], preview: [], totalRows: 0,
+            duplicateNames: [], importing: false, result: null,
+        })
+        const staging = reactive({
+            data: [], total: 0, page: 0, pageSize: 50, totalPages: 0,
+            filterTb: '', filterPg: '', loading: false,
+        })
+        const tbDerive = reactive({ data: [], loading: false })
+        const pgDerive = reactive({ data: [], loading: false })
+
+        // ── Ref Tables State ──
+        const refTab = ref('location')
+        const refData = reactive({
+            locations: [], ownerships: [], devices: [], systems: [], tbProfiles: [],
+        })
+        const refForm = reactive({
+            loc_bu: '', loc_site: '', loc_zone: '',
+            own_dept: '', own_owner: '',
+            dev_name: '', dev_driver: '', dev_site: '', dev_system: '',
+            sys_code: '', sys_name: '',
+            tbp_name: '', tbp_desc: '',
+        })
 
         // ── Settings State ──
         const settingsSubTab = ref('dropdown')
@@ -1163,6 +1496,178 @@ createApp({
             finally { dpList.loading = false }
         }
 
+        // ── PG / Import Functions ──
+        async function testPGConnection() {
+            pgConn.testing = true
+            try {
+                const resp = await fetch('/api/pg/test')
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+                pgConn.status = 'connected'; pgConn.statusText = '已連線'
+            } catch (e) { pgConn.status = 'error'; pgConn.statusText = '連線失敗: ' + e.message }
+            finally { pgConn.testing = false }
+        }
+
+        async function handleImportFile(event) {
+            const file = event.target.files[0]
+            if (file) uploadImportCSV(file)
+        }
+        function handleImportDrop(event) {
+            dragTarget.value = null
+            const file = event.dataTransfer.files[0]
+            if (file && file.name.endsWith('.csv')) uploadImportCSV(file)
+            else alert('請上傳 .csv 檔案')
+        }
+
+        async function uploadImportCSV(file) {
+            const formData = new FormData()
+            formData.append('file', file)
+            try {
+                const resp = await fetch('/api/csv/upload', { method: 'POST', body: formData })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+                const data = await resp.json()
+                imp.uploadId = data.upload_id; imp.headers = data.headers
+                imp.preview = data.preview; imp.totalRows = data.total_rows
+                imp.fileName = data.filename; imp.result = null
+                imp.duplicateNames = data.duplicate_names || []
+            } catch (e) { alert('CSV 上傳失敗: ' + e.message) }
+        }
+
+        async function importToStaging() {
+            if (!imp.uploadId) return
+            imp.importing = true
+            try {
+                const resp = await fetch('/api/pg/staging/import', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ upload_id: imp.uploadId })
+                })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+                imp.result = await resp.json()
+            } catch (e) { alert('匯入失敗: ' + e.message) }
+            finally { imp.importing = false }
+        }
+
+        async function loadStaging() {
+            staging.loading = true
+            try {
+                const resp = await fetch('/api/pg/staging/query', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        page: staging.page, page_size: staging.pageSize,
+                        tb_status: staging.filterTb || null,
+                        pg_status: staging.filterPg || null,
+                    })
+                })
+                if (!resp.ok) throw new Error('Query failed')
+                const data = await resp.json()
+                staging.data = data.data; staging.total = data.total
+                staging.totalPages = data.total_pages
+            } catch (e) { console.error('載入暫存資料失敗:', e) }
+            finally { staging.loading = false }
+        }
+
+        async function deriveTB() {
+            tbDerive.loading = true
+            try {
+                const resp = await fetch('/api/pg/derive/tb', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_status: 'pending' })
+                })
+                if (!resp.ok) throw new Error('Derive failed')
+                const data = await resp.json()
+                tbDerive.data = data.data || []
+            } catch (e) { console.error('TB 推導失敗:', e) }
+            finally { tbDerive.loading = false }
+        }
+
+        async function derivePG() {
+            pgDerive.loading = true
+            try {
+                const resp = await fetch('/api/pg/derive/pg', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pg_status: 'pending' })
+                })
+                if (!resp.ok) throw new Error('Derive failed')
+                const data = await resp.json()
+                pgDerive.data = data.data || []
+            } catch (e) { console.error('PG 推導失敗:', e) }
+            finally { pgDerive.loading = false }
+        }
+
+        // ── Reference Table Functions ──
+        async function loadRefTables() {
+            try {
+                const [loc, own, dev, sys, tbp] = await Promise.all([
+                    fetch('/api/pg/ref/locations').then(r => r.json()),
+                    fetch('/api/pg/ref/ownerships').then(r => r.json()),
+                    fetch('/api/pg/ref/devices').then(r => r.json()),
+                    fetch('/api/pg/ref/systems').then(r => r.json()),
+                    fetch('/api/pg/ref/tb-profiles').then(r => r.json()),
+                ])
+                refData.locations = loc; refData.ownerships = own
+                refData.devices = dev; refData.systems = sys; refData.tbProfiles = tbp
+            } catch (e) { console.error('載入參照表失敗:', e) }
+        }
+
+        async function addRefLocation() {
+            if (!refForm.loc_bu || !refForm.loc_site || !refForm.loc_zone) return
+            try {
+                await fetch('/api/pg/ref/locations', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bu: refForm.loc_bu, site: refForm.loc_site, zone: refForm.loc_zone }) })
+                refForm.loc_bu = ''; refForm.loc_site = ''; refForm.loc_zone = ''
+                loadRefTables()
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function addRefOwnership() {
+            if (!refForm.own_dept || !refForm.own_owner) return
+            try {
+                await fetch('/api/pg/ref/ownerships', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ department: refForm.own_dept, data_owner: refForm.own_owner }) })
+                refForm.own_dept = ''; refForm.own_owner = ''
+                loadRefTables()
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function addRefDevice() {
+            if (!refForm.dev_name || !refForm.dev_driver) return
+            try {
+                await fetch('/api/pg/ref/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_name: refForm.dev_name, driver_type: refForm.dev_driver,
+                        site: refForm.dev_site || null, system_code: refForm.dev_system || null }) })
+                refForm.dev_name = ''; refForm.dev_driver = ''; refForm.dev_site = ''; refForm.dev_system = ''
+                loadRefTables()
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function addRefSystem() {
+            if (!refForm.sys_code) return
+            try {
+                await fetch('/api/pg/ref/systems', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ system_code: refForm.sys_code, system_name: refForm.sys_name || null }) })
+                refForm.sys_code = ''; refForm.sys_name = ''
+                loadRefTables()
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function addRefTbProfile() {
+            if (!refForm.tbp_name) return
+            try {
+                await fetch('/api/pg/ref/tb-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: refForm.tbp_name, description: refForm.tbp_desc || null }) })
+                refForm.tbp_name = ''; refForm.tbp_desc = ''
+                loadRefTables()
+            } catch (e) { alert('新增失敗: ' + e.message) }
+        }
+
+        async function deleteRef(table, id) {
+            if (!confirm('確定要刪除？')) return
+            try {
+                await fetch('/api/pg/ref/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ table, id }) })
+                loadRefTables()
+            } catch (e) { alert('刪除失敗: ' + e.message) }
+        }
+
         function hasTaskInMemory(taskId) {
             return true
         }
@@ -1191,6 +1696,13 @@ createApp({
             addMappingEntry, removeMappingEntry, addNewMappingRule, deleteMappingRule,
             // DeviceProfile
             dpCheck, dpList, checkDeviceProfiles, loadDeviceProfiles,
+            // Import
+            importSubTab, pgConn, imp, staging, tbDerive, pgDerive,
+            testPGConnection, handleImportFile, handleImportDrop, importToStaging,
+            loadStaging, deriveTB, derivePG,
+            // Ref Tables
+            refTab, refData, refForm, loadRefTables,
+            addRefLocation, addRefOwnership, addRefDevice, addRefSystem, addRefTbProfile, deleteRef,
         }
     }
 }).mount('#app')

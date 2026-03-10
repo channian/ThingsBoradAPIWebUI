@@ -28,6 +28,7 @@ from app.task_manager import (
     execute_batch_delete,
 )
 from app.config_manager import ConfigManager
+from app.pg_client import PGClient
 
 # ── Logging ────────────────────────────────────────────
 
@@ -64,6 +65,12 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 config_manager = ConfigManager(CONFIG_FILE)
+
+# 載入 .env
+from dotenv import load_dotenv
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+pg_client = PGClient()
 
 
 # ── 歷史紀錄管理 ──────────────────────────────────────
@@ -180,6 +187,68 @@ class DeviceProfileCheckRequest(BaseModel):
     tb_url: str
     tb_token: str
     type_names: list
+
+
+class StagingQueryRequest(BaseModel):
+    page: int = 0
+    page_size: int = 50
+    tb_status: Optional[str] = None
+    pg_status: Optional[str] = None
+
+
+class StagingStatusRequest(BaseModel):
+    ids: list
+    field: str
+    status: str
+
+
+class StagingDeleteRequest(BaseModel):
+    ids: list
+
+
+class StagingImportRequest(BaseModel):
+    upload_id: str
+
+
+class RefLocationRequest(BaseModel):
+    bu: str
+    site: str
+    zone: str
+
+
+class RefOwnershipRequest(BaseModel):
+    department: str
+    data_owner: str
+
+
+class RefDeviceRequest(BaseModel):
+    device_name: str
+    driver_type: str
+    site: Optional[str] = None
+    system_code: Optional[str] = None
+    ip_address: Optional[str] = None
+    description: Optional[str] = None
+
+
+class RefSystemRequest(BaseModel):
+    system_code: str
+    system_name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class RefTbProfileRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class RefDeleteRequest(BaseModel):
+    table: str
+    id: int
+
+
+class DeriveRequest(BaseModel):
+    ids: Optional[list] = None
+    tb_status: Optional[str] = "pending"
 
 
 # ── API: 認證 ──────────────────────────────────────────
@@ -676,3 +745,209 @@ async def list_device_profiles(req: DeviceQueryRequest):
         return {"profiles": existing_profiles, "total": len(existing_profiles)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"無法取得 DeviceProfile 列表: {e}")
+
+
+# ── API: PostgreSQL 連線 ─────────────────────────────
+
+@app.get("/api/pg/test")
+async def pg_test_connection():
+    """測試 PG 連線"""
+    try:
+        result = pg_client.test_connection()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PG 連線失敗: {e}")
+
+
+# ── API: 暫存表 (scada_tag_config) ───────────────────
+
+@app.post("/api/pg/staging/import")
+async def pg_staging_import(req: StagingImportRequest):
+    """將已上傳的 CSV 資料匯入 PG 暫存表"""
+    rows = csv_store.get(req.upload_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
+    try:
+        result = pg_client.import_staging(rows)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"匯入暫存表失敗: {e}")
+
+
+@app.post("/api/pg/staging/query")
+async def pg_staging_query(req: StagingQueryRequest):
+    """分頁查詢暫存表"""
+    try:
+        return pg_client.get_staging_list(
+            page=req.page, page_size=req.page_size,
+            tb_status=req.tb_status, pg_status=req.pg_status,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查詢暫存表失敗: {e}")
+
+
+@app.post("/api/pg/staging/status")
+async def pg_staging_update_status(req: StagingStatusRequest):
+    """批次更新暫存表狀態"""
+    try:
+        count = pg_client.update_staging_status(req.ids, req.field, req.status)
+        return {"success": True, "updated": count}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/pg/staging/delete")
+async def pg_staging_delete(req: StagingDeleteRequest):
+    """刪除暫存表資料"""
+    try:
+        count = pg_client.delete_staging(req.ids)
+        return {"success": True, "deleted": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/pg/staging/clear")
+async def pg_staging_clear():
+    """清空暫存表"""
+    try:
+        count = pg_client.clear_staging()
+        return {"success": True, "deleted": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── API: 參照表 CRUD ─────────────────────────────────
+
+@app.get("/api/pg/ref/locations")
+async def pg_get_locations():
+    try:
+        return pg_client.get_locations()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/locations")
+async def pg_add_location(req: RefLocationRequest):
+    try:
+        row_id = pg_client.upsert_location(req.bu, req.site, req.zone)
+        return {"success": True, "id": row_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pg/ref/ownerships")
+async def pg_get_ownerships():
+    try:
+        return pg_client.get_ownerships()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/ownerships")
+async def pg_add_ownership(req: RefOwnershipRequest):
+    try:
+        row_id = pg_client.upsert_ownership(req.department, req.data_owner)
+        return {"success": True, "id": row_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pg/ref/devices")
+async def pg_get_devices():
+    try:
+        return pg_client.get_devices()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/devices")
+async def pg_add_device(req: RefDeviceRequest):
+    try:
+        row_id = pg_client.upsert_device(
+            req.device_name, req.driver_type,
+            req.site, req.system_code,
+            req.ip_address, req.description,
+        )
+        return {"success": True, "id": row_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pg/ref/systems")
+async def pg_get_systems():
+    try:
+        return pg_client.get_systems()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/systems")
+async def pg_add_system(req: RefSystemRequest):
+    try:
+        row_id = pg_client.upsert_system(req.system_code, req.system_name, req.description)
+        return {"success": True, "id": row_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pg/ref/tb-profiles")
+async def pg_get_tb_profiles():
+    try:
+        return pg_client.get_tb_profiles()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/tb-profiles")
+async def pg_add_tb_profile(req: RefTbProfileRequest):
+    try:
+        row_id = pg_client.upsert_tb_profile(req.name, req.description)
+        return {"success": True, "id": row_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pg/ref/delete")
+async def pg_delete_ref(req: RefDeleteRequest):
+    """刪除參照表資料"""
+    try:
+        ok = pg_client.delete_ref_row(req.table, req.id)
+        return {"success": ok}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── API: Tag 推導 ────────────────────────────────────
+
+@app.post("/api/pg/derive/tb")
+async def pg_derive_tb(req: DeriveRequest):
+    """推導 TB 建點欄位"""
+    try:
+        staging = pg_client.get_staging_list(
+            page=0, page_size=9999,
+            tb_status=req.tb_status,
+        )
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        results = pg_client.derive_tb_fields(rows)
+        return {"data": results, "total": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
+
+
+@app.post("/api/pg/derive/pg")
+async def pg_derive_pg(req: DeriveRequest):
+    """推導 PG 正式表欄位"""
+    try:
+        staging = pg_client.get_staging_list(
+            page=0, page_size=9999,
+            pg_status=req.pg_status,
+        )
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        results = pg_client.derive_pg_fields(rows)
+        return {"data": results, "total": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
