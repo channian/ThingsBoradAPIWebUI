@@ -203,6 +203,7 @@
         .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; letter-spacing: 0.2px; }
         .badge-create { background: var(--success-bg); color: var(--success); }
         .badge-delete, .badge-delete_direct { background: var(--error-bg); color: var(--error); }
+        .selected-row { background: rgba(99, 102, 241, 0.08); }
         .badge-dry { background: var(--table-header-bg); color: var(--text-light); border: 1px solid var(--border); }
         .badge-live { background: var(--warning-bg); color: var(--warning); }
 
@@ -711,16 +712,25 @@
                                 <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                                 重新整理
                             </button>
+                            <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" @click="deleteSelectedStaging()" :disabled="!staging.selected.length">
+                                <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                刪除勾選 ({{ staging.selected.length }})
+                            </button>
+                            <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" @click="clearAllStaging()" :disabled="staging.clearing || !staging.total">
+                                {{ staging.clearing ? '清空中...' : '清空全部' }}
+                            </button>
                             <span style="font-size:13px; color:var(--text-secondary)">共 {{ staging.total }} 筆</span>
                         </div>
                         <div v-if="staging.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
+                                    <th style="width:36px"><input type="checkbox" :checked="staging.selected.length === staging.data.length && staging.data.length > 0" @change="toggleStagingSelectAll()"></th>
                                     <th>ID</th><th>Tag Name</th><th>Site</th><th>System</th>
                                     <th>Node Name</th><th>I/O Device</th><th>TB</th><th>PG</th>
                                 </tr></thead>
                                 <tbody>
-                                    <tr v-for="r in staging.data" :key="r.id">
+                                    <tr v-for="r in staging.data" :key="r.id" :class="{ 'selected-row': staging.selected.includes(r.id) }">
+                                        <td><input type="checkbox" :checked="staging.selected.includes(r.id)" @change="toggleStagingSelect(r.id)"></td>
                                         <td>{{ r.id }}</td>
                                         <td :title="r.tag_name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
                                         <td>{{ r.site }}</td><td>{{ r.system_code }}</td>
@@ -1147,6 +1157,7 @@ createApp({
         const staging = reactive({
             data: [], total: 0, page: 0, pageSize: 50, totalPages: 0,
             filterTb: '', filterPg: '', loading: false,
+            selected: [], clearing: false,
         })
         const tbDerive = reactive({ data: [], loading: false })
         const pgDerive = reactive({ data: [], loading: false })
@@ -1565,6 +1576,50 @@ createApp({
             finally { staging.loading = false }
         }
 
+        async function deleteSelectedStaging() {
+            if (!staging.selected.length) return
+            if (!confirm(`確定刪除勾選的 ${staging.selected.length} 筆暫存資料？`)) return
+            try {
+                const resp = await fetch('/api/pg/staging/delete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: staging.selected })
+                })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+                const data = await resp.json()
+                alert(`已刪除 ${data.deleted} 筆`)
+                staging.selected = []
+                loadStaging()
+            } catch (e) { alert('刪除失敗: ' + e.message) }
+        }
+
+        async function clearAllStaging() {
+            if (!confirm('確定清空全部暫存表資料？此操作無法復原！')) return
+            staging.clearing = true
+            try {
+                const resp = await fetch('/api/pg/staging/clear', { method: 'DELETE' })
+                if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+                const data = await resp.json()
+                alert(`已清空 ${data.deleted} 筆`)
+                staging.selected = []
+                loadStaging()
+            } catch (e) { alert('清空失敗: ' + e.message) }
+            finally { staging.clearing = false }
+        }
+
+        function toggleStagingSelect(id) {
+            const idx = staging.selected.indexOf(id)
+            if (idx === -1) staging.selected.push(id)
+            else staging.selected.splice(idx, 1)
+        }
+
+        function toggleStagingSelectAll() {
+            if (staging.selected.length === staging.data.length) {
+                staging.selected = []
+            } else {
+                staging.selected = staging.data.map(r => r.id)
+            }
+        }
+
         async function deriveTB() {
             tbDerive.loading = true
             try {
@@ -1699,7 +1754,8 @@ createApp({
             // Import
             importSubTab, pgConn, imp, staging, tbDerive, pgDerive,
             testPGConnection, handleImportFile, handleImportDrop, importToStaging,
-            loadStaging, deriveTB, derivePG,
+            loadStaging, deleteSelectedStaging, clearAllStaging, toggleStagingSelect, toggleStagingSelectAll,
+            deriveTB, derivePG,
             // Ref Tables
             refTab, refData, refForm, loadRefTables,
             addRefLocation, addRefOwnership, addRefDevice, addRefSystem, addRefTbProfile, deleteRef,
