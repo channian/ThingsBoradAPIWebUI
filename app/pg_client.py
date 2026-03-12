@@ -49,67 +49,75 @@ class PGClient:
     # ── scada_tag_config (暫存表) ─────────────────────
 
     def import_staging(self, rows: list) -> dict:
-        """將 CSV 資料匯入暫存表，回傳結果摘要"""
+        """將 CSV 資料匯入暫存表，利用 ON CONFLICT 提升效能與穩定性"""
+        if not rows:
+            return {"inserted": 0, "skipped": 0, "errors": [], "total": 0}
+
         inserted = 0
         skipped = 0
         errors = []
+        
+        # 準備資料與清洗
+        clean_data = []
+        for row in rows:
+            tag_name = (row.get("tag_name") or row.get("Tag Name") or "").strip()
+            if not tag_name:
+                skipped += 1
+                continue
+            
+            try:
+                # 預處理資料格式
+                data_tuple = (
+                    _get(row, "site", "Site"),
+                    _get(row, "system_code", "System"),
+                    _get(row, "scada_node_name", "SCADA Node Name"),
+                    tag_name,
+                    _get(row, "io_device", "I/O DEVICE"),
+                    _get(row, "io_address", "I/O ADDRESS"),
+                    _parse_bool(row.get("scale_enabled") or row.get("SCALE Enabled") or ""),
+                    _parse_num(row.get("raw_low") or row.get("Raw Low")),
+                    _parse_num(row.get("raw_high") or row.get("Raw High")),
+                    _parse_num(row.get("scaled_low") or row.get("Scaled Low")),
+                    _parse_num(row.get("scaled_high") or row.get("Scaled High")),
+                    _get(row, "description", "Description"),
+                    _get(row, "project_name", "專案名稱"),
+                    _get(row, "data_owner", "DataOwner"),
+                    _get(row, "device_profile", "device_profile"),
+                )
+                clean_data.append(data_tuple)
+            except Exception as e:
+                errors.append({"tag_name": tag_name, "reason": f"資料預處理失敗: {e}"})
 
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                for row in rows:
-                    tag_name = (row.get("tag_name") or row.get("Tag Name") or "").strip()
-                    if not tag_name:
-                        skipped += 1
-                        continue
-
-                    # 檢查是否已存在
-                    cur.execute(
-                        "SELECT id FROM scada_tag_config WHERE tag_name = %s",
-                        (tag_name,),
-                    )
-                    if cur.fetchone():
-                        skipped += 1
-                        errors.append({"tag_name": tag_name, "reason": "已存在"})
-                        continue
-
+        # 批次寫入資料庫
+        if clean_data:
+            with self._get_conn() as conn:
+                with conn.cursor() as cur:
+                    # 使用 PostgreSQL 的 ON CONFLICT DO NOTHING (前提是 tag_name 有 Unique Constraint)
+                    # 如果 tag_name 重複，資料庫會自動跳過該筆而不報錯
+                    query = """
+                        INSERT INTO scada_tag_config 
+                        (site, system_code, scada_node_name, tag_name, 
+                         io_device, io_address, scale_enabled, 
+                         raw_low, raw_high, scaled_low, scaled_high, 
+                         description, project_name, data_owner, device_profile)
+                        VALUES %s
+                        ON CONFLICT (tag_name) DO NOTHING
+                        RETURNING id;
+                    """
                     try:
-                        scale_enabled = _parse_bool(
-                            row.get("scale_enabled")
-                            or row.get("SCALE Enabled")
-                            or ""
-                        )
-                        cur.execute(
-                            """INSERT INTO scada_tag_config
-                            (site, system_code, scada_node_name, tag_name,
-                             io_device, io_address, scale_enabled,
-                             raw_low, raw_high, scaled_low, scaled_high,
-                             description, project_name, data_owner, device_profile)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                            (
-                                _get(row, "site", "Site"),
-                                _get(row, "system_code", "System"),
-                                _get(row, "scada_node_name", "SCADA Node Name"),
-                                tag_name,
-                                _get(row, "io_device", "I/O DEVICE"),
-                                _get(row, "io_address", "I/O ADDRESS"),
-                                scale_enabled,
-                                _parse_num(row.get("raw_low") or row.get("Raw Low")),
-                                _parse_num(row.get("raw_high") or row.get("Raw High")),
-                                _parse_num(
-                                    row.get("scaled_low") or row.get("Scaled Low")
-                                ),
-                                _parse_num(
-                                    row.get("scaled_high") or row.get("Scaled High")
-                                ),
-                                _get(row, "description", "Description"),
-                                _get(row, "project_name", "專案名稱"),
-                                _get(row, "data_owner", "DataOwner"),
-                                _get(row, "device_profile", "device_profile"),
-                            ),
-                        )
-                        inserted += 1
+                        # 使用 psycopg2 的 fast execution 擴展
+                        from psycopg2.extras import execute_values
+                        execute_values(cur, query, clean_data)
+                        
+                        # 在 DO NOTHING 模式下，只有真正新增的會回傳，這可以用來計算數量
+                        inserted = cur.rowcount 
+                        skipped += (len(clean_data) - inserted)
+                        
                     except Exception as e:
-                        errors.append({"tag_name": tag_name, "reason": str(e)})
+                        # 這裡的錯誤通常是表格結構問題（欄位長度、型態不合）
+                        errors.append({"tag_name": "BULK_INSERT", "reason": str(e)})
+                        # 由於使用了 contextmanager，這裡 raise 會自動 rollback
+                        raise 
 
         return {
             "inserted": inserted,
