@@ -51,8 +51,28 @@ app.add_middleware(
 
 task_manager = TaskManager()
 
-# 暫存上傳的 CSV 資料 (upload_id -> rows)
-csv_store: dict = {}
+# 暫存上傳的 CSV 資料 — 檔案式儲存，伺服器重啟不會遺失
+CSV_STORE_DIR = os.path.join(DATA_DIR, "csv_uploads")
+os.makedirs(CSV_STORE_DIR, exist_ok=True)
+
+
+def _csv_store_put(upload_id: str, rows: list):
+    """將 CSV 資料寫入暫存檔"""
+    path = os.path.join(CSV_STORE_DIR, f"{upload_id}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False)
+
+
+def _csv_store_get(upload_id: str):
+    """從暫存檔讀取 CSV 資料，找不到回傳 None"""
+    path = os.path.join(CSV_STORE_DIR, f"{upload_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 # ── 路徑常數 ──────────────────────────────────────────
 
@@ -305,7 +325,7 @@ async def upload_csv(file: UploadFile = File(...)):
     rows = cleaned_rows
 
     upload_id = uuid.uuid4().hex[:8]
-    csv_store[upload_id] = rows
+    _csv_store_put(upload_id, rows)
 
     preview = rows[:10]
 
@@ -358,7 +378,7 @@ async def upload_csv(file: UploadFile = File(...)):
 @app.post("/api/tasks/execute")
 async def execute_task(req: ExecuteRequest):
     """啟動批次新增或刪除任務"""
-    rows = csv_store.get(req.upload_id)
+    rows = _csv_store_get(req.upload_id)
     if rows is None:
         raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
 
@@ -764,7 +784,7 @@ async def pg_test_connection():
 @app.post("/api/pg/staging/import")
 async def pg_staging_import(req: StagingImportRequest):
     """將已上傳的 CSV 資料匯入 PG 暫存表"""
-    rows = csv_store.get(req.upload_id)
+    rows = _csv_store_get(req.upload_id)
     if rows is None:
         raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
     try:
