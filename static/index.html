@@ -764,19 +764,15 @@
                         <div v-if="tbDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>Tag Name</th><th>Node Name</th><th>Driver</th>
-                                    <th>TB Name</th><th>TB Type (DeviceProfile)</th>
-                                    <th>TB Label</th><th>來源</th><th>Profile 存在</th>
+                                    <th>Name</th><th>Type (DeviceProfile)</th>
+                                    <th>Label</th><th>Description</th><th>Profile 存在</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in tbDerive.data" :key="r.id">
-                                        <td :title="r.tag_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
-                                        <td>{{ r.nodename }}</td>
-                                        <td>{{ r.driver_type }}</td>
-                                        <td>{{ r.tb_name }}</td>
+                                        <td :title="r.tb_name" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_name }}</td>
                                         <td><code style="font-size:12px">{{ r.tb_type }}</code></td>
-                                        <td :title="r.tb_label" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
-                                        <td><span class="badge" :class="r.source === 'csv' ? 'badge-create' : 'badge-dry'">{{ r.source === 'csv' ? '手動' : '推導' }}</span></td>
+                                        <td :title="r.tb_label" style="max-width:250px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
+                                        <td>{{ r.tb_description }}</td>
                                         <td>
                                             <span v-if="r.profile_exists" style="color:var(--success)">&#10003;</span>
                                             <span v-else style="color:var(--error)">&#10007;</span>
