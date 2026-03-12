@@ -349,18 +349,19 @@ class PGClient:
             floor = parts[1] if len(parts) > 1 else ""
             system = parts[2] if len(parts) > 2 else ""
 
-            # 查 driver_type
+            # 查 driver_type: 先查 device_config，查不到就用 io_device 值本身判斷
             io_device = row.get("io_device", "")
-            device_info = devices.get(io_device, {})
-            driver_type = device_info.get("driver_type", "")
+            driver_type = _resolve_driver_type(io_device, devices)
 
-            # 推導 nodename
-            if driver_type.upper() in ("OPC", "OPC_UA"):
-                nodename = site_prefix + system
-            elif driver_type.upper() == "IFIX":
-                nodename = site_prefix + system + "IFIX"
+            # 推導 nodename: 用 CSV 的 scada_node_name 去掉 _ (如 K3_CHS → K3CHS)
+            scada_node_name = (row.get("scada_node_name") or "").strip()
+            if scada_node_name:
+                nodename = scada_node_name.replace("_", "")
             else:
                 nodename = site_prefix + system
+            # iFIX 加後綴
+            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
+                nodename = nodename + "IFIX"
 
             # DeviceProfile: CSV 有填就優先用
             csv_profile = (row.get("device_profile") or "").strip()
@@ -369,7 +370,7 @@ class PGClient:
             else:
                 derived_profile = f"{nodename}-{system}-{floor}-{system}"
 
-            # label
+            # label: OPC 類加 ns=2;s= 前綴
             io_address = row.get("io_address", "")
             if driver_type.upper() in ("OPC", "OPC_UA"):
                 label = f"ns=2;s={io_address}"
@@ -431,27 +432,28 @@ class PGClient:
             bu = matched_loc["bu"] if matched_loc else ""
             zone = matched_loc["zone"] if matched_loc else ""
 
-            # 查 driver_type
+            # 查 driver_type: 先查 device_config，查不到就用 io_device 值本身判斷
             io_device = row.get("io_device", "")
-            device_info = devices.get(io_device, {})
-            driver_type = device_info.get("driver_type", "")
+            driver_type = _resolve_driver_type(io_device, devices)
 
             # 查 department
             data_owner = row.get("data_owner", "")
             department = owner_dept.get(data_owner, "")
+
+            # 推導 nodename: 用 CSV 的 scada_node_name 去掉 _
+            scada_node_name = (row.get("scada_node_name") or "").strip()
+            if scada_node_name:
+                nodename = scada_node_name.replace("_", "")
+            else:
+                nodename = site_prefix + system
+            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
+                nodename = nodename + "IFIX"
 
             # tabname = BU_SITE_SYSTEM，可被 Tb_Device_Profile 覆寫
             csv_profile = (row.get("device_profile") or "").strip()
             if csv_profile and csv_profile in profiles:
                 tabname = profiles[csv_profile].get("description", "")
             else:
-                # 推導 DeviceProfile
-                if driver_type.upper() in ("OPC", "OPC_UA"):
-                    nodename = site_prefix + system
-                elif driver_type.upper() == "IFIX":
-                    nodename = site_prefix + system + "IFIX"
-                else:
-                    nodename = site_prefix + system
                 dp_name = f"{nodename}-{system}-{floor}-{system}"
                 if dp_name in profiles:
                     tabname = profiles[dp_name].get("description", "")
@@ -485,6 +487,23 @@ class PGClient:
 
 
 # ── 工具函式 ──────────────────────────────────────────
+
+def _resolve_driver_type(io_device: str, devices_cache: dict) -> str:
+    """解析 driver_type：先查 device_config 表，查不到就用 io_device 值本身判斷"""
+    device_info = devices_cache.get(io_device, {})
+    driver_type = device_info.get("driver_type", "")
+    if driver_type:
+        return driver_type
+    # Fallback: 直接用 io_device 值判斷
+    val = io_device.upper()
+    if "OPC_UA" in val or "OPCUA" in val:
+        return "OPC_UA"
+    if "OPC" in val:
+        return "OPC"
+    if "IFIX" in val:
+        return "IFIX"
+    return io_device
+
 
 def _get(row: dict, *keys) -> str:
     """嘗試多個 key 取值"""
