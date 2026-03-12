@@ -764,12 +764,15 @@
                         <div v-if="tbDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>Tag Name</th><th>TB Name</th><th>TB Type (DeviceProfile)</th>
+                                    <th>Tag Name</th><th>Node Name</th><th>Driver</th>
+                                    <th>TB Name</th><th>TB Type (DeviceProfile)</th>
                                     <th>TB Label</th><th>來源</th><th>Profile 存在</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in tbDerive.data" :key="r.id">
                                         <td :title="r.tag_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
+                                        <td>{{ r.nodename }}</td>
+                                        <td>{{ r.driver_type }}</td>
                                         <td>{{ r.tb_name }}</td>
                                         <td><code style="font-size:12px">{{ r.tb_type }}</code></td>
                                         <td :title="r.tb_label" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
