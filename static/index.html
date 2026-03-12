@@ -712,11 +712,11 @@
                                 <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                                 重新整理
                             </button>
-                            <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" @click="deleteSelectedStaging()" :disabled="!staging.selected.length">
+                            <button class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="deleteSelectedStaging()" :disabled="!staging.selected.length">
                                 <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                 刪除勾選 ({{ staging.selected.length }})
                             </button>
-                            <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" @click="clearAllStaging()" :disabled="staging.clearing || !staging.total">
+                            <button class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="clearAllStaging()" :disabled="staging.clearing || !staging.total">
                                 {{ staging.clearing ? '清空中...' : '清空全部' }}
                             </button>
                             <span style="font-size:13px; color:var(--text-secondary)">共 {{ staging.total }} 筆</span>
