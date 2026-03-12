@@ -353,10 +353,14 @@ class PGClient:
             io_device = row.get("io_device", "")
             driver_type = _resolve_driver_type(io_device, devices)
 
-            # 推導 nodename: 用 CSV 的 scada_node_name 去掉 _ (如 K3_CHS → K3CHS)
+            # 推導 nodename: 優先用 scada_node_name 去掉 _，否則用 site + system_code
             scada_node_name = (row.get("scada_node_name") or "").strip()
+            site_val = (row.get("site") or "").strip()
+            system_code_val = (row.get("system_code") or "").strip()
             if scada_node_name:
                 nodename = scada_node_name.replace("_", "")
+            elif site_val or system_code_val:
+                nodename = site_val + system_code_val
             else:
                 nodename = site_prefix + system
             # iFIX 加後綴
@@ -440,10 +444,14 @@ class PGClient:
             data_owner = row.get("data_owner", "")
             department = owner_dept.get(data_owner, "")
 
-            # 推導 nodename: 用 CSV 的 scada_node_name 去掉 _
+            # 推導 nodename: 優先用 scada_node_name 去掉 _，否則用 site + system_code
             scada_node_name = (row.get("scada_node_name") or "").strip()
+            site_val = (row.get("site") or "").strip()
+            system_code_val = (row.get("system_code") or "").strip()
             if scada_node_name:
                 nodename = scada_node_name.replace("_", "")
+            elif site_val or system_code_val:
+                nodename = site_val + system_code_val
             else:
                 nodename = site_prefix + system
             if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
@@ -498,7 +506,7 @@ def _resolve_driver_type(io_device: str, devices_cache: dict) -> str:
     val = io_device.upper()
     if "OPC_UA" in val or "OPCUA" in val:
         return "OPC_UA"
-    if "OPC" in val:
+    if "OPC" in val or "IGS" in val:
         return "OPC"
     if "IFIX" in val:
         return "IFIX"
