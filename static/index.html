@@ -789,6 +789,16 @@
                             <span style="color:var(--success)">{{ tbDerive.data.filter(r => r.profile_exists).length }} 個 Profile 存在</span>，
                             <span style="color:var(--error)">{{ tbDerive.data.filter(r => !r.profile_exists).length }} 個不存在</span>
                         </div>
+                        <div v-if="tbDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
+                            <button class="btn btn-success btn-sm" @click="executeTB()" :disabled="tbDerive.executing">
+                                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                                {{ tbDerive.executing ? '建點中...' : '執行建點' }}
+                            </button>
+                            <span v-if="tbDerive.result" :style="{ color: tbDerive.result.failed ? 'var(--warning)' : 'var(--success)' }">
+                                {{ tbDerive.result.message }}
+                                <span v-if="tbDerive.result.failed"> ({{ tbDerive.result.failed }} 筆失敗)</span>
+                            </span>
+                        </div>
                     </div>
                 </div>
 
@@ -823,6 +833,16 @@
                         </div>
                         <div v-if="!pgDerive.data.length && !pgDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
                             無 pending 狀態的暫存資料
+                        </div>
+                        <div v-if="pgDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
+                            <button class="btn btn-success btn-sm" @click="executePG()" :disabled="pgDerive.executing">
+                                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                                {{ pgDerive.executing ? '寫入中...' : '執行寫入正式表' }}
+                            </button>
+                            <span v-if="pgDerive.result" :style="{ color: pgDerive.result.errors?.length ? 'var(--warning)' : 'var(--success)' }">
+                                {{ pgDerive.result.message }}
+                                <span v-if="pgDerive.result.errors?.length"> ({{ pgDerive.result.errors.length }} 筆錯誤)</span>
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -1158,8 +1178,8 @@ createApp({
             filterTb: '', filterPg: '', loading: false,
             selected: [], clearing: false,
         })
-        const tbDerive = reactive({ data: [], loading: false })
-        const pgDerive = reactive({ data: [], loading: false })
+        const tbDerive = reactive({ data: [], loading: false, executing: false, result: null })
+        const pgDerive = reactive({ data: [], loading: false, executing: false, result: null })
 
         // ── Ref Tables State ──
         const refTab = ref('location')
@@ -1647,6 +1667,47 @@ createApp({
             finally { pgDerive.loading = false }
         }
 
+        async function executeTB() {
+            if (!tbDerive.data.length) return
+            if (!confirm(`確定要建立 ${tbDerive.data.length} 筆裝置到 ThingsBoard？`)) return
+            tbDerive.executing = true
+            tbDerive.result = null
+            try {
+                const resp = await fetch('/api/pg/execute/tb', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tb_url: auth.url,
+                        tb_token: auth.token,
+                    })
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
+                tbDerive.result = await resp.json()
+                // 重新載入推導資料（成功的已變成 done）
+                await deriveTB()
+            } catch (e) {
+                tbDerive.result = { message: `建點失敗: ${e.message}`, failed: 1 }
+            } finally { tbDerive.executing = false }
+        }
+
+        async function executePG() {
+            if (!pgDerive.data.length) return
+            if (!confirm(`確定要將 ${pgDerive.data.length} 筆資料寫入 PG 正式表？`)) return
+            pgDerive.executing = true
+            pgDerive.result = null
+            try {
+                const resp = await fetch('/api/pg/execute/pg', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
+                pgDerive.result = await resp.json()
+                // 重新載入推導資料
+                await derivePG()
+            } catch (e) {
+                pgDerive.result = { message: `寫入失敗: ${e.message}`, errors: [1] }
+            } finally { pgDerive.executing = false }
+        }
+
         // ── Reference Table Functions ──
         async function loadRefTables() {
             try {
@@ -1754,7 +1815,7 @@ createApp({
             importSubTab, pgConn, imp, staging, tbDerive, pgDerive,
             testPGConnection, handleImportFile, handleImportDrop, importToStaging,
             loadStaging, deleteSelectedStaging, clearAllStaging, toggleStagingSelect, toggleStagingSelectAll,
-            deriveTB, derivePG,
+            deriveTB, derivePG, executeTB, executePG,
             // Ref Tables
             refTab, refData, refForm, loadRefTables,
             addRefLocation, addRefOwnership, addRefDevice, addRefSystem, addRefTbProfile, deleteRef,

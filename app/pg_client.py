@@ -332,6 +332,114 @@ class PGClient:
                 cur.execute(f"DELETE FROM {table} WHERE id = %s", (row_id,))
                 return cur.rowcount > 0
 
+    # ── PG 正式表寫入 ─────────────────────────────────
+
+    def _ensure_formal_table(self, conn):
+        """確保 scada_tag_data 正式表存在"""
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS scada_tag_data (
+                    id SERIAL PRIMARY KEY,
+                    tagname VARCHAR(255) NOT NULL,
+                    node_name VARCHAR(255),
+                    driver_type VARCHAR(100),
+                    address VARCHAR(500),
+                    zone VARCHAR(100),
+                    bu VARCHAR(100),
+                    site VARCHAR(100),
+                    floor VARCHAR(50),
+                    system VARCHAR(100),
+                    tabname VARCHAR(255),
+                    owner VARCHAR(255),
+                    department VARCHAR(255),
+                    data_type VARCHAR(50) DEFAULT 'float',
+                    description TEXT,
+                    scale_enabled BOOLEAN DEFAULT FALSE,
+                    raw_low DOUBLE PRECISION,
+                    raw_high DOUBLE PRECISION,
+                    scaled_low DOUBLE PRECISION,
+                    scaled_high DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(tagname)
+                )
+            """)
+
+    def import_formal(self, derived_rows: list) -> dict:
+        """將推導後的資料寫入 scada_tag_data 正式表"""
+        if not derived_rows:
+            return {"inserted": 0, "skipped": 0, "errors": [], "total": 0}
+
+        inserted = 0
+        skipped = 0
+        errors = []
+
+        with self._get_conn() as conn:
+            self._ensure_formal_table(conn)
+            with conn.cursor() as cur:
+                for row in derived_rows:
+                    tagname = row.get("tagname", "")
+                    if not tagname:
+                        skipped += 1
+                        continue
+                    try:
+                        cur.execute("""
+                            INSERT INTO scada_tag_data
+                            (tagname, node_name, driver_type, address,
+                             zone, bu, site, floor, system, tabname,
+                             owner, department, data_type, description,
+                             scale_enabled, raw_low, raw_high, scaled_low, scaled_high)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            ON CONFLICT (tagname) DO UPDATE SET
+                                node_name = EXCLUDED.node_name,
+                                driver_type = EXCLUDED.driver_type,
+                                address = EXCLUDED.address,
+                                zone = EXCLUDED.zone,
+                                bu = EXCLUDED.bu,
+                                site = EXCLUDED.site,
+                                floor = EXCLUDED.floor,
+                                system = EXCLUDED.system,
+                                tabname = EXCLUDED.tabname,
+                                owner = EXCLUDED.owner,
+                                department = EXCLUDED.department,
+                                data_type = EXCLUDED.data_type,
+                                description = EXCLUDED.description,
+                                scale_enabled = EXCLUDED.scale_enabled,
+                                raw_low = EXCLUDED.raw_low,
+                                raw_high = EXCLUDED.raw_high,
+                                scaled_low = EXCLUDED.scaled_low,
+                                scaled_high = EXCLUDED.scaled_high
+                        """, (
+                            tagname,
+                            row.get("node_name", ""),
+                            row.get("driver_type", ""),
+                            row.get("address", ""),
+                            row.get("zone", ""),
+                            row.get("bu", ""),
+                            row.get("site", ""),
+                            row.get("floor", ""),
+                            row.get("system", ""),
+                            row.get("tabname", ""),
+                            row.get("owner", ""),
+                            row.get("department", ""),
+                            row.get("data_type", "float"),
+                            row.get("description", ""),
+                            row.get("scale_enabled", False),
+                            row.get("raw_low"),
+                            row.get("raw_high"),
+                            row.get("scaled_low"),
+                            row.get("scaled_high"),
+                        ))
+                        inserted += 1
+                    except Exception as e:
+                        errors.append({"tagname": tagname, "reason": str(e)})
+
+        return {
+            "inserted": inserted,
+            "skipped": skipped,
+            "errors": errors,
+            "total": len(derived_rows),
+        }
+
     # ── Tag 推導邏輯 ──────────────────────────────────
 
     def derive_tb_fields(self, staging_rows: list) -> list:

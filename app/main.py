@@ -269,6 +269,17 @@ class RefDeleteRequest(BaseModel):
 class DeriveRequest(BaseModel):
     ids: Optional[list] = None
     tb_status: Optional[str] = "pending"
+    pg_status: Optional[str] = "pending"
+
+
+class ExecuteTbRequest(BaseModel):
+    tb_url: str
+    tb_token: str
+    ids: Optional[list] = None
+
+
+class ExecutePgRequest(BaseModel):
+    ids: Optional[list] = None
 
 
 # ── API: 認證 ──────────────────────────────────────────
@@ -971,3 +982,91 @@ async def pg_derive_pg(req: DeriveRequest):
         return {"data": results, "total": len(results)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
+
+
+# ── API: 執行建點 / 寫入 ──────────────────────────────
+
+@app.post("/api/pg/execute/tb")
+async def pg_execute_tb(req: ExecuteTbRequest):
+    """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status"""
+    try:
+        # 1. 取得 pending 的暫存資料並推導
+        staging = pg_client.get_staging_list(page=0, page_size=9999, tb_status="pending")
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        if not rows:
+            return {"success": 0, "failed": 0, "errors": [], "message": "無待建點資料"}
+
+        derived = pg_client.derive_tb_fields(rows)
+
+        # 2. 逐筆呼叫 TB API 建立裝置
+        client = ThingsBoardClient(req.tb_url)
+        client.set_token(req.tb_token)
+
+        success_ids = []
+        failed = []
+        for item in derived:
+            # 組裝 TB API payload
+            payload = {
+                "name": item["tb_name"],
+                "type": item["tb_type"],
+                "label": item["tb_label"],
+                "deviceProfileId": None,
+            }
+            # 嘗試建立裝置
+            try:
+                resp = client.create_device(payload)
+                if resp.status_code in (200, 201):
+                    success_ids.append(item["id"])
+                else:
+                    failed.append({
+                        "name": item["tb_name"],
+                        "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    })
+            except Exception as e:
+                failed.append({"name": item["tb_name"], "reason": str(e)})
+
+        # 3. 更新成功的暫存資料狀態
+        if success_ids:
+            pg_client.update_staging_status(success_ids, "tb_status", "done")
+
+        return {
+            "success": len(success_ids),
+            "failed": len(failed),
+            "errors": failed,
+            "message": f"成功建立 {len(success_ids)} 筆裝置"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TB 建點失敗: {e}")
+
+
+@app.post("/api/pg/execute/pg")
+async def pg_execute_pg(req: ExecutePgRequest):
+    """執行 PG 寫入：推導欄位 → 寫入正式表 → 更新 pg_status"""
+    try:
+        # 1. 取得 pending 的暫存資料並推導
+        staging = pg_client.get_staging_list(page=0, page_size=9999, pg_status="pending")
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        if not rows:
+            return {"inserted": 0, "skipped": 0, "errors": [], "message": "無待寫入資料"}
+
+        derived = pg_client.derive_pg_fields(rows)
+
+        # 2. 寫入正式表
+        result = pg_client.import_formal(derived)
+
+        # 3. 更新成功的暫存資料狀態（排除有錯誤的 tagname）
+        error_tagnames = {e["tagname"] for e in result.get("errors", [])}
+        success_ids = [r["id"] for r, d in zip(rows, derived) if d["tagname"] not in error_tagnames]
+        if success_ids:
+            pg_client.update_staging_status(success_ids, "pg_status", "done")
+
+        return {
+            **result,
+            "message": f"成功寫入 {result['inserted']} 筆至正式表"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PG 寫入失敗: {e}")
