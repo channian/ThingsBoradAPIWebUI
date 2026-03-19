@@ -1060,25 +1060,32 @@ async def pg_execute_pg(req: ExecutePgRequest):
         # 1. 取得 pending 的暫存資料並推導
         staging = pg_client.get_staging_list(page=0, page_size=9999, pg_status="pending")
         rows = staging["data"]
+        log.info(f"[executePG] 取得 staging 資料 {len(rows)} 筆")
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
+            log.info(f"[executePG] 篩選後 {len(rows)} 筆")
         if not rows:
+            log.warning("[executePG] 無待寫入資料")
             return {"inserted": 0, "skipped": 0, "errors": [], "message": "無待寫入資料"}
 
         derived = pg_client.derive_pg_fields(rows)
+        log.info(f"[executePG] 推導完成 {len(derived)} 筆，範例: {derived[0] if derived else 'N/A'}")
 
         # 2. 寫入正式表
         result = pg_client.import_formal(derived)
+        log.info(f"[executePG] import_formal 結果: {result}")
 
         # 3. 更新成功的暫存資料狀態（排除有錯誤的 tagname）
         error_tagnames = {e["tagname"] for e in result.get("errors", [])}
         success_ids = [r["id"] for r, d in zip(rows, derived) if d["tagname"] not in error_tagnames]
         if success_ids:
             pg_client.update_staging_status(success_ids, "pg_status", "done")
+            log.info(f"[executePG] 更新 {len(success_ids)} 筆狀態為 done")
 
         return {
             **result,
             "message": f"成功寫入 {result['inserted']} 筆至正式表"
         }
     except Exception as e:
+        log.error(f"[executePG] PG 寫入失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"PG 寫入失敗: {e}")

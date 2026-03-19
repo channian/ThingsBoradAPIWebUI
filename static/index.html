@@ -1712,7 +1712,12 @@ createApp({
                     body: JSON.stringify({})
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
-                pgDerive.result = await resp.json()
+                const data = await resp.json()
+                console.log('[executePG] 回應:', JSON.stringify(data, null, 2))
+                if (data.errors && data.errors.length > 0) {
+                    console.error('[executePG] 錯誤明細:', data.errors)
+                }
+                pgDerive.result = data
                 // 重新載入推導資料
                 await derivePG()
             } catch (e) {

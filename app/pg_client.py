@@ -360,61 +360,77 @@ class PGClient:
 
     def import_formal(self, derived_rows: list) -> dict:
         """將推導後的資料寫入 tags 正式表"""
+        log.info(f"[import_formal] 開始寫入，共 {len(derived_rows)} 筆")
         if not derived_rows:
+            log.warning("[import_formal] derived_rows 為空，跳過")
             return {"inserted": 0, "skipped": 0, "errors": [], "total": 0}
 
         inserted = 0
         skipped = 0
         errors = []
 
-        with self._get_conn() as conn:
-            self._ensure_formal_table(conn)
-            with conn.cursor() as cur:
-                for row in derived_rows:
-                    tagname = row.get("tagname", "")
-                    if not tagname:
-                        skipped += 1
-                        continue
-                    try:
-                        cur.execute("""
-                            INSERT INTO tags
-                            (tagname, description, node_name, driver_type,
-                             address, tabname, zone, bu, site, floor,
-                             owner, department, data_type)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                            ON CONFLICT (tagname) DO UPDATE SET
-                                description = EXCLUDED.description,
-                                node_name = EXCLUDED.node_name,
-                                driver_type = EXCLUDED.driver_type,
-                                address = EXCLUDED.address,
-                                tabname = EXCLUDED.tabname,
-                                zone = EXCLUDED.zone,
-                                bu = EXCLUDED.bu,
-                                site = EXCLUDED.site,
-                                floor = EXCLUDED.floor,
-                                owner = EXCLUDED.owner,
-                                department = EXCLUDED.department,
-                                data_type = EXCLUDED.data_type,
-                                updated_date = NOW()
-                        """, (
-                            tagname,
-                            row.get("description", ""),
-                            row.get("node_name", ""),
-                            row.get("driver_type", ""),
-                            row.get("address", ""),
-                            row.get("tabname", ""),
-                            row.get("zone", ""),
-                            row.get("bu", ""),
-                            row.get("site", ""),
-                            row.get("floor", ""),
-                            row.get("owner", ""),
-                            row.get("department", ""),
-                            row.get("data_type", "float"),
-                        ))
-                        inserted += 1
-                    except Exception as e:
-                        errors.append({"tagname": tagname, "reason": str(e)})
+        try:
+            with self._get_conn() as conn:
+                self._ensure_formal_table(conn)
+                log.info("[import_formal] 正式表 tags 已確認存在")
+                with conn.cursor() as cur:
+                    for i, row in enumerate(derived_rows):
+                        tagname = row.get("tagname", "")
+                        if not tagname:
+                            log.warning(f"[import_formal] 第 {i} 筆 tagname 為空，跳過")
+                            skipped += 1
+                            continue
+                        try:
+                            cur.execute("""
+                                INSERT INTO tags
+                                (tagname, description, node_name, driver_type,
+                                 address, tabname, zone, bu, site, floor,
+                                 owner, department, data_type)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                ON CONFLICT (tagname) DO UPDATE SET
+                                    description = EXCLUDED.description,
+                                    node_name = EXCLUDED.node_name,
+                                    driver_type = EXCLUDED.driver_type,
+                                    address = EXCLUDED.address,
+                                    tabname = EXCLUDED.tabname,
+                                    zone = EXCLUDED.zone,
+                                    bu = EXCLUDED.bu,
+                                    site = EXCLUDED.site,
+                                    floor = EXCLUDED.floor,
+                                    owner = EXCLUDED.owner,
+                                    department = EXCLUDED.department,
+                                    data_type = EXCLUDED.data_type,
+                                    updated_date = NOW()
+                            """, (
+                                tagname,
+                                row.get("description", ""),
+                                row.get("node_name", ""),
+                                row.get("driver_type", ""),
+                                row.get("address", ""),
+                                row.get("tabname", ""),
+                                row.get("zone", ""),
+                                row.get("bu", ""),
+                                row.get("site", ""),
+                                row.get("floor", ""),
+                                row.get("owner", ""),
+                                row.get("department", ""),
+                                row.get("data_type", "float"),
+                            ))
+                            inserted += 1
+                            log.info(f"[import_formal] 寫入成功: {tagname}")
+                        except Exception as e:
+                            log.error(f"[import_formal] 寫入失敗 tagname={tagname}: {e}")
+                            errors.append({"tagname": tagname, "reason": str(e)})
+        except Exception as e:
+            log.error(f"[import_formal] 連線或建表失敗: {e}", exc_info=True)
+            return {
+                "inserted": inserted,
+                "skipped": skipped,
+                "errors": [{"tagname": "_connection", "reason": str(e)}],
+                "total": len(derived_rows),
+            }
 
+        log.info(f"[import_formal] 完成: inserted={inserted}, skipped={skipped}, errors={len(errors)}")
         return {
             "inserted": inserted,
             "skipped": skipped,
