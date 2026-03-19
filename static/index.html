@@ -1660,10 +1660,16 @@ createApp({
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ pg_status: 'pending' })
                 })
-                if (!resp.ok) throw new Error('Derive failed')
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}))
+                    throw new Error(err.detail || `HTTP ${resp.status}`)
+                }
                 const data = await resp.json()
                 pgDerive.data = data.data || []
-            } catch (e) { console.error('PG 推導失敗:', e) }
+            } catch (e) {
+                console.error('PG 推導失敗:', e)
+                alert('PG 推導失敗: ' + e.message)
+            }
             finally { pgDerive.loading = false }
         }
 
