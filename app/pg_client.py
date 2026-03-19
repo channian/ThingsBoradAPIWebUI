@@ -339,28 +339,22 @@ class PGClient:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS scada_tag_data (
-                    id SERIAL PRIMARY KEY,
-                    tagname VARCHAR(255) NOT NULL,
+                    tag_id SERIAL PRIMARY KEY,
+                    tagname VARCHAR(255) NOT NULL UNIQUE,
+                    description TEXT,
                     node_name VARCHAR(255),
                     driver_type VARCHAR(100),
                     address VARCHAR(500),
+                    tabname VARCHAR(255),
                     zone VARCHAR(100),
                     bu VARCHAR(100),
                     site VARCHAR(100),
                     floor VARCHAR(50),
-                    system VARCHAR(100),
-                    tabname VARCHAR(255),
                     owner VARCHAR(255),
                     department VARCHAR(255),
                     data_type VARCHAR(50) DEFAULT 'float',
-                    description TEXT,
-                    scale_enabled BOOLEAN DEFAULT FALSE,
-                    raw_low DOUBLE PRECISION,
-                    raw_high DOUBLE PRECISION,
-                    scaled_low DOUBLE PRECISION,
-                    scaled_high DOUBLE PRECISION,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(tagname)
+                    created_date TIMESTAMP DEFAULT NOW(),
+                    updated_date TIMESTAMP DEFAULT NOW()
                 )
             """)
 
@@ -384,50 +378,38 @@ class PGClient:
                     try:
                         cur.execute("""
                             INSERT INTO scada_tag_data
-                            (tagname, node_name, driver_type, address,
-                             zone, bu, site, floor, system, tabname,
-                             owner, department, data_type, description,
-                             scale_enabled, raw_low, raw_high, scaled_low, scaled_high)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            (tagname, description, node_name, driver_type,
+                             address, tabname, zone, bu, site, floor,
+                             owner, department, data_type)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             ON CONFLICT (tagname) DO UPDATE SET
+                                description = EXCLUDED.description,
                                 node_name = EXCLUDED.node_name,
                                 driver_type = EXCLUDED.driver_type,
                                 address = EXCLUDED.address,
+                                tabname = EXCLUDED.tabname,
                                 zone = EXCLUDED.zone,
                                 bu = EXCLUDED.bu,
                                 site = EXCLUDED.site,
                                 floor = EXCLUDED.floor,
-                                system = EXCLUDED.system,
-                                tabname = EXCLUDED.tabname,
                                 owner = EXCLUDED.owner,
                                 department = EXCLUDED.department,
                                 data_type = EXCLUDED.data_type,
-                                description = EXCLUDED.description,
-                                scale_enabled = EXCLUDED.scale_enabled,
-                                raw_low = EXCLUDED.raw_low,
-                                raw_high = EXCLUDED.raw_high,
-                                scaled_low = EXCLUDED.scaled_low,
-                                scaled_high = EXCLUDED.scaled_high
+                                updated_date = NOW()
                         """, (
                             tagname,
+                            row.get("description", ""),
                             row.get("node_name", ""),
                             row.get("driver_type", ""),
                             row.get("address", ""),
+                            row.get("tabname", ""),
                             row.get("zone", ""),
                             row.get("bu", ""),
                             row.get("site", ""),
                             row.get("floor", ""),
-                            row.get("system", ""),
-                            row.get("tabname", ""),
                             row.get("owner", ""),
                             row.get("department", ""),
                             row.get("data_type", "float"),
-                            row.get("description", ""),
-                            row.get("scale_enabled", False),
-                            row.get("raw_low"),
-                            row.get("raw_high"),
-                            row.get("scaled_low"),
-                            row.get("scaled_high"),
                         ))
                         inserted += 1
                     except Exception as e:
@@ -581,24 +563,18 @@ class PGClient:
             results.append({
                 "id": row.get("id"),
                 "tagname": tag_name,
+                "description": row.get("description", ""),
                 "node_name": row.get("scada_node_name", ""),
                 "driver_type": driver_type,
                 "address": row.get("io_address", ""),
+                "tabname": tabname,
                 "zone": zone,
                 "bu": bu,
                 "site": site,
                 "floor": floor,
-                "system": system,
-                "tabname": tabname,
                 "owner": data_owner,
                 "department": department,
                 "data_type": "float",
-                "description": row.get("description", ""),
-                "scale_enabled": row.get("scale_enabled", False),
-                "raw_low": row.get("raw_low"),
-                "raw_high": row.get("raw_high"),
-                "scaled_low": row.get("scaled_low"),
-                "scaled_high": row.get("scaled_high"),
             })
 
         return results
