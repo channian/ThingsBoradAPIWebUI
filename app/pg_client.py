@@ -335,10 +335,10 @@ class PGClient:
     # ── PG 正式表寫入 ─────────────────────────────────
 
     def _ensure_formal_table(self, conn):
-        """確保 scada_tag_data 正式表存在"""
+        """確保 tags 正式表存在"""
         with conn.cursor() as cur:
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS scada_tag_data (
+                CREATE TABLE IF NOT EXISTS tags (
                     tag_id SERIAL PRIMARY KEY,
                     tagname VARCHAR(255) NOT NULL UNIQUE,
                     description TEXT,
@@ -359,7 +359,7 @@ class PGClient:
             """)
 
     def import_formal(self, derived_rows: list) -> dict:
-        """將推導後的資料寫入 scada_tag_data 正式表"""
+        """將推導後的資料寫入 tags 正式表"""
         if not derived_rows:
             return {"inserted": 0, "skipped": 0, "errors": [], "total": 0}
 
@@ -377,7 +377,7 @@ class PGClient:
                         continue
                     try:
                         cur.execute("""
-                            INSERT INTO scada_tag_data
+                            INSERT INTO tags
                             (tagname, description, node_name, driver_type,
                              address, tabname, zone, bu, site, floor,
                              owner, department, data_type)
