@@ -274,7 +274,8 @@ class DeriveRequest(BaseModel):
 
 class ExecuteTbRequest(BaseModel):
     tb_url: str
-    tb_token: str
+    tb_username: str
+    tb_password: str
     ids: Optional[list] = None
 
 
@@ -1000,21 +1001,29 @@ async def pg_execute_tb(req: ExecuteTbRequest):
 
         derived = pg_client.derive_tb_fields(rows)
 
-        # 2. 逐筆呼叫 TB API 建立裝置
+        # 2. 登入 TB 並逐筆建立裝置
         client = ThingsBoardClient(req.tb_url)
-        client.set_token(req.tb_token)
+        client.login(req.tb_username, req.tb_password)
 
         success_ids = []
         failed = []
         for item in derived:
-            # 組裝 TB API payload
+            # 先檢查是否已存在
+            try:
+                existing = client.get_device_by_name(item["tb_name"])
+                if existing:
+                    success_ids.append(item["id"])  # 視為已完成
+                    continue
+            except Exception:
+                pass
+
+            # 組裝 TB API payload（與 task_manager 格式一致）
             payload = {
                 "name": item["tb_name"],
                 "type": item["tb_type"],
                 "label": item["tb_label"],
-                "deviceProfileId": None,
+                "additionalInfo": {"description": item.get("tb_description", "")},
             }
-            # 嘗試建立裝置
             try:
                 resp = client.create_device(payload)
                 if resp.status_code in (200, 201):

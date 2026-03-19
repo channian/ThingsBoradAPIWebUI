@@ -1677,7 +1677,8 @@ createApp({
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         tb_url: conn.url,
-                        tb_token: conn.token,
+                        tb_username: conn.username,
+                        tb_password: conn.password,
                     })
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
