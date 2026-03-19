@@ -345,7 +345,7 @@ class PGClient:
                     node_name VARCHAR(255),
                     driver_type VARCHAR(100),
                     address VARCHAR(500),
-                    tabname VARCHAR(255),
+                    tablename VARCHAR(255),
                     zone VARCHAR(100),
                     bu VARCHAR(100),
                     site VARCHAR(100),
@@ -384,7 +384,7 @@ class PGClient:
                             cur.execute("""
                                 INSERT INTO tags
                                 (tagname, description, node_name, driver_type,
-                                 address, tabname, zone, bu, site, floor,
+                                 address, tablename, zone, bu, site, floor,
                                  owner, department, data_type)
                                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                                 ON CONFLICT (tagname) DO UPDATE SET
@@ -392,7 +392,7 @@ class PGClient:
                                     node_name = EXCLUDED.node_name,
                                     driver_type = EXCLUDED.driver_type,
                                     address = EXCLUDED.address,
-                                    tabname = EXCLUDED.tabname,
+                                    tablename = EXCLUDED.tablename,
                                     zone = EXCLUDED.zone,
                                     bu = EXCLUDED.bu,
                                     site = EXCLUDED.site,
