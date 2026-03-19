@@ -816,17 +816,27 @@
                         <div v-if="pgDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>tagname</th><th>zone</th><th>bu</th><th>site</th>
-                                    <th>floor</th><th>system</th><th>tabname</th>
-                                    <th>driver</th><th>department</th>
+                                    <th>tagname</th><th>node_name</th><th>driver</th><th>address</th>
+                                    <th>zone</th><th>bu</th><th>site</th><th>floor</th><th>system</th>
+                                    <th>tabname</th><th>owner</th><th>department</th>
+                                    <th>data_type</th><th>description</th>
+                                    <th>scale</th><th>raw_low</th><th>raw_high</th><th>scaled_low</th><th>scaled_high</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in pgDerive.data" :key="r.id">
-                                        <td :title="r.tagname" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tagname }}</td>
+                                        <td :title="r.tagname" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tagname }}</td>
+                                        <td>{{ r.node_name || '-' }}</td>
+                                        <td>{{ r.driver_type || '-' }}</td>
+                                        <td :title="r.address" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address || '-' }}</td>
                                         <td>{{ r.zone || '-' }}</td><td>{{ r.bu || '-' }}</td><td>{{ r.site || '-' }}</td>
                                         <td>{{ r.floor || '-' }}</td><td>{{ r.system || '-' }}</td>
                                         <td><code style="font-size:12px">{{ r.tabname || '-' }}</code></td>
-                                        <td>{{ r.driver_type || '-' }}</td><td>{{ r.department || '-' }}</td>
+                                        <td>{{ r.owner || '-' }}</td><td>{{ r.department || '-' }}</td>
+                                        <td>{{ r.data_type || '-' }}</td>
+                                        <td :title="r.description" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.description || '-' }}</td>
+                                        <td>{{ r.scale_enabled ? 'Y' : 'N' }}</td>
+                                        <td>{{ r.raw_low ?? '-' }}</td><td>{{ r.raw_high ?? '-' }}</td>
+                                        <td>{{ r.scaled_low ?? '-' }}</td><td>{{ r.scaled_high ?? '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
