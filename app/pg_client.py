@@ -335,7 +335,7 @@ class PGClient:
     # ── PG 正式表寫入 ─────────────────────────────────
 
     def _ensure_formal_table(self, conn):
-        """確保 tags 正式表存在"""
+        """確保 tags 正式表存在，並同步 sequence"""
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS tags (
@@ -357,6 +357,15 @@ class PGClient:
                     updated_date TIMESTAMP DEFAULT NOW()
                 )
             """)
+            # 同步 sequence，避免 tag_id 衝突
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('tags', 'tag_id'),
+                    COALESCE((SELECT MAX(tag_id) FROM tags), 0) + 1,
+                    false
+                )
+            """)
+            log.info("[_ensure_formal_table] sequence 已同步")
 
     def import_formal(self, derived_rows: list) -> dict:
         """將推導後的資料寫入 tags 正式表"""
