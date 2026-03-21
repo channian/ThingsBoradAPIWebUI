@@ -319,7 +319,7 @@
             <div class="tabs">
                 <div class="tab" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                    批次新增
+                    TB 直接加點
                 </div>
                 <div class="tab" :class="{ active: activeTab === 'delete' }" @click="activeTab = 'delete'">
                     <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -335,7 +335,7 @@
                 </div>
                 <div class="tab" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">
                     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    點位匯入
+                    Kepware 匯入
                 </div>
                 <div class="tab" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'; loadConfig()">
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -789,10 +789,29 @@
                             <span style="color:var(--success)">{{ tbDerive.data.filter(r => r.profile_exists).length }} 個 Profile 存在</span>，
                             <span style="color:var(--error)">{{ tbDerive.data.filter(r => !r.profile_exists).length }} 個不存在</span>
                         </div>
+                        <!-- 限速設定 -->
+                        <div v-if="tbDerive.data.length" style="margin-top:14px; padding:12px; background:var(--bg-secondary); border-radius:8px; display:flex; flex-wrap:wrap; align-items:center; gap:16px; font-size:13px">
+                            <label style="display:flex;align-items:center;gap:4px">
+                                單筆延遲(秒)
+                                <input type="number" v-model.number="importSettings.delay" min="0" max="10" step="0.1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px">
+                                批次大小
+                                <input type="number" v-model.number="importSettings.batchSize" min="1" max="500" step="1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px">
+                                批次暫停(秒)
+                                <input type="number" v-model.number="importSettings.batchPause" min="0" max="60" step="1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;margin-left:auto;cursor:pointer">
+                                <input type="checkbox" v-model="importSettings.autoChain" style="width:16px;height:16px;cursor:pointer">
+                                TB + PG 一次完成
+                            </label>
+                        </div>
                         <div v-if="tbDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
-                            <button class="btn btn-success btn-sm" @click="executeTB()" :disabled="tbDerive.executing">
+                            <button class="btn btn-success btn-sm" @click="executeTB()" :disabled="tbDerive.executing || pgDerive.executing">
                                 <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                                {{ tbDerive.executing ? '建點中...' : '執行建點' }}
+                                {{ tbDerive.executing ? '建點中...' : (importSettings.autoChain ? '執行建點 + PG 匯入' : '執行建點') }}
                             </button>
                             <span v-if="tbDerive.result" :style="{ color: tbDerive.result.failed ? 'var(--warning)' : 'var(--success)' }">
                                 {{ tbDerive.result.message }}
@@ -1185,6 +1204,12 @@ createApp({
         })
         const tbDerive = reactive({ data: [], loading: false, executing: false, result: null })
         const pgDerive = reactive({ data: [], loading: false, executing: false, result: null })
+        const importSettings = reactive({
+            delay: 0.2,
+            batchSize: 50,
+            batchPause: 5,
+            autoChain: false,   // Step3+4 連動開關
+        })
 
         // ── Ref Tables State ──
         const refTab = ref('location')
@@ -1680,7 +1705,8 @@ createApp({
 
         async function executeTB() {
             if (!tbDerive.data.length) return
-            if (!confirm(`確定要建立 ${tbDerive.data.length} 筆裝置到 ThingsBoard？`)) return
+            const chainMsg = importSettings.autoChain ? '（含 PG 匯入）' : ''
+            if (!confirm(`確定要建立 ${tbDerive.data.length} 筆裝置到 ThingsBoard？${chainMsg}`)) return
             tbDerive.executing = true
             tbDerive.result = null
             try {
@@ -1690,20 +1716,31 @@ createApp({
                         tb_url: conn.url,
                         tb_username: conn.username,
                         tb_password: conn.password,
+                        delay: importSettings.delay,
+                        batch_size: importSettings.batchSize,
+                        batch_pause: importSettings.batchPause,
                     })
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
                 tbDerive.result = await resp.json()
                 // 重新載入推導資料（成功的已變成 done）
                 await deriveTB()
+
+                // 連動：自動接續 PG 匯入
+                if (importSettings.autoChain) {
+                    await derivePG()
+                    if (pgDerive.data.length) {
+                        await executePG(true)  // 跳過確認
+                    }
+                }
             } catch (e) {
                 tbDerive.result = { message: `建點失敗: ${e.message}`, failed: 1 }
             } finally { tbDerive.executing = false }
         }
 
-        async function executePG() {
+        async function executePG(skipConfirm = false) {
             if (!pgDerive.data.length) return
-            if (!confirm(`確定要將 ${pgDerive.data.length} 筆資料寫入 PG 正式表？`)) return
+            if (!skipConfirm && !confirm(`確定要將 ${pgDerive.data.length} 筆資料寫入 PG 正式表？`)) return
             pgDerive.executing = true
             pgDerive.result = null
             try {
@@ -1829,7 +1866,7 @@ createApp({
             // DeviceProfile
             dpCheck, dpList, checkDeviceProfiles, loadDeviceProfiles,
             // Import
-            importSubTab, pgConn, imp, staging, tbDerive, pgDerive,
+            importSubTab, pgConn, imp, staging, tbDerive, pgDerive, importSettings,
             testPGConnection, handleImportFile, handleImportDrop, importToStaging,
             loadStaging, deleteSelectedStaging, clearAllStaging, toggleStagingSelect, toggleStagingSelectAll,
             deriveTB, derivePG, executeTB, executePG,

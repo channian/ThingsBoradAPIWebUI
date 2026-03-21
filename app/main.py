@@ -280,6 +280,9 @@ class ExecuteTbRequest(BaseModel):
     tb_username: str
     tb_password: str
     ids: Optional[list] = None
+    delay: float = 0.2
+    batch_size: int = 50
+    batch_pause: float = 5.0
 
 
 class ExecutePgRequest(BaseModel):
@@ -992,7 +995,8 @@ async def pg_derive_pg(req: DeriveRequest):
 
 @app.post("/api/pg/execute/tb")
 async def pg_execute_tb(req: ExecuteTbRequest):
-    """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status"""
+    """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status（含限速）"""
+    import time, random
     try:
         # 1. 取得 pending 的暫存資料並推導
         staging = pg_client.get_staging_list(page=0, page_size=9999, tb_status="pending")
@@ -1003,19 +1007,22 @@ async def pg_execute_tb(req: ExecuteTbRequest):
             return {"success": 0, "failed": 0, "errors": [], "message": "無待建點資料"}
 
         derived = pg_client.derive_tb_fields(rows)
+        log.info(f"[executeTB] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}, batch_pause={req.batch_pause}")
 
-        # 2. 登入 TB 並逐筆建立裝置
+        # 2. 登入 TB 並逐筆建立裝置（含限速）
         client = ThingsBoardClient(req.tb_url)
         client.login(req.tb_username, req.tb_password)
 
         success_ids = []
         failed = []
-        for item in derived:
+        success_count = 0
+        for idx, item in enumerate(derived):
             # 先檢查是否已存在
             try:
                 existing = client.get_device_by_name(item["tb_name"])
                 if existing:
                     success_ids.append(item["id"])  # 視為已完成
+                    success_count += 1
                     continue
             except Exception:
                 pass
@@ -1031,6 +1038,20 @@ async def pg_execute_tb(req: ExecuteTbRequest):
                 resp = client.create_device(payload)
                 if resp.status_code in (200, 201):
                     success_ids.append(item["id"])
+                    success_count += 1
+                elif resp.status_code == 429:
+                    log.warning(f"[executeTB] 收到 429 限速，暫停 {req.batch_pause} 秒")
+                    time.sleep(req.batch_pause)
+                    # 重試一次
+                    resp = client.create_device(payload)
+                    if resp.status_code in (200, 201):
+                        success_ids.append(item["id"])
+                        success_count += 1
+                    else:
+                        failed.append({
+                            "name": item["tb_name"],
+                            "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        })
                 else:
                     failed.append({
                         "name": item["tb_name"],
@@ -1038,6 +1059,12 @@ async def pg_execute_tb(req: ExecuteTbRequest):
                     })
             except Exception as e:
                 failed.append({"name": item["tb_name"], "reason": str(e)})
+
+            # 限速控制：單筆延遲 + 批次暫停
+            time.sleep(req.delay + random.uniform(0.01, 0.05))
+            if success_count > 0 and success_count % req.batch_size == 0:
+                log.info(f"[executeTB] 已處理 {success_count} 筆，冷卻暫停 {req.batch_pause} 秒")
+                time.sleep(req.batch_pause)
 
         # 3. 更新成功的暫存資料狀態
         if success_ids:
@@ -1050,6 +1077,7 @@ async def pg_execute_tb(req: ExecuteTbRequest):
             "message": f"成功建立 {len(success_ids)} 筆裝置"
         }
     except Exception as e:
+        log.error(f"[executeTB] TB 建點失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"TB 建點失敗: {e}")
 
 
