@@ -768,7 +768,7 @@
                                     <th>Label</th><th>Description</th><th>Profile 存在</th>
                                 </tr></thead>
                                 <tbody>
-                                    <tr v-for="r in tbDerive.data" :key="r.id">
+                                    <tr v-for="r in pagedTbData()" :key="r.id">
                                         <td :title="r.tb_name" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_name }}</td>
                                         <td><code style="font-size:12px">{{ r.tb_type }}</code></td>
                                         <td :title="r.tb_label" style="max-width:250px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
@@ -780,6 +780,13 @@
                                     </tr>
                                 </tbody>
                             </table>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:13px">
+                                <span>第 {{ tbDerive.page + 1 }} / {{ tbTotalPages() }} 頁（共 {{ tbDerive.data.length }} 筆）</span>
+                                <div style="display:flex;gap:6px">
+                                    <button class="btn btn-outline btn-sm" @click="tbPrevPage()" :disabled="tbDerive.page === 0">&laquo; 上一頁</button>
+                                    <button class="btn btn-outline btn-sm" @click="tbNextPage()" :disabled="tbDerive.page >= tbTotalPages() - 1">下一頁 &raquo;</button>
+                                </div>
+                            </div>
                         </div>
                         <div v-if="!tbDerive.data.length && !tbDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
                             無 pending 狀態的暫存資料
@@ -840,7 +847,7 @@
                                     <th>site</th><th>floor</th><th>owner</th><th>department</th><th>data_type</th>
                                 </tr></thead>
                                 <tbody>
-                                    <tr v-for="r in pgDerive.data" :key="r.id">
+                                    <tr v-for="r in pagedPgData()" :key="r.id">
                                         <td :title="r.tagname" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tagname }}</td>
                                         <td :title="r.description" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.description || '-' }}</td>
                                         <td>{{ r.node_name || '-' }}</td>
@@ -854,6 +861,13 @@
                                     </tr>
                                 </tbody>
                             </table>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:13px">
+                                <span>第 {{ pgDerive.page + 1 }} / {{ pgTotalPages() }} 頁（共 {{ pgDerive.data.length }} 筆）</span>
+                                <div style="display:flex;gap:6px">
+                                    <button class="btn btn-outline btn-sm" @click="pgPrevPage()" :disabled="pgDerive.page === 0">&laquo; 上一頁</button>
+                                    <button class="btn btn-outline btn-sm" @click="pgNextPage()" :disabled="pgDerive.page >= pgTotalPages() - 1">下一頁 &raquo;</button>
+                                </div>
+                            </div>
                         </div>
                         <div v-if="!pgDerive.data.length && !pgDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
                             無 pending 狀態的暫存資料
@@ -1006,10 +1020,19 @@
                             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                             ThingsBoard DeviceProfile 列表
                         </div>
-                        <button class="btn btn-primary btn-sm" @click="loadDeviceProfiles" :disabled="conn.status !== 'connected' || dpList.loading" style="margin-bottom: 14px;">
-                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                            {{ dpList.loading ? '載入中...' : '從 ThingsBoard 載入' }}
-                        </button>
+                        <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center">
+                            <button class="btn btn-primary btn-sm" @click="loadDeviceProfiles" :disabled="conn.status !== 'connected' || dpList.loading">
+                                <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                {{ dpList.loading ? '載入中...' : '從 ThingsBoard 載入' }}
+                            </button>
+                            <button class="btn btn-success btn-sm" @click="syncTbProfilesToPG" :disabled="conn.status !== 'connected' || dpList.syncing">
+                                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2z"/></svg>
+                                {{ dpList.syncing ? '同步中...' : '一鍵同步到 PG' }}
+                            </button>
+                            <span v-if="dpList.syncResult" :style="{ color: dpList.syncResult.errors?.length ? 'var(--warning)' : 'var(--success)', fontSize: '13px' }">
+                                {{ dpList.syncResult.message }}
+                            </span>
+                        </div>
                         <div v-if="conn.status !== 'connected'" class="alert alert-warning" style="margin-bottom:14px">
                             <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             請先在上方連線 ThingsBoard 後再載入 DeviceProfile
@@ -1202,8 +1225,8 @@ createApp({
             filterTb: '', filterPg: '', loading: false,
             selected: [], clearing: false,
         })
-        const tbDerive = reactive({ data: [], loading: false, executing: false, result: null })
-        const pgDerive = reactive({ data: [], loading: false, executing: false, result: null })
+        const tbDerive = reactive({ data: [], loading: false, executing: false, result: null, page: 0, pageSize: 50 })
+        const pgDerive = reactive({ data: [], loading: false, executing: false, result: null, page: 0, pageSize: 50 })
         const importSettings = reactive({
             delay: 0.2,
             batchSize: 50,
@@ -1243,7 +1266,7 @@ createApp({
             loading: false, checked: false,
             results: {}, validCount: 0, invalidCount: 0,
         })
-        const dpList = reactive({
+        const dpList = reactive({ syncing: false, syncResult: null,
             loading: false, loaded: false, profiles: [],
         })
 
@@ -1556,6 +1579,24 @@ createApp({
             finally { dpList.loading = false }
         }
 
+        async function syncTbProfilesToPG() {
+            if (conn.status !== 'connected') { alert('請先連線 ThingsBoard'); return }
+            dpList.syncing = true
+            dpList.syncResult = null
+            try {
+                const resp = await fetch('/api/pg/ref/tb-profiles/sync', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tb_url: conn.url, tb_username: conn.username, tb_password: conn.password })
+                })
+                if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${resp.status}`) }
+                dpList.syncResult = await resp.json()
+                // 同步後重新載入 PG 參照表
+                loadRefTables()
+            } catch (e) {
+                dpList.syncResult = { message: `同步失敗: ${e.message}`, errors: [1] }
+            } finally { dpList.syncing = false }
+        }
+
         // ── PG / Import Functions ──
         async function testPGConnection() {
             pgConn.testing = true
@@ -1669,6 +1710,23 @@ createApp({
             }
         }
 
+        // ── 分頁 helpers ──
+        function pagedTbData() {
+            const start = tbDerive.page * tbDerive.pageSize
+            return tbDerive.data.slice(start, start + tbDerive.pageSize)
+        }
+        function tbTotalPages() { return Math.max(1, Math.ceil(tbDerive.data.length / tbDerive.pageSize)) }
+        function tbPrevPage() { if (tbDerive.page > 0) tbDerive.page-- }
+        function tbNextPage() { if (tbDerive.page < tbTotalPages() - 1) tbDerive.page++ }
+
+        function pagedPgData() {
+            const start = pgDerive.page * pgDerive.pageSize
+            return pgDerive.data.slice(start, start + pgDerive.pageSize)
+        }
+        function pgTotalPages() { return Math.max(1, Math.ceil(pgDerive.data.length / pgDerive.pageSize)) }
+        function pgPrevPage() { if (pgDerive.page > 0) pgDerive.page-- }
+        function pgNextPage() { if (pgDerive.page < pgTotalPages() - 1) pgDerive.page++ }
+
         async function deriveTB() {
             tbDerive.loading = true
             try {
@@ -1679,6 +1737,7 @@ createApp({
                 if (!resp.ok) throw new Error('Derive failed')
                 const data = await resp.json()
                 tbDerive.data = data.data || []
+                tbDerive.page = 0
             } catch (e) { console.error('TB 推導失敗:', e) }
             finally { tbDerive.loading = false }
         }
@@ -1696,6 +1755,7 @@ createApp({
                 }
                 const data = await resp.json()
                 pgDerive.data = data.data || []
+                pgDerive.page = 0
             } catch (e) {
                 console.error('PG 推導失敗:', e)
                 alert('PG 推導失敗: ' + e.message)
@@ -1800,12 +1860,13 @@ createApp({
         async function addRefDevice() {
             if (!refForm.dev_name || !refForm.dev_driver) return
             try {
-                await fetch('/api/pg/ref/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                const resp = await fetch('/api/pg/ref/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ device_name: refForm.dev_name, driver_type: refForm.dev_driver,
                         site: refForm.dev_site || null, system_code: refForm.dev_system || null }) })
+                if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${resp.status}`) }
                 refForm.dev_name = ''; refForm.dev_driver = ''; refForm.dev_site = ''; refForm.dev_system = ''
                 loadRefTables()
-            } catch (e) { alert('新增失敗: ' + e.message) }
+            } catch (e) { alert('Device 新增失敗: ' + e.message) }
         }
 
         async function addRefSystem() {
@@ -1864,12 +1925,14 @@ createApp({
             saveDefaults, addNewDefault,
             addMappingEntry, removeMappingEntry, addNewMappingRule, deleteMappingRule,
             // DeviceProfile
-            dpCheck, dpList, checkDeviceProfiles, loadDeviceProfiles,
+            dpCheck, dpList, checkDeviceProfiles, loadDeviceProfiles, syncTbProfilesToPG,
             // Import
             importSubTab, pgConn, imp, staging, tbDerive, pgDerive, importSettings,
             testPGConnection, handleImportFile, handleImportDrop, importToStaging,
             loadStaging, deleteSelectedStaging, clearAllStaging, toggleStagingSelect, toggleStagingSelectAll,
             deriveTB, derivePG, executeTB, executePG,
+            pagedTbData, tbTotalPages, tbPrevPage, tbNextPage,
+            pagedPgData, pgTotalPages, pgPrevPage, pgNextPage,
             // Ref Tables
             refTab, refData, refForm, loadRefTables,
             addRefLocation, addRefOwnership, addRefDevice, addRefSystem, addRefTbProfile, deleteRef,

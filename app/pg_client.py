@@ -38,9 +38,49 @@ class PGClient:
         finally:
             conn.close()
 
+    def _ensure_ref_tables(self, conn):
+        """確保參照表存在"""
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS location_config (
+                    id SERIAL PRIMARY KEY,
+                    bu VARCHAR(100),
+                    site VARCHAR(100),
+                    zone VARCHAR(100),
+                    UNIQUE(bu, site, zone)
+                );
+                CREATE TABLE IF NOT EXISTS ownership_config (
+                    id SERIAL PRIMARY KEY,
+                    department VARCHAR(255),
+                    owner VARCHAR(255),
+                    UNIQUE(department, owner)
+                );
+                CREATE TABLE IF NOT EXISTS device_config (
+                    id SERIAL PRIMARY KEY,
+                    device_name VARCHAR(255) NOT NULL UNIQUE,
+                    driver_type VARCHAR(100),
+                    site VARCHAR(100),
+                    system_code VARCHAR(100),
+                    ip_address VARCHAR(100),
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS system_config (
+                    id SERIAL PRIMARY KEY,
+                    system_code VARCHAR(100) NOT NULL UNIQUE,
+                    system_name VARCHAR(255),
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS tb_device_profile (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    description TEXT
+                );
+            """)
+
     def test_connection(self) -> dict:
-        """測試 PG 連線"""
+        """測試 PG 連線並確保參照表存在"""
         with self._get_conn() as conn:
+            self._ensure_ref_tables(conn)
             with conn.cursor() as cur:
                 cur.execute("SELECT version()")
                 version = cur.fetchone()[0]

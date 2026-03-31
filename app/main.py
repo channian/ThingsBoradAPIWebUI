@@ -945,6 +945,61 @@ async def pg_add_tb_profile(req: RefTbProfileRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SyncTbProfilesRequest(BaseModel):
+    tb_url: str
+    tb_username: str
+    tb_password: str
+
+
+@app.post("/api/pg/ref/tb-profiles/sync")
+async def pg_sync_tb_profiles(req: SyncTbProfilesRequest):
+    """從 ThingsBoard 一鍵同步所有 DeviceProfile 到 PG tb_device_profile 表"""
+    try:
+        client = ThingsBoardClient(req.tb_url)
+        client.login(req.tb_username, req.tb_password)
+
+        # 取得所有 DeviceProfile（含 description）
+        all_profiles = []
+        page = 0
+        while True:
+            result = client.get_device_profiles(page=page, page_size=100)
+            for dp in result.get("data", []):
+                all_profiles.append({
+                    "name": dp.get("name", ""),
+                    "description": dp.get("description", ""),
+                })
+            if not result.get("hasNext", False):
+                break
+            page += 1
+            if page > 50:
+                break
+
+        log.info(f"[syncTbProfiles] 從 TB 取得 {len(all_profiles)} 個 DeviceProfile")
+
+        # 逐筆 upsert 到 PG
+        synced = 0
+        errors = []
+        for p in all_profiles:
+            if not p["name"]:
+                continue
+            try:
+                pg_client.upsert_tb_profile(p["name"], p.get("description"))
+                synced += 1
+            except Exception as e:
+                errors.append({"name": p["name"], "reason": str(e)})
+
+        return {
+            "success": True,
+            "synced": synced,
+            "total": len(all_profiles),
+            "errors": errors,
+            "message": f"成功同步 {synced}/{len(all_profiles)} 個 DeviceProfile 到 PG",
+        }
+    except Exception as e:
+        log.error(f"[syncTbProfiles] 同步失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"同步失敗: {e}")
+
+
 @app.post("/api/pg/ref/delete")
 async def pg_delete_ref(req: RefDeleteRequest):
     """刪除參照表資料"""
