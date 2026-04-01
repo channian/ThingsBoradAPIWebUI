@@ -627,6 +627,7 @@
                     <div class="sub-tab" :class="{ active: importSubTab === 'staging' }" @click="importSubTab = 'staging'; loadStaging()">2. 暫存資料</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. TB 建點</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'pg' }" @click="importSubTab = 'pg'; derivePG()">4. PG 匯入</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'scale' }" @click="importSubTab = 'scale'; deriveScale()">5. Scale 設定</div>
                 </div>
 
                 <!-- Step 1: CSV Upload to Staging -->
@@ -880,6 +881,89 @@
                             <span v-if="pgDerive.result" :style="{ color: pgDerive.result.errors?.length ? 'var(--warning)' : 'var(--success)' }">
                                 {{ pgDerive.result.message }}
                                 <span v-if="pgDerive.result.errors?.length"> ({{ pgDerive.result.errors.length }} 筆錯誤)</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 5: Kepware Scale Configuration -->
+                <div v-show="importSubTab === 'scale'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                            Kepware Scale 設定推導預覽（scale_status = pending）
+                        </div>
+                        <!-- Kepware Gateway 連線 -->
+                        <div style="margin-bottom:14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center">
+                            <input v-model="kwGw.url" placeholder="Kepware GW URL" style="width:220px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <input v-model="kwGw.username" placeholder="帳號" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <input v-model="kwGw.password" type="password" placeholder="密碼" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <button class="btn btn-outline btn-sm" @click="testKwGwConnection" :disabled="kwGw.testing">
+                                {{ kwGw.testing ? '測試中...' : '測試連線' }}
+                            </button>
+                            <span class="conn-status" :class="kwGw.status">{{ kwGw.statusText }}</span>
+                        </div>
+                        <button class="btn btn-primary btn-sm" @click="deriveScale()" :disabled="scaleDerive.loading" style="margin-bottom:14px">
+                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            {{ scaleDerive.loading ? '推導中...' : '重新推導' }}
+                        </button>
+                        <div v-if="scaleDerive.data.length" class="table-wrapper">
+                            <table>
+                                <thead><tr>
+                                    <th>Tag Name</th><th>IO Device</th><th>Scale Type</th>
+                                    <th>Input Min</th><th>Input Max</th>
+                                    <th>Output Min</th><th>Output Max</th>
+                                    <th>Clamp</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="r in pagedScaleData()" :key="r.id">
+                                        <td :title="r.tag_name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tag_name }}</td>
+                                        <td>{{ r.io_device || '-' }}</td>
+                                        <td><code style="font-size:12px">{{ r.scale_type }}</code></td>
+                                        <td>{{ r.input_min }}</td><td>{{ r.input_max }}</td>
+                                        <td>{{ r.output_min }}</td><td>{{ r.output_max }}</td>
+                                        <td>{{ r.clamp_low ? 'L' : '' }}{{ r.clamp_high ? 'H' : '' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:13px">
+                                <span>第 {{ scaleDerive.page + 1 }} / {{ scaleTotalPages() }} 頁（共 {{ scaleDerive.data.length }} 筆）</span>
+                                <div style="display:flex;gap:6px">
+                                    <button class="btn btn-outline btn-sm" @click="scalePrevPage()" :disabled="scaleDerive.page === 0">&laquo; 上一頁</button>
+                                    <button class="btn btn-outline btn-sm" @click="scaleNextPage()" :disabled="scaleDerive.page >= scaleTotalPages() - 1">下一頁 &raquo;</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="!scaleDerive.data.length && !scaleDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
+                            無需要設定 Scale 的資料（scale_enabled 為 false 或缺少範圍值）
+                        </div>
+                        <div v-if="scaleDerive.data.length" style="margin-top:14px; font-size:13px; color:var(--text-secondary)">
+                            共 {{ scaleDerive.data.length }} 筆待設定 Scale
+                        </div>
+                        <!-- 限速設定 -->
+                        <div v-if="scaleDerive.data.length" style="margin-top:14px; padding:12px; background:var(--bg-secondary); border-radius:8px; display:flex; flex-wrap:wrap; align-items:center; gap:16px; font-size:13px">
+                            <label style="display:flex;align-items:center;gap:4px">
+                                單筆延遲(秒)
+                                <input type="number" v-model.number="scaleSettings.delay" min="0" max="10" step="0.1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px">
+                                批次大小
+                                <input type="number" v-model.number="scaleSettings.batchSize" min="1" max="500" step="1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:4px">
+                                批次暫停(秒)
+                                <input type="number" v-model.number="scaleSettings.batchPause" min="0" max="60" step="1" style="width:65px;padding:4px 6px;border-radius:4px;border:1px solid var(--border)">
+                            </label>
+                        </div>
+                        <div v-if="scaleDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
+                            <button class="btn btn-success btn-sm" @click="executeScale()" :disabled="scaleDerive.executing || kwGw.status !== 'connected'">
+                                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                                {{ scaleDerive.executing ? '設定中...' : '執行 Scale 設定' }}
+                            </button>
+                            <span v-if="kwGw.status !== 'connected'" style="font-size:13px;color:var(--warning)">請先連線 Kepware Gateway</span>
+                            <span v-if="scaleDerive.result" :style="{ color: scaleDerive.result.errors?.length ? 'var(--warning)' : 'var(--success)' }">
+                                {{ scaleDerive.result.message }}
+                                <span v-if="scaleDerive.result.errors?.length"> ({{ scaleDerive.result.errors.length }} 筆錯誤)</span>
                             </span>
                         </div>
                     </div>
@@ -1233,6 +1317,18 @@ createApp({
             batchPause: 5,
             autoChain: false,   // Step3+4 連動開關
         })
+
+        // ── Scale State ──
+        const kwGw = reactive({
+            url: localStorage.getItem('kw_gw_url') || '',
+            username: localStorage.getItem('kw_gw_username') || '',
+            password: '',
+            status: 'disconnected',
+            statusText: '未連線',
+            testing: false,
+        })
+        const scaleDerive = reactive({ data: [], loading: false, executing: false, result: null, page: 0, pageSize: 50 })
+        const scaleSettings = reactive({ delay: 0.2, batchSize: 50, batchPause: 5 })
 
         // ── Ref Tables State ──
         const refTab = ref('location')
@@ -1822,6 +1918,75 @@ createApp({
             } finally { pgDerive.executing = false }
         }
 
+        // ── Scale Functions ──
+        async function testKwGwConnection() {
+            if (!kwGw.url) { alert('請輸入 Kepware Gateway URL'); return }
+            kwGw.testing = true
+            try {
+                const resp = await fetch('/api/kw-gw/test', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ kw_gw_url: kwGw.url, kw_gw_username: kwGw.username, kw_gw_password: kwGw.password })
+                })
+                if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${resp.status}`) }
+                kwGw.status = 'connected'; kwGw.statusText = '已連線'
+                localStorage.setItem('kw_gw_url', kwGw.url)
+                localStorage.setItem('kw_gw_username', kwGw.username)
+            } catch (e) {
+                kwGw.status = 'error'; kwGw.statusText = `連線失敗: ${e.message}`
+            } finally { kwGw.testing = false }
+        }
+
+        function pagedScaleData() {
+            const start = scaleDerive.page * scaleDerive.pageSize
+            return scaleDerive.data.slice(start, start + scaleDerive.pageSize)
+        }
+        function scaleTotalPages() { return Math.max(1, Math.ceil(scaleDerive.data.length / scaleDerive.pageSize)) }
+        function scalePrevPage() { if (scaleDerive.page > 0) scaleDerive.page-- }
+        function scaleNextPage() { if (scaleDerive.page < scaleTotalPages() - 1) scaleDerive.page++ }
+
+        async function deriveScale() {
+            scaleDerive.loading = true
+            try {
+                const resp = await fetch('/api/pg/derive/scale', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scale_status: 'pending' })
+                })
+                if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${resp.status}`) }
+                const data = await resp.json()
+                scaleDerive.data = data.data || []
+                scaleDerive.page = 0
+            } catch (e) {
+                console.error('Scale 推導失敗:', e)
+                alert('Scale 推導失敗: ' + e.message)
+            } finally { scaleDerive.loading = false }
+        }
+
+        async function executeScale() {
+            if (!scaleDerive.data.length) return
+            if (kwGw.status !== 'connected') { alert('請先連線 Kepware Gateway'); return }
+            if (!confirm(`確定要設定 ${scaleDerive.data.length} 筆 Tag 的 Scale？`)) return
+            scaleDerive.executing = true
+            scaleDerive.result = null
+            try {
+                const resp = await fetch('/api/pg/execute/scale', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        kw_gw_url: kwGw.url,
+                        kw_gw_username: kwGw.username,
+                        kw_gw_password: kwGw.password,
+                        delay: scaleSettings.delay,
+                        batch_size: scaleSettings.batchSize,
+                        batch_pause: scaleSettings.batchPause,
+                    })
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
+                scaleDerive.result = await resp.json()
+                await deriveScale()
+            } catch (e) {
+                scaleDerive.result = { message: `Scale 設定失敗: ${e.message}`, errors: [1] }
+            } finally { scaleDerive.executing = false }
+        }
+
         // ── Reference Table Functions ──
         async function loadRefTables() {
             try {
@@ -1933,6 +2098,10 @@ createApp({
             deriveTB, derivePG, executeTB, executePG,
             pagedTbData, tbTotalPages, tbPrevPage, tbNextPage,
             pagedPgData, pgTotalPages, pgPrevPage, pgNextPage,
+            // Scale
+            kwGw, scaleDerive, scaleSettings,
+            testKwGwConnection, deriveScale, executeScale,
+            pagedScaleData, scaleTotalPages, scalePrevPage, scaleNextPage,
             // Ref Tables
             refTab, refData, refForm, loadRefTables,
             addRefLocation, addRefOwnership, addRefDevice, addRefSystem, addRefTbProfile, deleteRef,

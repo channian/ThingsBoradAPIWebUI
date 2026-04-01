@@ -77,10 +77,28 @@ class PGClient:
                 );
             """)
 
+    def _ensure_scale_status_column(self, conn):
+        """確保暫存表有 scale_status 欄位"""
+        with conn.cursor() as cur:
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'scada_tag_config'
+                        AND column_name = 'scale_status'
+                    ) THEN
+                        ALTER TABLE scada_tag_config
+                        ADD COLUMN scale_status VARCHAR(20) DEFAULT 'pending';
+                    END IF;
+                END $$;
+            """)
+
     def test_connection(self) -> dict:
         """測試 PG 連線並確保參照表存在"""
         with self._get_conn() as conn:
             self._ensure_ref_tables(conn)
+            self._ensure_scale_status_column(conn)
             with conn.cursor() as cur:
                 cur.execute("SELECT version()")
                 version = cur.fetchone()[0]
@@ -172,6 +190,7 @@ class PGClient:
         page_size: int = 50,
         tb_status: str = None,
         pg_status: str = None,
+        scale_status: str = None,
     ) -> dict:
         """分頁查詢暫存表"""
         conditions = []
@@ -183,6 +202,9 @@ class PGClient:
         if pg_status:
             conditions.append("pg_status = %s")
             params.append(pg_status)
+        if scale_status:
+            conditions.append("scale_status = %s")
+            params.append(scale_status)
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         offset = page * page_size
@@ -211,8 +233,8 @@ class PGClient:
 
     def update_staging_status(self, ids: list, field: str, status: str):
         """批次更新暫存表狀態"""
-        if field not in ("tb_status", "pg_status"):
-            raise ValueError("field must be tb_status or pg_status")
+        if field not in ("tb_status", "pg_status", "scale_status"):
+            raise ValueError("field must be tb_status/pg_status/scale_status")
         if status not in ("pending", "done", "skip"):
             raise ValueError("status must be pending/done/skip")
 
@@ -640,6 +662,48 @@ class PGClient:
                 "owner": data_owner,
                 "department": department,
                 "data_type": "float",
+            })
+
+        return results
+
+    def derive_scale_fields(self, staging_rows: list) -> list:
+        """對暫存表資料推導 Kepware Scale 配置
+
+        只回傳 scale_enabled=True 的資料行。
+        tag_name 會轉成 Kepware 路徑格式 (Channel.Device.Tag)。
+        """
+        results = []
+        for row in staging_rows:
+            tag_name = row.get("tag_name", "")
+            scale_enabled = row.get("scale_enabled")
+            if not tag_name or not scale_enabled:
+                continue
+
+            raw_low = row.get("raw_low")
+            raw_high = row.get("raw_high")
+            scaled_low = row.get("scaled_low")
+            scaled_high = row.get("scaled_high")
+
+            # 至少需要有 raw/scaled 範圍才有意義
+            if raw_low is None or raw_high is None or scaled_low is None or scaled_high is None:
+                continue
+
+            # tag_name 格式: 用底線或點分隔 → 轉 Kepware Channel.Device.Tag
+            # 暫存表的 io_device + tag_name 可組成 Kepware 路徑
+            io_device = row.get("io_device", "")
+
+            results.append({
+                "id": row.get("id"),
+                "tag_name": tag_name,
+                "io_device": io_device,
+                "scale_type": "linear",
+                "input_min": float(raw_low),
+                "input_max": float(raw_high),
+                "output_min": float(scaled_low),
+                "output_max": float(scaled_high),
+                "clamp_low": True,
+                "clamp_high": True,
+                "unit": "",
             })
 
         return results

@@ -29,6 +29,7 @@ from app.task_manager import (
 )
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
+from app.kw_gw_client import KepwareGatewayClient
 
 # ── Logging ────────────────────────────────────────────
 
@@ -289,6 +290,27 @@ class ExecuteTbRequest(BaseModel):
 
 class ExecutePgRequest(BaseModel):
     ids: Optional[list] = None
+
+
+class DeriveScaleRequest(BaseModel):
+    scale_status: Optional[str] = "pending"
+    ids: Optional[list] = None
+
+
+class ExecuteScaleRequest(BaseModel):
+    kw_gw_url: str
+    kw_gw_username: str
+    kw_gw_password: str
+    ids: Optional[list] = None
+    delay: float = 0.2
+    batch_size: int = 50
+    batch_pause: float = 5.0
+
+
+class KwGwSettingsRequest(BaseModel):
+    kw_gw_url: str
+    kw_gw_username: str
+    kw_gw_password: str
 
 
 # ── API: 認證 ──────────────────────────────────────────
@@ -1174,3 +1196,109 @@ async def pg_execute_pg(req: ExecutePgRequest):
     except Exception as e:
         log.error(f"[executePG] PG 寫入失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"PG 寫入失敗: {e}")
+
+
+# ── API: Kepware Gateway Scale ────────────────────────
+
+@app.post("/api/kw-gw/test")
+async def kw_gw_test(req: KwGwSettingsRequest):
+    """測試 Kepware API Gateway 連線"""
+    try:
+        client = KepwareGatewayClient(req.kw_gw_url)
+        client.login(req.kw_gw_username, req.kw_gw_password)
+        return {"success": True, "message": "Kepware API Gateway 連線成功"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"連線失敗: {e}")
+
+
+@app.post("/api/pg/derive/scale")
+async def pg_derive_scale(req: DeriveScaleRequest):
+    """推導 Scale 配置欄位（從暫存表的 scale_enabled/raw_low/raw_high/scaled_low/scaled_high）"""
+    try:
+        staging = pg_client.get_staging_list(
+            page=0, page_size=9999,
+            scale_status=req.scale_status,
+        )
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        results = pg_client.derive_scale_fields(rows)
+        return {"data": results, "total": len(results)}
+    except Exception as e:
+        log.error(f"[deriveScale] 推導失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
+
+
+@app.post("/api/pg/execute/scale")
+async def pg_execute_scale(req: ExecuteScaleRequest):
+    """執行 Scale 設定：推導欄位 → 呼叫 Kepware GW API → 更新 scale_status"""
+    import time, random
+    try:
+        # 1. 取得 pending 的暫存資料並推導
+        staging = pg_client.get_staging_list(page=0, page_size=9999, scale_status="pending")
+        rows = staging["data"]
+        if req.ids:
+            rows = [r for r in rows if r["id"] in req.ids]
+        if not rows:
+            return {"success": 0, "skipped": 0, "errors": [], "message": "無待設定 Scale 的資料"}
+
+        derived = pg_client.derive_scale_fields(rows)
+        if not derived:
+            return {"success": 0, "skipped": len(rows), "errors": [],
+                    "message": "無啟用 Scale 的資料（scale_enabled=false 或缺少範圍值）"}
+
+        log.info(f"[executeScale] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}")
+
+        # 2. 登入 Kepware Gateway
+        client = KepwareGatewayClient(req.kw_gw_url)
+        client.login(req.kw_gw_username, req.kw_gw_password)
+
+        success_ids = []
+        failed = []
+        success_count = 0
+        for idx, item in enumerate(derived):
+            config = {
+                "tag_name": item["tag_name"],
+                "scale_type": item["scale_type"],
+                "input_min": item["input_min"],
+                "input_max": item["input_max"],
+                "output_min": item["output_min"],
+                "output_max": item["output_max"],
+                "clamp_low": item["clamp_low"],
+                "clamp_high": item["clamp_high"],
+            }
+            if item.get("unit"):
+                config["unit"] = item["unit"]
+
+            try:
+                resp = client.set_scale(config)
+                if resp.get("success"):
+                    success_ids.append(item["id"])
+                    success_count += 1
+                else:
+                    failed.append({
+                        "tag_name": item["tag_name"],
+                        "reason": resp.get("message", "unknown error")
+                    })
+            except Exception as e:
+                failed.append({"tag_name": item["tag_name"], "reason": str(e)})
+
+            # 限速控制
+            time.sleep(req.delay + random.uniform(0.01, 0.05))
+            if success_count > 0 and success_count % req.batch_size == 0:
+                log.info(f"[executeScale] 已處理 {success_count} 筆，冷卻暫停 {req.batch_pause} 秒")
+                time.sleep(req.batch_pause)
+
+        # 3. 更新成功的暫存資料狀態
+        if success_ids:
+            pg_client.update_staging_status(success_ids, "scale_status", "done")
+
+        return {
+            "success": len(success_ids),
+            "failed": len(failed),
+            "errors": failed,
+            "message": f"成功設定 {len(success_ids)} 筆 Scale"
+        }
+    except Exception as e:
+        log.error(f"[executeScale] Scale 設定失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Scale 設定失敗: {e}")
