@@ -47,6 +47,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── 路徑常數 ──────────────────────────────────────────
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+config_manager = ConfigManager(CONFIG_FILE)
+
+
 # ── 全域狀態 ───────────────────────────────────────────
 
 task_manager = TaskManager()
@@ -73,18 +87,6 @@ def _csv_store_get(upload_id: str):
             return json.load(f)
     except Exception:
         return None
-
-# ── 路徑常數 ──────────────────────────────────────────
-
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-DATA_DIR = os.path.join(BASE_DIR, "data")
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
-CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
-
-os.makedirs(DATA_DIR, exist_ok=True)
-
-config_manager = ConfigManager(CONFIG_FILE)
 
 # 載入 .env
 from dotenv import load_dotenv
