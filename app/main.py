@@ -1258,28 +1258,24 @@ async def pg_execute_scale(req: ExecuteScaleRequest):
         success_count = 0
         for idx, item in enumerate(derived):
             config = {
+                "channel_name": item["channel_name"],
+                "device_name": item["device_name"],
                 "tag_name": item["tag_name"],
-                "scale_type": item["scale_type"],
-                "input_min": item["input_min"],
-                "input_max": item["input_max"],
-                "output_min": item["output_min"],
-                "output_max": item["output_max"],
-                "clamp_low": item["clamp_low"],
-                "clamp_high": item["clamp_high"],
+                "scaling_type": item["scaling_type"],
+                "scaling_raw_low": item["scaling_raw_low"],
+                "scaling_raw_high": item["scaling_raw_high"],
+                "scaling_scaled_low": item["scaling_scaled_low"],
+                "scaling_scaled_high": item["scaling_scaled_high"],
+                "scaling_clamp_low": item["scaling_clamp_low"],
+                "scaling_clamp_high": item["scaling_clamp_high"],
             }
-            if item.get("unit"):
-                config["unit"] = item["unit"]
+            if item.get("scaling_units"):
+                config["scaling_units"] = item["scaling_units"]
 
             try:
-                resp = client.set_scale(config)
-                if resp.get("success"):
-                    success_ids.append(item["id"])
-                    success_count += 1
-                else:
-                    failed.append({
-                        "tag_name": item["tag_name"],
-                        "reason": resp.get("message", "unknown error")
-                    })
+                client.set_tag_scaling(config)
+                success_ids.append(item["id"])
+                success_count += 1
             except Exception as e:
                 failed.append({"tag_name": item["tag_name"], "reason": str(e)})
 

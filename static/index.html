@@ -910,19 +910,21 @@
                         <div v-if="scaleDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>Tag Name</th><th>IO Device</th><th>Scale Type</th>
-                                    <th>Input Min</th><th>Input Max</th>
-                                    <th>Output Min</th><th>Output Max</th>
+                                    <th>Channel</th><th>Device</th><th>Tag Name</th>
+                                    <th>Type</th>
+                                    <th>Raw Low</th><th>Raw High</th>
+                                    <th>Scaled Low</th><th>Scaled High</th>
                                     <th>Clamp</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in pagedScaleData()" :key="r.id">
+                                        <td>{{ r.channel_name || '-' }}</td>
+                                        <td>{{ r.device_name || '-' }}</td>
                                         <td :title="r.tag_name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tag_name }}</td>
-                                        <td>{{ r.io_device || '-' }}</td>
-                                        <td><code style="font-size:12px">{{ r.scale_type }}</code></td>
-                                        <td>{{ r.input_min }}</td><td>{{ r.input_max }}</td>
-                                        <td>{{ r.output_min }}</td><td>{{ r.output_max }}</td>
-                                        <td>{{ r.clamp_low ? 'L' : '' }}{{ r.clamp_high ? 'H' : '' }}</td>
+                                        <td><code style="font-size:12px">{{ r.scaling_type === 1 ? 'Linear' : r.scaling_type === 2 ? 'SqRoot' : 'None' }}</code></td>
+                                        <td>{{ r.scaling_raw_low }}</td><td>{{ r.scaling_raw_high }}</td>
+                                        <td>{{ r.scaling_scaled_low }}</td><td>{{ r.scaling_scaled_high }}</td>
+                                        <td>{{ r.scaling_clamp_low ? 'L' : '' }}{{ r.scaling_clamp_high ? 'H' : '' }}</td>
                                     </tr>
                                 </tbody>
                             </table>

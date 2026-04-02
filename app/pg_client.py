@@ -667,10 +667,11 @@ class PGClient:
         return results
 
     def derive_scale_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 Kepware Scale 配置
+        """對暫存表資料推導 Kepware Tag Scaling 配置
 
         只回傳 scale_enabled=True 的資料行。
-        tag_name 會轉成 Kepware 路徑格式 (Channel.Device.Tag)。
+        io_device 格式預期為 "Channel.Device"，會拆分為 channel_name 和 device_name。
+        tag_name 保持原樣作為 Kepware Tag Name。
         """
         results = []
         for row in staging_rows:
@@ -688,22 +689,26 @@ class PGClient:
             if raw_low is None or raw_high is None or scaled_low is None or scaled_high is None:
                 continue
 
-            # tag_name 格式: 用底線或點分隔 → 轉 Kepware Channel.Device.Tag
-            # 暫存表的 io_device + tag_name 可組成 Kepware 路徑
+            # io_device 格式: "Channel1.Device1" → channel_name, device_name
             io_device = row.get("io_device", "")
+            parts = io_device.split(".", 1) if io_device else []
+            channel_name = parts[0] if len(parts) > 0 else ""
+            device_name = parts[1] if len(parts) > 1 else ""
 
             results.append({
                 "id": row.get("id"),
                 "tag_name": tag_name,
                 "io_device": io_device,
-                "scale_type": "linear",
-                "input_min": float(raw_low),
-                "input_max": float(raw_high),
-                "output_min": float(scaled_low),
-                "output_max": float(scaled_high),
-                "clamp_low": True,
-                "clamp_high": True,
-                "unit": "",
+                "channel_name": channel_name,
+                "device_name": device_name,
+                "scaling_type": 1,  # 1 = Linear
+                "scaling_raw_low": float(raw_low),
+                "scaling_raw_high": float(raw_high),
+                "scaling_scaled_low": float(scaled_low),
+                "scaling_scaled_high": float(scaled_high),
+                "scaling_clamp_low": True,
+                "scaling_clamp_high": True,
+                "scaling_units": "",
             })
 
         return results

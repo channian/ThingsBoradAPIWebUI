@@ -1,6 +1,7 @@
 """Kepware API Gateway Client
 
-提供登入認證與 Scale 配置操作。
+提供登入認證與 Kepware Tag Scaling 設定操作。
+使用 Kepware 內建的 PUT /api/config/tags 修改 Tag 縮放設定。
 """
 import logging
 import requests
@@ -39,46 +40,28 @@ class KepwareGatewayClient:
             "Content-Type": "application/json",
         }
 
-    def set_scale(self, config: dict) -> dict:
-        """設定單筆 Tag 的 Scale 配置
+    def set_tag_scaling(self, config: dict) -> dict:
+        """設定 Kepware Tag 的內建 Scaling
 
         config 範例:
         {
-            "tag_name": "Channel1.Device1.Temperature",
-            "scale_type": "linear",
-            "input_min": 0,
-            "input_max": 65535,
-            "output_min": 0.0,
-            "output_max": 100.0,
-            "clamp_low": true,
-            "clamp_high": true,
-            "unit": "℃"
+            "channel_name": "Channel1",
+            "device_name": "Device1",
+            "tag_name": "Temperature",
+            "scaling_type": 1,              # 0=None, 1=Linear, 2=Square Root
+            "scaling_raw_low": 0,
+            "scaling_raw_high": 65535,
+            "scaling_scaled_low": 0.0,
+            "scaling_scaled_high": 100.0,
+            "scaling_clamp_low": True,
+            "scaling_clamp_high": True,
+            "scaling_units": "℃",
         }
         """
-        resp = requests.post(
-            f"{self.base_url}/api/scale/set",
+        resp = requests.put(
+            f"{self.base_url}/api/config/tags",
             headers=self._headers,
             json=config,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def get_scale(self, tag_name: str) -> dict:
-        """查詢單筆 Tag 的 Scale 配置"""
-        resp = requests.get(
-            f"{self.base_url}/api/scale/get/{tag_name}",
-            headers=self._headers,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def list_scales(self) -> dict:
-        """列出所有 Scale 配置"""
-        resp = requests.get(
-            f"{self.base_url}/api/scale/list",
-            headers=self._headers,
             timeout=15,
         )
         resp.raise_for_status()
