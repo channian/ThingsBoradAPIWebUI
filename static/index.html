@@ -891,7 +891,7 @@
                     <div class="settings-section">
                         <div class="settings-section-title">
                             <svg viewBox="0 0 24 24"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
-                            Kepware Scale 設定推導預覽（scale_status = pending）
+                            Kepware Tag 設定推導預覽（Scale + Data Type，scale_status = pending）
                         </div>
                         <!-- Kepware Gateway 連線 -->
                         <div style="margin-bottom:14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center">
@@ -910,21 +910,27 @@
                         <div v-if="scaleDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>Channel</th><th>Device</th><th>Tag Name</th>
-                                    <th>Type</th>
+                                    <th>Channel</th><th>Device</th><th>Tag Name</th><th>Full Path</th>
+                                    <th>Scale</th><th>Data Type</th>
                                     <th>Raw Low</th><th>Raw High</th>
                                     <th>Scaled Low</th><th>Scaled High</th>
-                                    <th>Clamp</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in pagedScaleData()" :key="r.id">
                                         <td>{{ r.channel_name || '-' }}</td>
                                         <td>{{ r.device_name || '-' }}</td>
-                                        <td :title="r.tag_name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tag_name }}</td>
-                                        <td><code style="font-size:12px">{{ r.scaling_type === 1 ? 'Linear' : r.scaling_type === 2 ? 'SqRoot' : 'None' }}</code></td>
-                                        <td>{{ r.scaling_raw_low }}</td><td>{{ r.scaling_raw_high }}</td>
-                                        <td>{{ r.scaling_scaled_low }}</td><td>{{ r.scaling_scaled_high }}</td>
-                                        <td>{{ r.scaling_clamp_low ? 'L' : '' }}{{ r.scaling_clamp_high ? 'H' : '' }}</td>
+                                        <td :title="r.tag_name" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tag_name }}</td>
+                                        <td :title="r.full_tag_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code style="font-size:11px">{{ r.full_tag_name }}</code></td>
+                                        <td>
+                                            <code :style="{ color: r.scaling_type === 1 ? 'var(--success)' : 'var(--text-light)', fontSize: '12px' }">
+                                                {{ r.scaling_type === 1 ? 'Linear' : 'None' }}
+                                            </code>
+                                        </td>
+                                        <td><code style="font-size:12px">Float</code></td>
+                                        <td>{{ r.scaling_type === 1 ? r.scaling_raw_low : '-' }}</td>
+                                        <td>{{ r.scaling_type === 1 ? r.scaling_raw_high : '-' }}</td>
+                                        <td>{{ r.scaling_type === 1 ? r.scaling_scaled_low : '-' }}</td>
+                                        <td>{{ r.scaling_type === 1 ? r.scaling_scaled_high : '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -937,10 +943,12 @@
                             </div>
                         </div>
                         <div v-if="!scaleDerive.data.length && !scaleDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
-                            無需要設定 Scale 的資料（scale_enabled 為 false 或缺少範圍值）
+                            無 pending 狀態的暫存資料
                         </div>
                         <div v-if="scaleDerive.data.length" style="margin-top:14px; font-size:13px; color:var(--text-secondary)">
-                            共 {{ scaleDerive.data.length }} 筆待設定 Scale
+                            共 {{ scaleDerive.data.length }} 筆待設定，
+                            <span style="color:var(--success)">{{ scaleDerive.data.filter(r => r.scaling_type === 1).length }} 筆 Linear</span>，
+                            <span style="color:var(--text-light)">{{ scaleDerive.data.filter(r => r.scaling_type === 0).length }} 筆 None（僅設 Float）</span>
                         </div>
                         <!-- 限速設定 -->
                         <div v-if="scaleDerive.data.length" style="margin-top:14px; padding:12px; background:var(--bg-secondary); border-radius:8px; display:flex; flex-wrap:wrap; align-items:center; gap:16px; font-size:13px">

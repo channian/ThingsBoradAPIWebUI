@@ -667,49 +667,95 @@ class PGClient:
         return results
 
     def derive_scale_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 Kepware Tag Scaling 配置
+        """對暫存表資料推導 Kepware Tag Scaling 與 Data Type 設定
 
-        只回傳 scale_enabled=True 的資料行。
-        io_device 格式預期為 "Channel.Device"，會拆分為 channel_name 和 device_name。
-        tag_name 保持原樣作為 Kepware Tag Name。
+        所有 tag 都會處理：
+        - scale_enabled=YES → scaling_type=1 (Linear)，帶 raw/scaled 值
+        - scale_enabled=NO  → scaling_type=0 (None)，data_type=8 (Float)
+
+        從 tb_type (DeviceProfile) 拆解 Kepware 路徑：
+        tb_type "K8CHS-CHS-2F-CHS" → channel=K8CHS, device=CHS, tag_group=2F.CHS
+        tag_name 送出格式: "{tag_group}.{tag_name}"（API 自動拆分 group）
         """
+        devices = {d["device_name"]: d for d in self.get_devices()}
         results = []
         for row in staging_rows:
             tag_name = row.get("tag_name", "")
-            scale_enabled = row.get("scale_enabled")
-            if not tag_name or not scale_enabled:
+            if not tag_name:
                 continue
 
-            raw_low = row.get("raw_low")
-            raw_high = row.get("raw_high")
-            scaled_low = row.get("scaled_low")
-            scaled_high = row.get("scaled_high")
+            # ── 推導 tb_type（與 derive_tb_fields 同邏輯）──
+            parts = tag_name.split("_") if tag_name else []
+            site_prefix = parts[0] if len(parts) > 0 else ""
+            floor = parts[1] if len(parts) > 1 else ""
+            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
 
-            # 至少需要有 raw/scaled 範圍才有意義
-            if raw_low is None or raw_high is None or scaled_low is None or scaled_high is None:
-                continue
-
-            # io_device 格式: "Channel1.Device1" → channel_name, device_name
             io_device = row.get("io_device", "")
-            parts = io_device.split(".", 1) if io_device else []
-            channel_name = parts[0] if len(parts) > 0 else ""
-            device_name = parts[1] if len(parts) > 1 else ""
+            driver_type = _resolve_driver_type(io_device, devices)
 
-            results.append({
+            scada_node_name = (row.get("scada_node_name") or "").strip()
+            site_val = (row.get("site") or "").strip()
+            system_code_val = (row.get("system_code") or "").strip()
+            if scada_node_name:
+                nodename = scada_node_name.replace("_", "")
+            elif site_val or system_code_val:
+                nodename = site_val + system_code_val
+            else:
+                nodename = site_prefix + system
+            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
+                nodename = nodename + "IFIX"
+
+            csv_profile = (row.get("device_profile") or "").strip()
+            tb_type = csv_profile if csv_profile else f"{nodename}-{system}-{floor}-{system}"
+
+            # ── 從 tb_type 拆 Kepware 路徑 ──
+            tp = tb_type.split("-")
+            channel_name = tp[0] if len(tp) > 0 else ""
+            device_name = tp[1] if len(tp) > 1 else ""
+            # 剩餘段作為 tag_group，用 "." 接
+            tag_groups = ".".join(tp[2:]) if len(tp) > 2 else ""
+            # 完整 tag_name = tag_group.tag_name（API 自動拆分 group/tag）
+            full_tag_name = f"{tag_groups}.{tag_name}" if tag_groups else tag_name
+
+            # ── Scale 判斷 ──
+            scale_enabled = row.get("scale_enabled")
+            if scale_enabled:
+                raw_low = row.get("raw_low")
+                raw_high = row.get("raw_high")
+                scaled_low = row.get("scaled_low")
+                scaled_high = row.get("scaled_high")
+                # 有完整範圍才設 Linear，否則 fallback 為 None
+                if raw_low is not None and raw_high is not None and scaled_low is not None and scaled_high is not None:
+                    scaling_type = 1  # Linear
+                else:
+                    scaling_type = 0
+            else:
+                scaling_type = 0
+                raw_low = raw_high = scaled_low = scaled_high = None
+
+            entry = {
                 "id": row.get("id"),
                 "tag_name": tag_name,
-                "io_device": io_device,
+                "tb_type": tb_type,
                 "channel_name": channel_name,
                 "device_name": device_name,
-                "scaling_type": 1,  # 1 = Linear
-                "scaling_raw_low": float(raw_low),
-                "scaling_raw_high": float(raw_high),
-                "scaling_scaled_low": float(scaled_low),
-                "scaling_scaled_high": float(scaled_high),
-                "scaling_clamp_low": True,
-                "scaling_clamp_high": True,
-                "scaling_units": "",
-            })
+                "full_tag_name": full_tag_name,
+                "scale_enabled": bool(scale_enabled),
+                "scaling_type": scaling_type,
+                "data_type": 8,  # Float
+            }
+            if scaling_type == 1:
+                entry.update({
+                    "scaling_raw_low": float(raw_low),
+                    "scaling_raw_high": float(raw_high),
+                    "scaling_scaled_low": float(scaled_low),
+                    "scaling_scaled_high": float(scaled_high),
+                    "scaling_clamp_low": True,
+                    "scaling_clamp_high": True,
+                    "scaling_scaled_data_type": 8,  # Float
+                })
+
+            results.append(entry)
 
         return results
 

@@ -1260,23 +1260,28 @@ async def pg_execute_scale(req: ExecuteScaleRequest):
             config = {
                 "channel_name": item["channel_name"],
                 "device_name": item["device_name"],
-                "tag_name": item["tag_name"],
+                "tag_name": item["full_tag_name"],
+                "data_type": item["data_type"],
                 "scaling_type": item["scaling_type"],
-                "scaling_raw_low": item["scaling_raw_low"],
-                "scaling_raw_high": item["scaling_raw_high"],
-                "scaling_scaled_low": item["scaling_scaled_low"],
-                "scaling_scaled_high": item["scaling_scaled_high"],
-                "scaling_clamp_low": item["scaling_clamp_low"],
-                "scaling_clamp_high": item["scaling_clamp_high"],
             }
-            if item.get("scaling_units"):
-                config["scaling_units"] = item["scaling_units"]
+            # Linear 才帶 scaling 參數
+            if item["scaling_type"] == 1:
+                config.update({
+                    "scaling_raw_low": item["scaling_raw_low"],
+                    "scaling_raw_high": item["scaling_raw_high"],
+                    "scaling_scaled_low": item["scaling_scaled_low"],
+                    "scaling_scaled_high": item["scaling_scaled_high"],
+                    "scaling_clamp_low": item.get("scaling_clamp_low", True),
+                    "scaling_clamp_high": item.get("scaling_clamp_high", True),
+                    "scaling_scaled_data_type": item.get("scaling_scaled_data_type", 8),
+                })
 
             try:
                 client.set_tag_scaling(config)
                 success_ids.append(item["id"])
                 success_count += 1
             except Exception as e:
+                log.error(f"[executeScale] {item['tag_name']} 失敗: {e}")
                 failed.append({"tag_name": item["tag_name"], "reason": str(e)})
 
             # 限速控制
