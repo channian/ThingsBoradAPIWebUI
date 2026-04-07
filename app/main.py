@@ -220,6 +220,7 @@ class StagingQueryRequest(BaseModel):
     page_size: int = 50
     tb_status: Optional[str] = None
     pg_status: Optional[str] = None
+    scale_status: Optional[str] = None
 
 
 class StagingStatusRequest(BaseModel):
@@ -843,6 +844,7 @@ async def pg_staging_query(req: StagingQueryRequest):
         return pg_client.get_staging_list(
             page=req.page, page_size=req.page_size,
             tb_status=req.tb_status, pg_status=req.pg_status,
+            scale_status=req.scale_status,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查詢暫存表失敗: {e}")

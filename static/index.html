@@ -709,6 +709,12 @@
                                     <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
                                 </select>
                             </div>
+                            <div class="form-group small">
+                                <label>Scale 狀態</label>
+                                <select v-model="staging.filterScale" @change="loadStaging()">
+                                    <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
+                                </select>
+                            </div>
                             <button class="btn btn-primary btn-sm" @click="loadStaging()">
                                 <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                                 重新整理
@@ -727,7 +733,7 @@
                                 <thead><tr>
                                     <th style="width:36px"><input type="checkbox" :checked="staging.selected.length === staging.data.length && staging.data.length > 0" @change="toggleStagingSelectAll()"></th>
                                     <th>ID</th><th>Tag Name</th><th>Site</th><th>System</th>
-                                    <th>Node Name</th><th>I/O Device</th><th>TB</th><th>PG</th>
+                                    <th>Node Name</th><th>I/O Device</th><th>TB</th><th>PG</th><th>Scale</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in staging.data" :key="r.id" :class="{ 'selected-row': staging.selected.includes(r.id) }">
@@ -738,6 +744,7 @@
                                         <td>{{ r.scada_node_name }}</td><td>{{ r.io_device }}</td>
                                         <td><span class="badge" :class="'badge-' + (r.tb_status === 'done' ? 'create' : r.tb_status === 'skip' ? 'dry' : 'delete')">{{ r.tb_status }}</span></td>
                                         <td><span class="badge" :class="'badge-' + (r.pg_status === 'done' ? 'create' : r.pg_status === 'skip' ? 'dry' : 'delete')">{{ r.pg_status }}</span></td>
+                                        <td><span class="badge" :class="'badge-' + (r.scale_status === 'done' ? 'create' : r.scale_status === 'skip' ? 'dry' : 'delete')">{{ r.scale_status }}</span></td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1316,7 +1323,7 @@ createApp({
         })
         const staging = reactive({
             data: [], total: 0, page: 0, pageSize: 50, totalPages: 0,
-            filterTb: '', filterPg: '', loading: false,
+            filterTb: '', filterPg: '', filterScale: '', loading: false,
             selected: [], clearing: false,
         })
         const tbDerive = reactive({ data: [], loading: false, executing: false, result: null, page: 0, pageSize: 50 })
@@ -1762,6 +1769,7 @@ createApp({
                         page: staging.page, page_size: staging.pageSize,
                         tb_status: staging.filterTb || null,
                         pg_status: staging.filterPg || null,
+                        scale_status: staging.filterScale || null,
                     })
                 })
                 if (!resp.ok) throw new Error('Query failed')
