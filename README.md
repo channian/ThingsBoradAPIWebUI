@@ -27,6 +27,20 @@
 - 顯示操作類型、模式、成功/失敗/略過統計
 - 下載單次任務結果明細 CSV
 
+### Kepware 匯入（五步驟流程）
+
+CSV → PG 暫存表 → ThingsBoard 建點 → PG 正式表 → Kepware Scale 設定
+
+| 步驟 | 名稱 | 說明 |
+|------|------|------|
+| Step 1 | CSV 上傳 | 上傳 Kepware 點位 CSV，解析後存入 PG 暫存表 `scada_tag_config` |
+| Step 2 | 暫存資料 | 檢視暫存表，可依 `tb_status`/`pg_status`/`scale_status` 篩選，支援勾選刪除 |
+| Step 3 | TB 建點 | 從暫存表推導 TB 欄位，批次呼叫 ThingsBoard API 建立裝置，支援限速控制 |
+| Step 4 | PG 匯入 | 從暫存表推導 PG 正式欄位，寫入 `tags` 正式表 |
+| Step 5 | Scale 設定 | 從暫存表推導 Kepware Tag Scaling，透過 Kepware API Gateway 設定 |
+
+每個步驟的狀態追蹤欄位：`tb_status`、`pg_status`、`scale_status`（pending → done / skip）
+
 ### 其他
 - 即時進度條 + 串流日誌（SSE）
 - 進階流量控制設定（每筆延遲、批次暫停、隨機抖動）
@@ -46,14 +60,18 @@
            │ HTTP / SSE
 ┌──────────▼──────────────────────────┐
 │  FastAPI Backend (port 9000)        │
-│  app/main.py        路由 + API      │
-│  app/task_manager.py 背景任務管理    │
-│  app/tb_client.py    TB API 封裝    │
-└──────────┬──────────────────────────┘
-           │ REST API
-┌──────────▼──────────────────────────┐
-│  ThingsBoard (Community Edition)    │
-└─────────────────────────────────────┘
+│  app/main.py          路由 + API    │
+│  app/task_manager.py   背景任務管理  │
+│  app/tb_client.py      TB API 封裝  │
+│  app/pg_client.py      PG 資料操作  │
+│  app/kw_gw_client.py   Kepware GW   │
+│  app/config_manager.py 設定管理      │
+└──────┬──────────┬──────────┬────────┘
+       │ REST API │ SQL      │ REST API
+┌──────▼──────┐┌──▼────────┐┌▼───────────────┐
+│ ThingsBoard ││ PostgreSQL││ Kepware API GW  │
+│ (CE)        ││           ││                 │
+└─────────────┘└───────────┘└─────────────────┘
 ```
 
 | 層級 | 技術 |
@@ -61,7 +79,7 @@
 | 前端 | Vue 3（本地載入，支援離線環境） |
 | 後端 | Python FastAPI + Uvicorn |
 | 即時通訊 | Server-Sent Events (SSE) |
-| 資料儲存 | 歷史紀錄存於 `data/history.json`，無需資料庫 |
+| 資料儲存 | PostgreSQL（正式資料）+ `data/config.json`（TB 直接加點設定）+ `data/history.json`（操作歷史） |
 
 ## 快速開始
 
@@ -123,34 +141,24 @@ TB_URL=http://10.11.64.64:8082
 TB_USERNAME=tenant@thingsboard.org
 TB_PASSWORD=
 
+# PostgreSQL 連線設定
+PG_HOST=10.11.64.11
+PG_PORT=5432
+PG_DATABASE=your_db_name
+PG_USER=your_username
+PG_PASSWORD=your_password
+
+# Kepware API Gateway 連線設定（可在網頁上覆蓋）
+KW_GW_URL=http://localhost:8000
+KW_GW_USERNAME=admin
+KW_GW_PASSWORD=
+
 # Web 伺服器設定
 WEB_HOST=0.0.0.0
 WEB_PORT=9000
 ```
 
 > 連線資訊也可以直接在網頁介面上填寫，會自動記憶。
-
-## 專案結構
-
-```
-ThingsBoradAPIWebUI/
-├── app/
-│   ├── __init__.py
-│   ├── main.py            # FastAPI 路由、CSV 解析、歷史管理
-│   ├── task_manager.py    # 背景任務執行、批次新增/刪除邏輯
-│   └── tb_client.py       # ThingsBoard REST API 封裝
-├── static/
-│   ├── index.html         # Vue 3 單頁應用（完整前端）
-│   └── vue.global.prod.js # Vue 3.5.13（本地載入）
-├── data/                  # 執行時自動建立
-│   └── history.json       # 操作歷史紀錄
-├── .env.example           # 環境變數範本
-├── .gitignore
-├── requirements.txt
-├── run.py                 # 啟動入口
-├── start.bat              # Windows 一鍵啟動腳本
-└── README.md
-```
 
 ## API 端點
 
@@ -187,6 +195,137 @@ Channel1.Device1.Tag2
 ```
 
 > 支援 UTF-8（含 BOM）、Big5、GB2312 編碼。可從網頁下載 CSV 範本。
+
+## 映射規則
+
+系統中有兩套獨立的映射/設定機制，分別用於不同功能：
+
+### 設定儲存位置總覽
+
+| 設定項 | 儲存位置 | 用途 |
+|--------|----------|------|
+| 下拉選項管理 | `data/config.json`（本地檔案） | TB 直接加點的表單下拉選項 |
+| 預設值 | `data/config.json`（本地檔案） | TB 直接加點的欄位預設值 |
+| 映射規則 | `data/config.json`（本地檔案） | TB 直接加點的前綴→值對應 |
+| PG 參照表 | PostgreSQL `*_config` 表 | Kepware 匯入 Step 3/4/5 推導用 |
+| DeviceProfile | TB API → 同步到 PG `tb_device_profile` 表 | Kepware 匯入 推導 `tb_type` 和 `tabname` |
+
+### TB 直接加點（config.json）
+
+設定頁的「下拉選項管理」、「預設值」、「映射規則」三個子頁面，資料存於 `data/config.json`。
+僅用於「TB 直接加點」和「批次刪除」的手動操作表單，與 Kepware 匯入流程無關。
+
+### Kepware 匯入推導規則（PG 參照表）
+
+Kepware 匯入的 Step 3 ~ Step 5 使用 PG 參照表進行欄位推導，設定頁的「PG 參照表」子頁面可管理。
+
+#### PG 參照表
+
+| 表名 | 用途 | 欄位 |
+|------|------|------|
+| `location_config` | 廠區→BU/Zone 對應 | `bu`, `site`, `zone` |
+| `ownership_config` | Owner→Department 對應 | `data_owner`, `department` |
+| `device_config` | I/O Device→Driver Type 對應 | `device_name`, `driver_type`, `site`, `system_code` |
+| `system_config` | System Code 名稱管理 | `system_code`, `system_name` |
+| `tb_device_profile` | DeviceProfile→tabname 對應 | `name`, `description` |
+
+#### Step 3: TB 建點推導（derive_tb_fields）
+
+從暫存表推導 ThingsBoard 裝置欄位：
+
+| TB 欄位 | 推導邏輯 |
+|---------|----------|
+| `name` | 直接使用 CSV 的 `tag_name` |
+| `type` (DeviceProfile) | 優先用 CSV `device_profile`，否則推導為 `{nodename}-{system}-{floor}-{system}` |
+| `label` | 直接使用 CSV 的 `tag_name` |
+| `description` | 直接使用 CSV 的 `description` |
+
+**nodename 推導規則**：
+1. 優先使用 CSV 的 `scada_node_name`（去掉底線 `_`）
+2. 無 `scada_node_name` 時，使用 `site` + `system_code` 拼接
+3. 如果 `driver_type` 為 IFIX 且 nodename 不以 IFIX 結尾，自動加上 `IFIX` 後綴
+
+**system 推導規則**：優先使用 CSV 的 `system_code`，否則從 `tag_name` 以 `_` 分割取第三段
+
+**floor 推導規則**：從 `tag_name` 以 `_` 分割取第二段
+
+**driver_type 推導規則**：
+1. 查 `device_config` 表的 `device_name` 對應 `driver_type`
+2. 查不到時，若 `io_device` 為 `OPC` 或 `IGS` → `OPC`，否則原值
+
+#### Step 4: PG 正式表推導（derive_pg_fields）
+
+從暫存表推導 `tags` 正式表欄位：
+
+| tags 欄位 | 推導邏輯 |
+|-----------|----------|
+| `tagname` | CSV `tag_name` |
+| `description` | CSV `description` |
+| `node_name` | CSV `scada_node_name` |
+| `driver_type` | 查 `device_config` 表，OPC/IGS → OPC |
+| `address` | CSV `io_address` |
+| `tablename` | 查 `tb_device_profile` 的 `description`，fallback 為 `{BU}_{site}_{system}` |
+| `zone` | 查 `location_config` 表（by site） |
+| `bu` | 查 `location_config` 表（by site） |
+| `site` | CSV `site` |
+| `floor` | `tag_name` 分割取第二段 |
+| `system` | 優先 CSV `system_code`，fallback `tag_name` 第三段 |
+| `owner` | CSV `data_owner` |
+| `department` | 查 `ownership_config` 表（by data_owner） |
+| `data_type` | 固定 `float` |
+| `created_date` | 寫入時自動填入 `NOW()` |
+
+#### Step 5: Kepware Scale 推導（derive_scale_fields）
+
+從暫存表推導 Kepware API Gateway 的 Tag Scaling 設定：
+
+**Kepware 路徑拆解**（從 `tb_type` / DeviceProfile）：
+
+```
+tb_type = "K8CHS-CHS-2F-CHS"
+         ├─ channel_name = "K8CHS"
+         ├─ device_name  = "CHS"
+         └─ tag_groups   = "2F.CHS"
+
+full_tag_name = "{tag_groups}.{tag_name}"  → API 自動拆分 group/tag
+```
+
+**Scale 判斷邏輯**：
+
+| CSV `scale_enabled` | `scaling_type` | `data_type` | 額外欄位 |
+|---------------------|----------------|-------------|----------|
+| YES（且有完整 raw/scaled 範圍） | 1 (Linear) | 8 (Float) | `scaling_raw_low/high`, `scaling_scaled_low/high`, `scaling_clamp_low=no`, `scaling_clamp_high=no` |
+| YES（缺少範圍值） | 0 (None) | 8 (Float) | — |
+| NO / 空值 | 0 (None) | 8 (Float) | — |
+
+**Kepware API 呼叫方式**：`PUT /api/config/tags` with Bearer token
+
+## 專案結構
+
+```
+ThingsBoradAPIWebUI/
+├── app/
+│   ├── __init__.py
+│   ├── main.py            # FastAPI 路由、CSV 解析、匯入流程
+│   ├── task_manager.py    # 背景任務執行、批次新增/刪除邏輯
+│   ├── tb_client.py       # ThingsBoard REST API 封裝
+│   ├── pg_client.py       # PostgreSQL 操作（暫存表/正式表/參照表/推導）
+│   ├── kw_gw_client.py    # Kepware API Gateway 封裝（登入/Scale 設定）
+│   └── config_manager.py  # config.json 設定管理
+├── static/
+│   ├── index.html         # Vue 3 單頁應用（完整前端）
+│   └── vue.global.prod.js # Vue 3.5.13（本地載入）
+├── data/                  # 執行時自動建立
+│   ├── history.json       # 操作歷史紀錄
+│   ├── config.json        # TB 直接加點設定（下拉/預設/映射）
+│   └── csv_uploads/       # CSV 暫存檔案（file-based，重啟不遺失）
+├── .env.example           # 環境變數範本
+├── .gitignore
+├── requirements.txt
+├── run.py                 # 啟動入口
+├── start.bat              # Windows 一鍵啟動腳本
+└── README.md
+```
 
 ## 相依套件
 
@@ -326,14 +465,17 @@ Desktop Version (已停用)
 
 ### Web 版整合規劃
 
-後續計畫將桌面版功能整合至 Web 版：
+桌面版功能整合至 Web 版的進度：
 
 | 桌面版功能 | Web 版對應 | 狀態 |
 |------------|------------|------|
 | CSV → ThingsBoard 批次操作 | `app/main.py` + `app/task_manager.py` | 已完成 |
-| DuckDB 主檔管理 | 預計改為 PostgreSQL | 規劃中 |
-| config.json 設定管理 | 預計改為 Web API + 設定頁面 | 規劃中 |
-| 下拉選單管理 UI | 預計新增「設定」分頁 | 規劃中 |
+| DuckDB 主檔管理 | PostgreSQL `tags` 正式表 + `scada_tag_config` 暫存表 | 已完成 |
+| config.json 設定管理 | Web API + 設定頁面（下拉/預設/映射） | 已完成 |
+| 下拉選單管理 UI | 設定 > 下拉選項管理 | 已完成 |
+| Kepware 匯入流程 | 五步驟流程（CSV→暫存→TB→PG→Scale） | 已完成 |
+| PG 參照表管理 | 設定 > PG 參照表（Location/Ownership/Device/System/TB Profile） | 已完成 |
+| DeviceProfile 同步 | 設定 > DeviceProfile（一鍵從 TB 同步到 PG） | 已完成 |
+| Kepware Scale 設定 | Kepware API Gateway 整合 | 已完成 |
 | DataValidator 驗證 | 預計整合至 CSV 上傳流程 | 規劃中 |
 | Address 自動分配 | 預計整合至匯入流程 | 規劃中 |
-| 匯入四步驟流程 | 預計重新設計為 Web 版 | 規劃中 |
