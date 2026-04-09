@@ -852,7 +852,7 @@
                                 <thead><tr>
                                     <th>tagname</th><th>description</th><th>node_name</th><th>driver_type</th>
                                     <th>address</th><th>tabname</th><th>zone</th><th>bu</th>
-                                    <th>site</th><th>floor</th><th>owner</th><th>department</th><th>data_type</th>
+                                    <th>site</th><th>floor</th><th>system</th><th>owner</th><th>department</th><th>data_type</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in pagedPgData()" :key="r.id">
@@ -863,7 +863,7 @@
                                         <td :title="r.address" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address || '-' }}</td>
                                         <td><code style="font-size:12px">{{ r.tabname || '-' }}</code></td>
                                         <td>{{ r.zone || '-' }}</td><td>{{ r.bu || '-' }}</td>
-                                        <td>{{ r.site || '-' }}</td><td>{{ r.floor || '-' }}</td>
+                                        <td>{{ r.site || '-' }}</td><td>{{ r.floor || '-' }}</td><td>{{ r.system || '-' }}</td>
                                         <td>{{ r.owner || '-' }}</td><td>{{ r.department || '-' }}</td>
                                         <td>{{ r.data_type || '-' }}</td>
                                     </tr>

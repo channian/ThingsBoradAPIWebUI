@@ -412,6 +412,7 @@ class PGClient:
                     bu VARCHAR(100),
                     site VARCHAR(100),
                     floor VARCHAR(50),
+                    system VARCHAR(100),
                     owner VARCHAR(255),
                     department VARCHAR(255),
                     data_type VARCHAR(50) DEFAULT 'float',
@@ -428,6 +429,20 @@ class PGClient:
                 )
             """)
             log.info("[_ensure_formal_table] sequence 已同步")
+            # 確保 system 欄位存在（舊表可能沒有）
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'tags'
+                        AND column_name = 'system'
+                    ) THEN
+                        ALTER TABLE tags
+                        ADD COLUMN system VARCHAR(100);
+                    END IF;
+                END $$;
+            """)
 
     def import_formal(self, derived_rows: list) -> dict:
         """將推導後的資料寫入 tags 正式表"""
@@ -456,8 +471,9 @@ class PGClient:
                                 INSERT INTO tags
                                 (tagname, description, node_name, driver_type,
                                  address, tablename, zone, bu, site, floor,
-                                 owner, department, data_type)
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                 system, owner, department, data_type,
+                                 created_date)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                                 ON CONFLICT (tagname) DO UPDATE SET
                                     description = EXCLUDED.description,
                                     node_name = EXCLUDED.node_name,
@@ -468,6 +484,7 @@ class PGClient:
                                     bu = EXCLUDED.bu,
                                     site = EXCLUDED.site,
                                     floor = EXCLUDED.floor,
+                                    system = EXCLUDED.system,
                                     owner = EXCLUDED.owner,
                                     department = EXCLUDED.department,
                                     data_type = EXCLUDED.data_type,
@@ -483,6 +500,7 @@ class PGClient:
                                 row.get("bu", ""),
                                 row.get("site", ""),
                                 row.get("floor", ""),
+                                row.get("system", ""),
                                 row.get("owner", ""),
                                 row.get("department", ""),
                                 row.get("data_type", "float"),
@@ -659,6 +677,7 @@ class PGClient:
                 "bu": bu,
                 "site": site,
                 "floor": floor,
+                "system": system,
                 "owner": data_owner,
                 "department": department,
                 "data_type": "float",
@@ -750,8 +769,8 @@ class PGClient:
                     "scaling_raw_high": float(raw_high),
                     "scaling_scaled_low": float(scaled_low),
                     "scaling_scaled_high": float(scaled_high),
-                    "scaling_clamp_low": True,
-                    "scaling_clamp_high": True,
+                    "scaling_clamp_low": False,
+                    "scaling_clamp_high": False,
                     "scaling_scaled_data_type": 8,  # Float
                 })
 
