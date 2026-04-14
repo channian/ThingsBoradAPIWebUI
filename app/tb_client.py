@@ -4,18 +4,43 @@ ThingsBoard REST API Client
 從原始腳本抽取共用的 API 呼叫邏輯
 """
 
+import os
 import requests
 import logging
 
 log = logging.getLogger("tb_client")
 
 
+def _resolve_verify():
+    """從環境變數決定 SSL 驗證方式
+
+    優先順序:
+      1. TB_CA_BUNDLE=/path/to/ca.pem  → 使用自訂 CA 憑證
+      2. TB_VERIFY_SSL=false/0/no       → 停用驗證（自簽憑證用）
+      3. 預設                            → 驗證（True）
+    """
+    ca_bundle = os.getenv("TB_CA_BUNDLE", "").strip()
+    if ca_bundle:
+        return ca_bundle
+    verify_env = os.getenv("TB_VERIFY_SSL", "true").strip().lower()
+    if verify_env in ("false", "0", "no", "off"):
+        # 停用驗證時關閉 urllib3 警告，避免 log 洗版
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        return False
+    return True
+
+
 class ThingsBoardClient:
     """ThingsBoard REST API 封裝"""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, verify=None):
         self.base_url = base_url.rstrip("/")
         self.token = None
+        self.verify = _resolve_verify() if verify is None else verify
 
     @property
     def _headers(self):
@@ -32,6 +57,7 @@ class ThingsBoardClient:
             f"{self.base_url}/api/auth/login",
             json={"username": username, "password": password},
             timeout=10,
+            verify=self.verify,
         )
         resp.raise_for_status()
         self.token = resp.json()["token"]
@@ -49,6 +75,7 @@ class ThingsBoardClient:
             f"{self.base_url}/api/tenant/devices?deviceName={safe_name}",
             headers=self._headers,
             timeout=10,
+            verify=self.verify,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -70,6 +97,7 @@ class ThingsBoardClient:
             headers=self._headers,
             params=params,
             timeout=15,
+            verify=self.verify,
         )
         resp.raise_for_status()
         return resp.json()
@@ -83,6 +111,7 @@ class ThingsBoardClient:
             headers=self._headers,
             json=payload,
             timeout=10,
+            verify=self.verify,
         )
 
     # ── 裝置刪除 ──────────────────────────────────────
@@ -93,6 +122,7 @@ class ThingsBoardClient:
             f"{self.base_url}/api/device/{device_id}",
             headers=self._headers,
             timeout=10,
+            verify=self.verify,
         )
 
     # ── DeviceProfile ─────────────────────────────────
@@ -113,6 +143,7 @@ class ThingsBoardClient:
             headers=self._headers,
             params=params,
             timeout=15,
+            verify=self.verify,
         )
         resp.raise_for_status()
         return resp.json()

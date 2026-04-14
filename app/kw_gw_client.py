@@ -3,18 +3,42 @@
 提供登入認證與 Kepware Tag Scaling 設定操作。
 使用 Kepware 內建的 PUT /api/config/tags 修改 Tag 縮放設定。
 """
+import os
 import logging
 import requests
 
 log = logging.getLogger("kw_gw_client")
 
 
+def _resolve_verify():
+    """從環境變數決定 SSL 驗證方式
+
+    優先順序:
+      1. KW_GW_CA_BUNDLE=/path/to/ca.pem  → 使用自訂 CA 憑證
+      2. KW_GW_VERIFY_SSL=false/0/no       → 停用驗證（自簽憑證用）
+      3. 預設                               → 驗證（True）
+    """
+    ca_bundle = os.getenv("KW_GW_CA_BUNDLE", "").strip()
+    if ca_bundle:
+        return ca_bundle
+    verify_env = os.getenv("KW_GW_VERIFY_SSL", "true").strip().lower()
+    if verify_env in ("false", "0", "no", "off"):
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        return False
+    return True
+
+
 class KepwareGatewayClient:
     """Kepware API Gateway 連線封裝"""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, verify=None):
         self.base_url = base_url.rstrip("/")
         self.token = None
+        self.verify = _resolve_verify() if verify is None else verify
 
     def login(self, username: str, password: str) -> str:
         """登入取得 Bearer Token"""
@@ -22,6 +46,7 @@ class KepwareGatewayClient:
             f"{self.base_url}/api/auth/login",
             json={"username": username, "password": password},
             timeout=15,
+            verify=self.verify,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -63,6 +88,7 @@ class KepwareGatewayClient:
             headers=self._headers,
             json=config,
             timeout=15,
+            verify=self.verify,
         )
         resp.raise_for_status()
         return resp.json()
