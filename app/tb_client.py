@@ -34,13 +34,28 @@ def _resolve_verify():
     return True
 
 
+def _resolve_proxies():
+    """從環境變數決定是否透過 HTTP Proxy 呼叫 TB
+
+    TB_USE_PROXY=true/1/yes  → 回傳 None（由 requests 讀取 HTTP_PROXY 等環境變數）
+    其他（含預設）           → 回傳 {"http": None, "https": None}（繞過 proxy）
+
+    內網 TB 通常不需要走 proxy，預設就繞過避免企業 proxy 連不到內網 IP 的問題。
+    """
+    use_proxy = os.getenv("TB_USE_PROXY", "false").strip().lower()
+    if use_proxy in ("true", "1", "yes", "on"):
+        return None
+    return {"http": None, "https": None}
+
+
 class ThingsBoardClient:
     """ThingsBoard REST API 封裝"""
 
-    def __init__(self, base_url: str, verify=None):
+    def __init__(self, base_url: str, verify=None, proxies=None):
         self.base_url = base_url.rstrip("/")
         self.token = None
         self.verify = _resolve_verify() if verify is None else verify
+        self.proxies = _resolve_proxies() if proxies is None else proxies
 
     @property
     def _headers(self):
@@ -58,6 +73,7 @@ class ThingsBoardClient:
             json={"username": username, "password": password},
             timeout=10,
             verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         self.token = resp.json()["token"]
@@ -76,6 +92,7 @@ class ThingsBoardClient:
             headers=self._headers,
             timeout=10,
             verify=self.verify,
+            proxies=self.proxies,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -98,6 +115,7 @@ class ThingsBoardClient:
             params=params,
             timeout=15,
             verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         return resp.json()
@@ -112,6 +130,7 @@ class ThingsBoardClient:
             json=payload,
             timeout=10,
             verify=self.verify,
+            proxies=self.proxies,
         )
 
     # ── 裝置刪除 ──────────────────────────────────────
@@ -123,6 +142,7 @@ class ThingsBoardClient:
             headers=self._headers,
             timeout=10,
             verify=self.verify,
+            proxies=self.proxies,
         )
 
     # ── DeviceProfile ─────────────────────────────────
@@ -144,6 +164,7 @@ class ThingsBoardClient:
             params=params,
             timeout=15,
             verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         return resp.json()

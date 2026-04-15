@@ -32,13 +32,26 @@ def _resolve_verify():
     return True
 
 
+def _resolve_proxies():
+    """從環境變數決定是否透過 HTTP Proxy 呼叫 Kepware GW
+
+    KW_GW_USE_PROXY=true/1/yes  → 回傳 None（讀取環境變數 HTTP_PROXY 等）
+    其他（含預設）              → 回傳 {"http": None, "https": None}（繞過 proxy）
+    """
+    use_proxy = os.getenv("KW_GW_USE_PROXY", "false").strip().lower()
+    if use_proxy in ("true", "1", "yes", "on"):
+        return None
+    return {"http": None, "https": None}
+
+
 class KepwareGatewayClient:
     """Kepware API Gateway 連線封裝"""
 
-    def __init__(self, base_url: str, verify=None):
+    def __init__(self, base_url: str, verify=None, proxies=None):
         self.base_url = base_url.rstrip("/")
         self.token = None
         self.verify = _resolve_verify() if verify is None else verify
+        self.proxies = _resolve_proxies() if proxies is None else proxies
 
     def login(self, username: str, password: str) -> str:
         """登入取得 Bearer Token"""
@@ -47,6 +60,7 @@ class KepwareGatewayClient:
             json={"username": username, "password": password},
             timeout=15,
             verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -89,6 +103,7 @@ class KepwareGatewayClient:
             json=config,
             timeout=15,
             verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         return resp.json()
