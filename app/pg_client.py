@@ -534,6 +534,7 @@ class PGClient:
         # 載入參照表做快取
         devices = {d["device_name"]: d for d in self.get_devices()}
         profiles = {p["name"]: p for p in self.get_tb_profiles()}
+        locations = self.get_locations()
 
         results = []
         for row in staging_rows:
@@ -559,14 +560,16 @@ class PGClient:
                 nodename = site_val + system_code_val
             else:
                 nodename = site_prefix + system
-            # iFIX 加後綴
-            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
-                nodename = nodename + "IFIX"
 
             # DeviceProfile: CSV 有填就優先用
             csv_profile = (row.get("device_profile") or "").strip()
             if csv_profile:
                 derived_profile = csv_profile
+            elif driver_type.upper() == "IFIX":
+                # PLC-IFIX: nodename-zone-site-system
+                matched_loc = next((l for l in locations if l["site"] == site_val), None)
+                zone = matched_loc["zone"] if matched_loc else ""
+                derived_profile = f"{nodename}-{zone}-{site_prefix}-{system}"
             else:
                 derived_profile = f"{nodename}-{system}-{floor}-{system}"
 
@@ -651,13 +654,18 @@ class PGClient:
                 nodename = site_val + system_code_val
             else:
                 nodename = site_prefix + system
-            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
-                nodename = nodename + "IFIX"
 
-            # tabname = BU_SITE_SYSTEM，可被 Tb_Device_Profile 覆寫
+            # tabname: 先查 Tb_Device_Profile，查不到就用規則推導
             csv_profile = (row.get("device_profile") or "").strip()
             if csv_profile and csv_profile in profiles:
                 tabname = profiles[csv_profile].get("description", "")
+            elif driver_type.upper() == "IFIX":
+                # PLC-IFIX: dp_name = nodename-zone-site-system
+                dp_name = f"{nodename}-{zone}-{site_prefix}-{system}"
+                if dp_name in profiles:
+                    tabname = profiles[dp_name].get("description", "")
+                else:
+                    tabname = f"{zone}_{site_prefix}_{system}" if zone else ""
             else:
                 dp_name = f"{nodename}-{system}-{floor}-{system}"
                 if dp_name in profiles:
@@ -697,6 +705,7 @@ class PGClient:
         tag_name 送出格式: "{tag_group}.{tag_name}"（API 自動拆分 group）
         """
         devices = {d["device_name"]: d for d in self.get_devices()}
+        locations = self.get_locations()
         results = []
         for row in staging_rows:
             tag_name = row.get("tag_name", "")
@@ -721,11 +730,16 @@ class PGClient:
                 nodename = site_val + system_code_val
             else:
                 nodename = site_prefix + system
-            if driver_type.upper() == "IFIX" and not nodename.upper().endswith("IFIX"):
-                nodename = nodename + "IFIX"
 
             csv_profile = (row.get("device_profile") or "").strip()
-            tb_type = csv_profile if csv_profile else f"{nodename}-{system}-{floor}-{system}"
+            if csv_profile:
+                tb_type = csv_profile
+            elif driver_type.upper() == "IFIX":
+                matched_loc = next((l for l in locations if l["site"] == site_val), None)
+                zone = matched_loc["zone"] if matched_loc else ""
+                tb_type = f"{nodename}-{zone}-{site_prefix}-{system}"
+            else:
+                tb_type = f"{nodename}-{system}-{floor}-{system}"
 
             # ── 從 tb_type 拆 Kepware 路徑 ──
             tp = tb_type.split("-")
