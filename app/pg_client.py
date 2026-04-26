@@ -75,6 +75,16 @@ class PGClient:
                     name VARCHAR(255) NOT NULL UNIQUE,
                     description TEXT
                 );
+                CREATE TABLE IF NOT EXISTS kepitsimple_user (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL,
+                    display_name VARCHAR(255),
+                    role VARCHAR(20) NOT NULL DEFAULT 'operator',
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
             """)
 
     def _ensure_scale_status_column(self, conn):
@@ -393,6 +403,89 @@ class PGClient:
             with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {table} WHERE id = %s", (row_id,))
                 return cur.rowcount > 0
+
+    # ── 使用者管理 (kepitsimple_user) ──────────────────
+
+    def get_user_by_username(self, username: str) -> dict:
+        """依帳號查詢使用者"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM kepitsimple_user WHERE username = %s",
+                    (username,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def get_all_users(self) -> list:
+        """取得所有使用者（不含密碼）"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, username, display_name, role, is_active, created_at, updated_at
+                    FROM kepitsimple_user ORDER BY id
+                """)
+                return [dict(r) for r in cur.fetchall()]
+
+    def create_user(self, username: str, password_hash: str,
+                    display_name: str = "", role: str = "operator") -> dict:
+        """建立使用者"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO kepitsimple_user (username, password_hash, display_name, role)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, username, display_name, role, is_active, created_at
+                """, (username, password_hash, display_name, role))
+                return dict(cur.fetchone())
+
+    def update_user(self, user_id: int, **fields) -> bool:
+        """更新使用者欄位（display_name, role, is_active）"""
+        allowed = {"display_name", "role", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        updates["updated_at"] = "NOW()"
+        set_parts = []
+        params = []
+        for k, v in updates.items():
+            if v == "NOW()":
+                set_parts.append(f"{k} = NOW()")
+            else:
+                set_parts.append(f"{k} = %s")
+                params.append(v)
+        params.append(user_id)
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE kepitsimple_user SET {', '.join(set_parts)} WHERE id = %s",
+                    params,
+                )
+                return cur.rowcount > 0
+
+    def update_user_password(self, user_id: int, password_hash: str) -> bool:
+        """更新使用者密碼"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE kepitsimple_user SET password_hash = %s, updated_at = NOW() WHERE id = %s",
+                    (password_hash, user_id),
+                )
+                return cur.rowcount > 0
+
+    def delete_user(self, user_id: int) -> bool:
+        """刪除使用者"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM kepitsimple_user WHERE id = %s", (user_id,))
+                return cur.rowcount > 0
+
+    def count_users(self) -> int:
+        """計算使用者數量"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM kepitsimple_user")
+                return cur.fetchone()[0]
 
     # ── PG 正式表寫入 ─────────────────────────────────
 

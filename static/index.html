@@ -266,11 +266,39 @@
             .tab { padding: 12px 16px; font-size: 13px; }
             .summary-stats { gap: 24px; }
         }
+        .login-overlay { position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center; }
+        .login-card { background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-lg);padding:40px;width:380px;max-width:90vw; }
+        .login-header { text-align:center;margin-bottom:24px; }
     </style>
 </head>
 <body>
 
 <div id="app">
+    <!-- Login Overlay -->
+    <div v-if="!auth.token" class="login-overlay">
+        <div class="login-card">
+            <div class="login-header">
+                <svg viewBox="0 0 24 24" style="width:32px;height:32px;stroke:var(--primary);fill:none;stroke-width:2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <h2 style="margin:0;font-size:20px">Kepware 點位管理系統</h2>
+                <p style="margin:4px 0 0;color:var(--text-secondary);font-size:13px">請登入以繼續操作</p>
+            </div>
+            <form @submit.prevent="userLogin" style="display:flex;flex-direction:column;gap:12px">
+                <div class="form-group">
+                    <label>帳號</label>
+                    <input v-model="auth.username" placeholder="帳號" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label>密碼</label>
+                    <input v-model="auth.password" type="password" placeholder="密碼" autocomplete="current-password" required>
+                </div>
+                <button class="btn btn-primary" type="submit" :disabled="auth.logging" style="width:100%;padding:10px">
+                    {{ auth.logging ? '登入中...' : '登入' }}
+                </button>
+                <div v-if="auth.error" style="color:var(--error);font-size:13px;text-align:center">{{ auth.error }}</div>
+            </form>
+        </div>
+    </div>
+
     <header class="header">
         <div class="header-icon">
             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -279,10 +307,16 @@
             <h1>Kepware 點位管理系統</h1>
             <div class="subtitle">ThingsBoard Device Management</div>
         </div>
-        <button class="theme-toggle" @click="toggleTheme">
-            <span v-html="theme === 'light' ? '&#9790;' : '&#9728;&#65039;'"></span>
-            {{ theme === 'light' ? '深色模式' : '淺色模式' }}
-        </button>
+        <div style="display:flex;align-items:center;gap:10px">
+            <span v-if="auth.token" style="font-size:13px;color:rgba(255,255,255,0.85)">
+                {{ auth.displayName || auth.user }} ({{ auth.role }})
+            </span>
+            <button v-if="auth.token" class="theme-toggle" @click="userLogout" style="color:rgba(255,255,255,0.8);border-color:rgba(255,255,255,0.3)">登出</button>
+            <button class="theme-toggle" @click="toggleTheme">
+                <span v-html="theme === 'light' ? '&#9790;' : '&#9728;&#65039;'"></span>
+                {{ theme === 'light' ? '深色模式' : '淺色模式' }}
+            </button>
+        </div>
     </header>
 
     <main class="container">
@@ -719,11 +753,11 @@
                                 <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                                 重新整理
                             </button>
-                            <button class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="deleteSelectedStaging()" :disabled="!staging.selected.length">
+                            <button v-if="auth.role === 'admin'" class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="deleteSelectedStaging()" :disabled="!staging.selected.length">
                                 <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                 刪除勾選 ({{ staging.selected.length }})
                             </button>
-                            <button class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="clearAllStaging()" :disabled="staging.clearing || !staging.total">
+                            <button v-if="auth.role === 'admin'" class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="clearAllStaging()" :disabled="staging.clearing || !staging.total">
                                 {{ staging.clearing ? '清空中...' : '清空全部' }}
                             </button>
                             <span style="font-size:13px; color:var(--text-secondary)">共 {{ staging.total }} 筆</span>
@@ -990,11 +1024,12 @@
             <!-- =============== Settings Tab =============== -->
             <div v-show="activeTab === 'settings'">
                 <div class="sub-tabs">
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'dropdown' }" @click="settingsSubTab = 'dropdown'">下拉選項管理</div>
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'dropdown' }" @click="settingsSubTab = 'dropdown'">下拉選項管理</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; loadUsers()">帳號管理</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
@@ -1257,6 +1292,56 @@
                             </div>
                         </div>
                     </div>
+
+                <!-- Account Management (admin only) -->
+                <div v-show="settingsSubTab === 'accounts'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            帳號管理
+                        </div>
+                        <!-- Add user form -->
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+                            <div class="form-group small"><label>帳號</label><input v-model="userForm.username" placeholder="帳號"></div>
+                            <div class="form-group small"><label>密碼</label><input v-model="userForm.password" type="password" placeholder="密碼"></div>
+                            <div class="form-group small"><label>顯示名稱</label><input v-model="userForm.displayName" placeholder="選填"></div>
+                            <div class="form-group small"><label>角色</label>
+                                <select v-model="userForm.role"><option value="operator">operator</option><option value="admin">admin</option></select>
+                            </div>
+                            <button class="btn btn-primary btn-sm" @click="createUser">新增帳號</button>
+                        </div>
+                        <!-- User list -->
+                        <div v-if="userList.length" class="table-wrapper">
+                            <table>
+                                <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>角色</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="u in userList" :key="u.id">
+                                        <td>{{ u.id }}</td>
+                                        <td><strong>{{ u.username }}</strong></td>
+                                        <td>{{ u.display_name || '-' }}</td>
+                                        <td>
+                                            <select :value="u.role" @change="updateUserRole(u.id, $event.target.value)" style="padding:2px 6px;font-size:12px;border-radius:4px;border:1px solid var(--border)">
+                                                <option value="operator">operator</option><option value="admin">admin</option>
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <span class="badge" :class="u.is_active ? 'badge-create' : 'badge-delete'" style="cursor:pointer" @click="toggleUserActive(u.id, !u.is_active)">
+                                                {{ u.is_active ? '啟用' : '停用' }}
+                                            </span>
+                                        </td>
+                                        <td style="font-size:12px">{{ formatISOTime(u.created_at) }}</td>
+                                        <td style="display:flex;gap:4px">
+                                            <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" @click="resetUserPassword(u.id, u.username)">重設密碼</button>
+                                            <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:var(--error);border-color:var(--error)" @click="deleteUser(u.id, u.username)">刪除</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="!userList.length" style="text-align:center;padding:30px;color:var(--text-light)">無使用者資料</div>
+                    </div>
+                </div>
+
                 </div>
             </div>
         </div>
@@ -1286,6 +1371,94 @@ const { createApp, ref, reactive, computed, nextTick, watch } = Vue
 
 createApp({
     setup() {
+        // ── Auth State ──
+        const auth = reactive({
+            token: localStorage.getItem('kep_token') || '',
+            user: localStorage.getItem('kep_user') || '',
+            role: localStorage.getItem('kep_role') || '',
+            displayName: localStorage.getItem('kep_display') || '',
+            username: '', password: '', logging: false, error: '',
+        })
+
+        function authHeaders() {
+            return auth.token ? { 'Authorization': `Bearer ${auth.token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' }
+        }
+
+        async function userLogin() {
+            auth.logging = true; auth.error = ''
+            try {
+                const resp = await fetch('/api/user/login', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: auth.username, password: auth.password })
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || '登入失敗') }
+                const data = await resp.json()
+                auth.token = data.token; auth.user = data.username
+                auth.role = data.role; auth.displayName = data.display_name || ''
+                localStorage.setItem('kep_token', data.token)
+                localStorage.setItem('kep_user', data.username)
+                localStorage.setItem('kep_role', data.role)
+                localStorage.setItem('kep_display', data.display_name || '')
+                auth.username = ''; auth.password = ''
+            } catch (e) { auth.error = e.message }
+            finally { auth.logging = false }
+        }
+
+        function userLogout() {
+            auth.token = ''; auth.user = ''; auth.role = ''; auth.displayName = ''
+            localStorage.removeItem('kep_token'); localStorage.removeItem('kep_user')
+            localStorage.removeItem('kep_role'); localStorage.removeItem('kep_display')
+        }
+
+        // ── User Management State ──
+        const userList = ref([])
+        const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator' })
+
+        async function loadUsers() {
+            try {
+                const resp = await fetch('/api/admin/users', { headers: authHeaders() })
+                if (resp.status === 401) { userLogout(); return }
+                if (resp.ok) userList.value = await resp.json()
+            } catch (e) { console.error(e) }
+        }
+
+        async function createUser() {
+            if (!userForm.username || !userForm.password) { alert('帳號和密碼為必填'); return }
+            try {
+                const resp = await fetch('/api/admin/users', {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ username: userForm.username, password: userForm.password, display_name: userForm.displayName, role: userForm.role })
+                })
+                if (!resp.ok) { const e = await resp.json(); alert(e.detail || '建立失敗'); return }
+                userForm.username = ''; userForm.password = ''; userForm.displayName = ''; userForm.role = 'operator'
+                loadUsers()
+            } catch (e) { alert(e.message) }
+        }
+
+        async function updateUserRole(userId, newRole) {
+            await fetch(`/api/admin/users/${userId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ role: newRole }) })
+            loadUsers()
+        }
+
+        async function toggleUserActive(userId, active) {
+            await fetch(`/api/admin/users/${userId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ is_active: active }) })
+            loadUsers()
+        }
+
+        async function resetUserPassword(userId, username) {
+            const newPass = prompt(`請輸入 ${username} 的新密碼:`)
+            if (!newPass) return
+            await fetch(`/api/admin/users/${userId}/reset-password`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ new_password: newPass }) })
+            alert('密碼已重設')
+        }
+
+        async function deleteUser(userId, username) {
+            if (!confirm(`確定刪除帳號 ${username}？`)) return
+            const resp = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE', headers: authHeaders() })
+            if (!resp.ok) { const e = await resp.json(); alert(e.detail || '刪除失敗'); return }
+            loadUsers()
+        }
+
         const conn = reactive({ url: '', username: '', password: '', token: null, status: 'disconnected' })
         const connStatusText = computed(() => ({ disconnected: '未連線', connecting: '連線中...', connected: '已連線', error: '連線失敗' })[conn.status])
         const activeTab = ref('create')
@@ -1785,9 +1958,10 @@ createApp({
             if (!confirm(`確定刪除勾選的 ${staging.selected.length} 筆暫存資料？`)) return
             try {
                 const resp = await fetch('/api/pg/staging/delete', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ ids: staging.selected })
                 })
+                if (resp.status === 401) { userLogout(); return }
                 if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
                 const data = await resp.json()
                 alert(`已刪除 ${data.deleted} 筆`)
@@ -1800,7 +1974,8 @@ createApp({
             if (!confirm('確定清空全部暫存表資料？此操作無法復原！')) return
             staging.clearing = true
             try {
-                const resp = await fetch('/api/pg/staging/clear', { method: 'DELETE' })
+                const resp = await fetch('/api/pg/staging/clear', { method: 'DELETE', headers: authHeaders() })
+                if (resp.status === 401) { userLogout(); return }
                 if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
                 const data = await resp.json()
                 alert(`已清空 ${data.deleted} 筆`)
@@ -2095,6 +2270,10 @@ createApp({
         watch(() => [conn.url, conn.username], () => { localStorage.setItem('tb_conn', JSON.stringify({ url: conn.url, username: conn.username })) })
 
         return {
+            // Auth
+            auth, userLogin, userLogout, authHeaders,
+            userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
+            // Core
             conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal, theme,
             createLogArea, deleteLogArea, queryLogArea, createProgress, deleteProgress, isAllSelected, hasTypeHeader,
             testConnection, handleFileSelect, handleDrop, startTask, confirmDelete, toggleTheme,

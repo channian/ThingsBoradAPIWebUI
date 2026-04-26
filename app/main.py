@@ -30,6 +30,10 @@ from app.task_manager import (
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
+from app.auth import (
+    hash_password, verify_password, create_token,
+    get_current_user, require_admin,
+)
 
 # ── Logging ────────────────────────────────────────────
 
@@ -94,6 +98,28 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 pg_client = PGClient()
+
+
+def _ensure_admin_user():
+    """啟動時確保至少有一個 admin 帳號"""
+    try:
+        if pg_client.count_users() == 0:
+            admin_user = os.getenv("ADMIN_USERNAME", "admin")
+            admin_pass = os.getenv("ADMIN_PASSWORD", "admin")
+            pg_client.create_user(
+                username=admin_user,
+                password_hash=hash_password(admin_pass),
+                display_name="管理員",
+                role="admin",
+            )
+            log.info(f"[auth] 自動建立初始管理員帳號: {admin_user}")
+    except Exception as e:
+        log.warning(f"[auth] 無法檢查/建立初始帳號（PG 可能尚未連線）: {e}")
+
+
+@app.on_event("startup")
+async def on_startup():
+    _ensure_admin_user()
 
 
 # ── 歷史紀錄管理 ──────────────────────────────────────
@@ -314,7 +340,125 @@ class KwGwSettingsRequest(BaseModel):
     kw_gw_password: str
 
 
-# ── API: 認證 ──────────────────────────────────────────
+class UserLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+    role: str = "operator"
+
+
+class UserUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class UserPasswordRequest(BaseModel):
+    old_password: Optional[str] = None
+    new_password: str
+
+
+# ── API: 使用者認證 ───────────────────────────────────
+
+@app.post("/api/user/login")
+async def user_login(req: UserLoginRequest):
+    """使用者登入取得 JWT Token"""
+    user = pg_client.get_user_by_username(req.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+    if not user.get("is_active"):
+        raise HTTPException(status_code=403, detail="帳號已停用")
+    if not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+    token = create_token(user["username"], user["role"], user.get("display_name", ""))
+    return {
+        "token": token,
+        "username": user["username"],
+        "role": user["role"],
+        "display_name": user.get("display_name", ""),
+    }
+
+
+@app.get("/api/user/me")
+async def user_me(user: dict = Depends(get_current_user)):
+    """取得目前登入者資訊"""
+    return user
+
+
+@app.post("/api/user/change-password")
+async def user_change_password(req: UserPasswordRequest,
+                               user: dict = Depends(get_current_user)):
+    """使用者自行修改密碼"""
+    db_user = pg_client.get_user_by_username(user["sub"])
+    if not db_user:
+        raise HTTPException(status_code=404, detail="找不到使用者")
+    if req.old_password and not verify_password(req.old_password, db_user["password_hash"]):
+        raise HTTPException(status_code=400, detail="舊密碼錯誤")
+    pg_client.update_user_password(db_user["id"], hash_password(req.new_password))
+    return {"success": True, "message": "密碼已更新"}
+
+
+# ── API: 帳號管理 (admin only) ────────────────────────
+
+@app.get("/api/admin/users")
+async def admin_list_users(user: dict = Depends(require_admin)):
+    """取得所有使用者列表"""
+    return pg_client.get_all_users()
+
+
+@app.post("/api/admin/users")
+async def admin_create_user(req: UserCreateRequest,
+                            user: dict = Depends(require_admin)):
+    """新增使用者"""
+    if pg_client.get_user_by_username(req.username):
+        raise HTTPException(status_code=409, detail=f"帳號 {req.username} 已存在")
+    if req.role not in ("admin", "operator"):
+        raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
+    result = pg_client.create_user(
+        username=req.username,
+        password_hash=hash_password(req.password),
+        display_name=req.display_name,
+        role=req.role,
+    )
+    return result
+
+
+@app.put("/api/admin/users/{user_id}")
+async def admin_update_user(user_id: int, req: UserUpdateRequest,
+                            user: dict = Depends(require_admin)):
+    """更新使用者資訊"""
+    fields = {k: v for k, v in req.dict().items() if v is not None}
+    if "role" in fields and fields["role"] not in ("admin", "operator"):
+        raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
+    pg_client.update_user(user_id, **fields)
+    return {"success": True}
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: int, req: UserPasswordRequest,
+                               user: dict = Depends(require_admin)):
+    """管理員重設使用者密碼"""
+    pg_client.update_user_password(user_id, hash_password(req.new_password))
+    return {"success": True, "message": "密碼已重設"}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int,
+                            user: dict = Depends(require_admin)):
+    """刪除使用者"""
+    target = pg_client.get_user_by_username(user["sub"])
+    if target and target["id"] == user_id:
+        raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
+    pg_client.delete_user(user_id)
+    return {"success": True}
+
+
+# ── API: TB 認證 ──────────────────────────────────────
 
 @app.post("/api/auth/login")
 async def auth_login(req: LoginRequest):
@@ -861,8 +1005,9 @@ async def pg_staging_update_status(req: StagingStatusRequest):
 
 
 @app.post("/api/pg/staging/delete")
-async def pg_staging_delete(req: StagingDeleteRequest):
-    """刪除暫存表資料"""
+async def pg_staging_delete(req: StagingDeleteRequest,
+                            user: dict = Depends(require_admin)):
+    """刪除暫存表資料（admin only）"""
     try:
         count = pg_client.delete_staging(req.ids)
         return {"success": True, "deleted": count}
@@ -871,8 +1016,8 @@ async def pg_staging_delete(req: StagingDeleteRequest):
 
 
 @app.delete("/api/pg/staging/clear")
-async def pg_staging_clear():
-    """清空暫存表"""
+async def pg_staging_clear(user: dict = Depends(require_admin)):
+    """清空暫存表（admin only）"""
     try:
         count = pg_client.clear_staging()
         return {"success": True, "deleted": count}
