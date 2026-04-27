@@ -299,6 +299,36 @@
         </div>
     </div>
 
+    <!-- Account Settings Dialog -->
+    <div v-if="showAccountDialog" class="login-overlay" @click.self="showAccountDialog = false">
+        <div class="login-card" style="max-width:400px">
+            <div class="login-header">
+                <svg viewBox="0 0 24 24" style="width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span style="font-size:18px;font-weight:700">帳號設定</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+                <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;font-size:13px">
+                    <div style="margin-bottom:4px"><strong>帳號：</strong>{{ auth.user }}</div>
+                    <div style="margin-bottom:4px"><strong>顯示名稱：</strong>{{ auth.displayName || '-' }}</div>
+                    <div><strong>角色：</strong>{{ auth.role }}</div>
+                </div>
+                <div style="border-top:1px solid var(--border);padding-top:14px">
+                    <div style="font-weight:600;margin-bottom:10px">變更密碼</div>
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                        <div class="form-group small"><label>目前密碼</label><input v-model="pwForm.oldPassword" type="password" placeholder="目前密碼"></div>
+                        <div class="form-group small"><label>新密碼</label><input v-model="pwForm.newPassword" type="password" placeholder="新密碼"></div>
+                        <div class="form-group small"><label>確認新密碼</label><input v-model="pwForm.confirmPassword" type="password" placeholder="再輸入一次新密碼"></div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        <button class="btn btn-primary btn-sm" @click="changeMyPassword">變更密碼</button>
+                        <button class="btn btn-outline btn-sm" @click="showAccountDialog = false; pwForm.oldPassword = ''; pwForm.newPassword = ''; pwForm.confirmPassword = ''; pwMsg.text = ''">關閉</button>
+                    </div>
+                    <div v-if="pwMsg.text" :style="{ color: pwMsg.error ? 'var(--error)' : 'var(--success)', fontSize: '13px', marginTop: '8px' }">{{ pwMsg.text }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <header class="header">
         <div class="header-icon">
             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -311,6 +341,7 @@
             <span v-if="auth.token" style="font-size:13px;color:rgba(255,255,255,0.85)">
                 {{ auth.displayName || auth.user }} ({{ auth.role }})
             </span>
+            <button v-if="auth.token" class="theme-toggle" @click="showAccountDialog = true" style="color:rgba(255,255,255,0.8);border-color:rgba(255,255,255,0.3)">帳號設定</button>
             <button v-if="auth.token" class="theme-toggle" @click="userLogout" style="color:rgba(255,255,255,0.8);border-color:rgba(255,255,255,0.3)">登出</button>
             <button class="theme-toggle" @click="toggleTheme">
                 <span v-html="theme === 'light' ? '&#9790;' : '&#9728;&#65039;'"></span>
@@ -1410,6 +1441,27 @@ createApp({
             localStorage.removeItem('kep_role'); localStorage.removeItem('kep_display')
         }
 
+        // ── Personal Account Settings ──
+        const showAccountDialog = ref(false)
+        const pwForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+        const pwMsg = reactive({ text: '', error: false })
+
+        async function changeMyPassword() {
+            pwMsg.text = ''; pwMsg.error = false
+            if (!pwForm.newPassword) { pwMsg.text = '請輸入新密碼'; pwMsg.error = true; return }
+            if (pwForm.newPassword !== pwForm.confirmPassword) { pwMsg.text = '兩次密碼不一致'; pwMsg.error = true; return }
+            try {
+                const resp = await fetch('/api/user/change-password', {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ old_password: pwForm.oldPassword, new_password: pwForm.newPassword })
+                })
+                if (resp.status === 401) { userLogout(); return }
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || '變更失敗') }
+                pwMsg.text = '密碼已變更'; pwMsg.error = false
+                pwForm.oldPassword = ''; pwForm.newPassword = ''; pwForm.confirmPassword = ''
+            } catch (e) { pwMsg.text = e.message; pwMsg.error = true }
+        }
+
         // ── User Management State ──
         const userList = ref([])
         const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator' })
@@ -2271,7 +2323,7 @@ createApp({
 
         return {
             // Auth
-            auth, userLogin, userLogout, authHeaders,
+            auth, userLogin, userLogout, authHeaders, showAccountDialog, pwForm, pwMsg, changeMyPassword,
             userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
             // Core
             conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal, theme,
