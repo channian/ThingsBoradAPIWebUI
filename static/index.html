@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kepware 點位管理系統</title>
+    <title>Kep It Sample</title>
     <style>
         :root {
             --primary: #2563eb; --primary-dark: #1d4ed8; --primary-light: #eff6ff;
@@ -279,7 +279,7 @@
         <div class="login-card">
             <div class="login-header">
                 <svg viewBox="0 0 24 24" style="width:32px;height:32px;stroke:var(--primary);fill:none;stroke-width:2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                <h2 style="margin:0;font-size:20px">Kepware 點位管理系統</h2>
+                <h2 style="margin:0;font-size:20px">Kep It Sample</h2>
                 <p style="margin:4px 0 0;color:var(--text-secondary);font-size:13px">請登入以繼續操作</p>
             </div>
             <form @submit.prevent="userLogin" style="display:flex;flex-direction:column;gap:12px">
@@ -304,8 +304,8 @@
             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         </div>
         <div>
-            <h1>Kepware 點位管理系統</h1>
-            <div class="subtitle">ThingsBoard Device Management</div>
+            <h1>Kep It Simple</h1>
+            <div class="subtitle">Kepware Tag Management</div>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
             <span v-if="auth.token" style="font-size:13px;color:rgba(255,255,255,0.85)">
@@ -481,7 +481,7 @@
                 <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
                     <!-- A File Upload -->
                     <div style="flex:1;min-width:250px">
-                        <div style="font-weight:600;margin-bottom:6px">A 檔案（IO List / 需求表）</div>
+                        <div style="font-weight:600;margin-bottom:6px">A 檔案（需求表）</div>
                         <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_a' }"
                              @dragenter.prevent="dragTarget = 'iomap_a'" @dragleave.prevent="dragTarget = null"
                              @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'a')"
@@ -493,12 +493,12 @@
                     </div>
                     <!-- B File Upload -->
                     <div style="flex:1;min-width:250px">
-                        <div style="font-weight:600;margin-bottom:6px">B 檔案（iFIX 導出表 / 盤點表）</div>
+                        <div style="font-weight:600;margin-bottom:6px">B 檔案（iFIX IO表）</div>
                         <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_b' }"
                              @dragenter.prevent="dragTarget = 'iomap_b'" @dragleave.prevent="dragTarget = null"
                              @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'b')"
                              @click="$refs.iomapFileB.click()" style="min-height:80px;padding:16px">
-                            <span v-if="!ioMap.bFileName">拖曳或點擊上傳 CSV / TXT（iFIX 格式）</span>
+                            <span v-if="!ioMap.bFileName">拖曳或點擊上傳 CSV </span>
                             <span v-else style="color:var(--success)">{{ ioMap.bFileName }}</span>
                         </div>
                         <input ref="iomapFileB" type="file" accept=".csv,.txt" hidden @change="ioMapPickFile($event, 'b')">
@@ -1459,7 +1459,7 @@
             </div>
     </main>
 
-    <footer class="footer">Kepware 點位管理系統 &mdash; ThingsBoard Device Management</footer>
+    <footer class="footer">Kep It Simple &mdash; Developed and Maintained by 4K60 CIM </footer>
 
     <!-- Confirm Dialog -->
     <div class="modal-overlay" v-if="modal.show" @click.self="modal.show = false">
