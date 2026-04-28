@@ -299,36 +299,6 @@
         </div>
     </div>
 
-    <!-- Account Settings Dialog -->
-    <div v-if="showAccountDialog" class="login-overlay" @click.self="showAccountDialog = false">
-        <div class="login-card" style="max-width:400px">
-            <div class="login-header">
-                <svg viewBox="0 0 24 24" style="width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                <span style="font-size:18px;font-weight:700">帳號設定</span>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:14px">
-                <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;font-size:13px">
-                    <div style="margin-bottom:4px"><strong>帳號：</strong>{{ auth.user }}</div>
-                    <div style="margin-bottom:4px"><strong>顯示名稱：</strong>{{ auth.displayName || '-' }}</div>
-                    <div><strong>角色：</strong>{{ auth.role }}</div>
-                </div>
-                <div style="border-top:1px solid var(--border);padding-top:14px">
-                    <div style="font-weight:600;margin-bottom:10px">變更密碼</div>
-                    <div style="display:flex;flex-direction:column;gap:8px">
-                        <div class="form-group small"><label>目前密碼</label><input v-model="pwForm.oldPassword" type="password" placeholder="目前密碼"></div>
-                        <div class="form-group small"><label>新密碼</label><input v-model="pwForm.newPassword" type="password" placeholder="新密碼"></div>
-                        <div class="form-group small"><label>確認新密碼</label><input v-model="pwForm.confirmPassword" type="password" placeholder="再輸入一次新密碼"></div>
-                    </div>
-                    <div style="display:flex;gap:8px;margin-top:12px">
-                        <button class="btn btn-primary btn-sm" @click="changeMyPassword">變更密碼</button>
-                        <button class="btn btn-outline btn-sm" @click="showAccountDialog = false; pwForm.oldPassword = ''; pwForm.newPassword = ''; pwForm.confirmPassword = ''; pwMsg.text = ''">關閉</button>
-                    </div>
-                    <div v-if="pwMsg.text" :style="{ color: pwMsg.error ? 'var(--error)' : 'var(--success)', fontSize: '13px', marginTop: '8px' }">{{ pwMsg.text }}</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <header class="header">
         <div class="header-icon">
             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -341,7 +311,6 @@
             <span v-if="auth.token" style="font-size:13px;color:rgba(255,255,255,0.85)">
                 {{ auth.displayName || auth.user }} ({{ auth.role }})
             </span>
-            <button v-if="auth.token" class="theme-toggle" @click="showAccountDialog = true" style="color:rgba(255,255,255,0.8);border-color:rgba(255,255,255,0.3)">帳號設定</button>
             <button v-if="auth.token" class="theme-toggle" @click="userLogout" style="color:rgba(255,255,255,0.8);border-color:rgba(255,255,255,0.3)">登出</button>
             <button class="theme-toggle" @click="toggleTheme">
                 <span v-html="theme === 'light' ? '&#9790;' : '&#9728;&#65039;'"></span>
@@ -1060,7 +1029,7 @@
                     <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
                     <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; loadUsers()">帳號管理</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; if(auth.role === 'admin') loadUsers()">帳號管理</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
@@ -1323,13 +1292,39 @@
                             </div>
                         </div>
                     </div>
+                </div>
 
-                <!-- Account Management (admin only) -->
+                <!-- Account Management -->
                 <div v-show="settingsSubTab === 'accounts'">
+                    <!-- Personal account info -->
                     <div class="settings-section">
                         <div class="settings-section-title">
-                            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                            帳號管理
+                            <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            個人帳號
+                        </div>
+                        <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+                            <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;font-size:13px;min-width:200px">
+                                <div style="margin-bottom:4px"><strong>帳號：</strong>{{ auth.user }}</div>
+                                <div style="margin-bottom:4px"><strong>顯示名稱：</strong>{{ auth.displayName || '-' }}</div>
+                                <div><strong>角色：</strong>{{ auth.role }}</div>
+                            </div>
+                            <div style="flex:1;min-width:250px">
+                                <div style="font-weight:600;margin-bottom:8px">變更密碼</div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+                                    <div class="form-group small"><label>目前密碼</label><input v-model="pwForm.oldPassword" type="password" placeholder="目前密碼"></div>
+                                    <div class="form-group small"><label>新密碼</label><input v-model="pwForm.newPassword" type="password" placeholder="新密碼"></div>
+                                    <div class="form-group small"><label>確認新密碼</label><input v-model="pwForm.confirmPassword" type="password" placeholder="再輸入一次"></div>
+                                    <button class="btn btn-primary btn-sm" @click="changeMyPassword">變更密碼</button>
+                                </div>
+                                <div v-if="pwMsg.text" :style="{ color: pwMsg.error ? 'var(--error)' : 'var(--success)', fontSize: '13px', marginTop: '6px' }">{{ pwMsg.text }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Admin: user management -->
+                    <div v-if="auth.role === 'admin'" class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            使用者管理
                         </div>
                         <!-- Add user form -->
                         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
@@ -1586,7 +1581,7 @@ createApp({
         })
 
         // ── Settings State ──
-        const settingsSubTab = ref('dropdown')
+        const settingsSubTab = ref('profiles')
         const configData = reactive({
             dropdown_options: {},
             defaults: {},
@@ -2323,7 +2318,7 @@ createApp({
 
         return {
             // Auth
-            auth, userLogin, userLogout, authHeaders, showAccountDialog, pwForm, pwMsg, changeMyPassword,
+            auth, userLogin, userLogout, authHeaders, pwForm, pwMsg, changeMyPassword,
             userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
             // Core
             conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal, theme,
