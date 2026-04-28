@@ -1029,7 +1029,7 @@
                     <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
                     <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; if(auth.role === 'admin') loadUsers()">帳號管理</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; auth.role === 'admin' && loadUsers()">帳號管理</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
