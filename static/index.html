@@ -510,7 +510,7 @@
                 <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
                     <!-- A File Upload -->
                     <div style="flex:1;min-width:250px">
-                        <div style="font-weight:600;margin-bottom:6px">A 檔案（IO List / 需求表）</div>
+                        <div style="font-weight:600;margin-bottom:6px">A 檔案（需求表）</div>
                         <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_a' }"
                              @dragenter.prevent="dragTarget = 'iomap_a'" @dragleave.prevent="dragTarget = null"
                              @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'a')"
@@ -522,12 +522,12 @@
                     </div>
                     <!-- B File Upload -->
                     <div style="flex:1;min-width:250px">
-                        <div style="font-weight:600;margin-bottom:6px">B 檔案（iFIX 導出表 / 盤點表）</div>
+                        <div style="font-weight:600;margin-bottom:6px">B 檔案（iFIX IO表）</div>
                         <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_b' }"
                              @dragenter.prevent="dragTarget = 'iomap_b'" @dragleave.prevent="dragTarget = null"
                              @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'b')"
                              @click="$refs.iomapFileB.click()" style="min-height:80px;padding:16px">
-                            <span v-if="!ioMap.bFileName">拖曳或點擊上傳 CSV / TXT（iFIX 格式）</span>
+                            <span v-if="!ioMap.bFileName">拖曳或點擊上傳 CSV </span>
                             <span v-else style="color:var(--success)">{{ ioMap.bFileName }}</span>
                         </div>
                         <input ref="iomapFileB" type="file" accept=".csv,.txt" hidden @change="ioMapPickFile($event, 'b')">
