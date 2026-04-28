@@ -355,6 +355,10 @@
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                     TB 直接加點
                 </div>
+                <div class="tab" :class="{ active: activeTab === 'iomap' }" @click="activeTab = 'iomap'">
+                    <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+                    IO Mapping
+                </div>
                 <div class="tab" :class="{ active: activeTab === 'delete' }" @click="activeTab = 'delete'">
                     <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                     批次刪除
@@ -469,6 +473,89 @@
                             </a>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- =============== IO Mapping Tab =============== -->
+            <div v-show="activeTab === 'iomap'">
+                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+                    <!-- A File Upload -->
+                    <div style="flex:1;min-width:250px">
+                        <div style="font-weight:600;margin-bottom:6px">A 檔案（IO List / 需求表）</div>
+                        <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_a' }"
+                             @dragenter.prevent="dragTarget = 'iomap_a'" @dragleave.prevent="dragTarget = null"
+                             @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'a')"
+                             @click="$refs.iomapFileA.click()" style="min-height:80px;padding:16px">
+                            <span v-if="!ioMap.aFileName">拖曳或點擊上傳 CSV（含 Tag Name 欄位）</span>
+                            <span v-else style="color:var(--success)">{{ ioMap.aFileName }}</span>
+                        </div>
+                        <input ref="iomapFileA" type="file" accept=".csv,.txt" hidden @change="ioMapPickFile($event, 'a')">
+                    </div>
+                    <!-- B File Upload -->
+                    <div style="flex:1;min-width:250px">
+                        <div style="font-weight:600;margin-bottom:6px">B 檔案（iFIX 導出表 / 盤點表）</div>
+                        <div class="upload-zone" :class="{ dragover: dragTarget === 'iomap_b' }"
+                             @dragenter.prevent="dragTarget = 'iomap_b'" @dragleave.prevent="dragTarget = null"
+                             @dragover.prevent @drop.prevent="dragTarget = null; ioMapPickFile($event, 'b')"
+                             @click="$refs.iomapFileB.click()" style="min-height:80px;padding:16px">
+                            <span v-if="!ioMap.bFileName">拖曳或點擊上傳 CSV / TXT（iFIX 格式）</span>
+                            <span v-else style="color:var(--success)">{{ ioMap.bFileName }}</span>
+                        </div>
+                        <input ref="iomapFileB" type="file" accept=".csv,.txt" hidden @change="ioMapPickFile($event, 'b')">
+                    </div>
+                </div>
+                <!-- Controls -->
+                <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+                    <button class="btn btn-primary" @click="executeIoMapping" :disabled="!ioMap.aFile || !ioMap.bFile || ioMap.running">
+                        {{ ioMap.running ? '比對中...' : '執行 Mapping' }}
+                    </button>
+                    <button v-if="ioMap.mappingId" class="btn btn-outline" @click="downloadIoMapping">
+                        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        下載結果 CSV
+                    </button>
+                    <button v-if="ioMap.data.length" class="btn btn-outline" @click="ioMap.aFile = null; ioMap.bFile = null; ioMap.aFileName = ''; ioMap.bFileName = ''; ioMap.data = []; ioMap.mappingId = ''; ioMap.matched = 0; ioMap.unmatched = 0; ioMap.total = 0">
+                        清除
+                    </button>
+                </div>
+                <!-- Stats -->
+                <div v-if="ioMap.mappingId" style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+                    <div class="badge badge-create" style="font-size:13px;padding:4px 12px">需求總數：{{ ioMap.total }}</div>
+                    <div class="badge badge-create" style="font-size:13px;padding:4px 12px">成功匹配：{{ ioMap.matched }}</div>
+                    <div class="badge badge-delete" style="font-size:13px;padding:4px 12px" v-if="ioMap.unmatched > 0">未匹配：{{ ioMap.unmatched }}</div>
+                </div>
+                <!-- Filter -->
+                <div v-if="ioMap.data.length" style="margin-bottom:10px;display:flex;gap:10px;align-items:center">
+                    <select v-model="ioMap.filter" style="padding:4px 8px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:var(--input-bg);color:var(--text)">
+                        <option value="all">全部</option>
+                        <option value="matched">已匹配</option>
+                        <option value="unmatched">未匹配</option>
+                    </select>
+                    <span style="font-size:13px;color:var(--text-secondary)">顯示 {{ filteredIoMap.length }} 筆</span>
+                </div>
+                <!-- Result Table -->
+                <div v-if="ioMap.data.length" class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:40px">#</th>
+                                <th>狀態</th>
+                                <th v-for="col in ioMap.columns" :key="col">{{ col }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, idx) in pagedIoMap" :key="idx" :style="row._matched ? '' : 'background:var(--error-bg)'">
+                                <td>{{ (ioMap.page - 1) * 50 + idx + 1 }}</td>
+                                <td><span class="badge" :class="row._matched ? 'badge-create' : 'badge-delete'">{{ row._matched ? '已匹配' : '未匹配' }}</span></td>
+                                <td v-for="col in ioMap.columns" :key="col">{{ row[col] || '' }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- Pagination -->
+                <div v-if="ioMapTotalPages > 1" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px">
+                    <button class="btn btn-outline btn-sm" @click="ioMap.page--" :disabled="ioMap.page <= 1">上一頁</button>
+                    <span style="font-size:13px">{{ ioMap.page }} / {{ ioMapTotalPages }}</span>
+                    <button class="btn btn-outline btn-sm" @click="ioMap.page++" :disabled="ioMap.page >= ioMapTotalPages">下一頁</button>
                 </div>
             </div>
 
@@ -1579,6 +1666,58 @@ createApp({
             tbp_name: '', tbp_desc: '',
         })
 
+        // ── IO Mapping State ──
+        const ioMap = reactive({
+            aFile: null, bFile: null, aFileName: '', bFileName: '',
+            running: false, mappingId: '', columns: [],
+            data: [], total: 0, matched: 0, unmatched: 0,
+            filter: 'all', page: 1,
+        })
+
+        function ioMapPickFile(event, which) {
+            const file = event.dataTransfer ? event.dataTransfer.files[0] : event.target.files[0]
+            if (!file) return
+            if (which === 'a') { ioMap.aFile = file; ioMap.aFileName = file.name }
+            else { ioMap.bFile = file; ioMap.bFileName = file.name }
+        }
+
+        const filteredIoMap = computed(() => {
+            if (ioMap.filter === 'matched') return ioMap.data.filter(r => r._matched)
+            if (ioMap.filter === 'unmatched') return ioMap.data.filter(r => !r._matched)
+            return ioMap.data
+        })
+        const ioMapTotalPages = computed(() => Math.max(1, Math.ceil(filteredIoMap.value.length / 50)))
+        const pagedIoMap = computed(() => {
+            const start = (ioMap.page - 1) * 50
+            return filteredIoMap.value.slice(start, start + 50)
+        })
+
+        async function executeIoMapping() {
+            if (!ioMap.aFile || !ioMap.bFile) return
+            ioMap.running = true; ioMap.data = []; ioMap.mappingId = ''; ioMap.page = 1
+            try {
+                const form = new FormData()
+                form.append('a_file', ioMap.aFile)
+                form.append('b_file', ioMap.bFile)
+                const headers = auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {}
+                const resp = await fetch('/api/io-mapping/execute', { method: 'POST', headers, body: form })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Mapping 失敗') }
+                const result = await resp.json()
+                ioMap.mappingId = result.mapping_id
+                ioMap.columns = result.columns
+                ioMap.data = result.data
+                ioMap.total = result.total
+                ioMap.matched = result.matched
+                ioMap.unmatched = result.unmatched
+            } catch (e) { alert('Mapping 失敗: ' + e.message) }
+            finally { ioMap.running = false }
+        }
+
+        function downloadIoMapping() {
+            if (!ioMap.mappingId) return
+            window.open(`/api/io-mapping/download/${ioMap.mappingId}`, '_blank')
+        }
+
         // ── Settings State ──
         const settingsSubTab = ref('profiles')
         const configData = reactive({
@@ -2319,6 +2458,9 @@ createApp({
             // Auth
             auth, userLogin, userLogout, authHeaders, pwForm, pwMsg, changeMyPassword,
             userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
+            // IO Mapping
+            ioMap, ioMapPickFile, filteredIoMap, ioMapTotalPages, pagedIoMap,
+            executeIoMapping, downloadIoMapping,
             // Core
             conn, connStatusText, activeTab, dragTarget, create, del, query, history, modal, theme,
             createLogArea, deleteLogArea, queryLogArea, createProgress, deleteProgress, isAllSelected, hasTypeHeader,

@@ -1450,3 +1450,167 @@ async def pg_execute_scale(req: ExecuteScaleRequest):
     except Exception as e:
         log.error(f"[executeScale] Scale 設定失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Scale 設定失敗: {e}")
+
+
+# ── IO Mapping ────────────────────────────────────────
+
+def _parse_io_csv(content_bytes: bytes) -> tuple:
+    """解析 A 檔案（IO List / 需求表），回傳 (headers, rows)"""
+    for enc in ["utf-8-sig", "utf-8", "big5", "cp950", "gb2312"]:
+        try:
+            text = content_bytes.decode(enc)
+            reader = csv.DictReader(io.StringIO(text))
+            headers = [h.strip() for h in (reader.fieldnames or []) if h and h.strip()]
+            if not headers:
+                continue
+            rows = [{k.strip(): (v or "").strip() for k, v in row.items() if k} for row in reader]
+            return headers, rows
+        except (UnicodeDecodeError, Exception):
+            continue
+    return None, None
+
+
+def _parse_ifix_csv(content_bytes: bytes) -> tuple:
+    """解析 B 檔案（iFIX 導出表），處理 ! 前綴和 [section] 標記"""
+    for enc in ["cp950", "utf-8-sig", "utf-8", "big5", "gb2312"]:
+        try:
+            text = content_bytes.decode(enc)
+            break
+        except (UnicodeDecodeError, Exception):
+            continue
+    else:
+        return None, None
+
+    lines = text.splitlines()
+    sample = lines[0] if lines else ""
+    delimiter = "\t" if "\t" in sample else ","
+
+    current_header = []
+    b_data = []
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    for row in reader:
+        if not row or row[0].startswith("["):
+            continue
+        if row[0].startswith("!"):
+            current_header = [h.strip("! ") for h in row]
+            continue
+        if current_header:
+            row_dict = {}
+            for idx, val in enumerate(row):
+                if idx < len(current_header):
+                    row_dict[current_header[idx]] = val.strip("! ")
+            b_data.append(row_dict)
+
+    if not b_data:
+        return None, None
+    all_keys = list(dict.fromkeys(k for r in b_data for k in r))
+    return all_keys, b_data
+
+
+IO_MAPPING_FIELDS = {
+    "A_IODV": "I/O DEVICE",
+    "A_IOAD": "I/O ADDRESS",
+    "A_SCALE_ENABLED": "SCALE Enabled",
+    "A_SCALE_RAWLOW": "Raw Low",
+    "A_SCALE_RAWHIGH": "Raw High",
+    "A_ELO": "Scaled Low",
+    "A_EHI": "Scaled High",
+    "A_DESC": "Description",
+}
+
+IO_OUTPUT_COLUMNS = [
+    "Site", "System", "SCADA Node Name", "Tag Name",
+    "I/O DEVICE", "I/O ADDRESS", "SCALE Enabled",
+    "Raw Low", "Raw High", "Scaled Low", "Scaled High", "Description",
+]
+
+_io_mapping_cache = {}
+
+
+@app.post("/api/io-mapping/execute")
+async def io_mapping_execute(
+    a_file: UploadFile = File(...),
+    b_file: UploadFile = File(...),
+):
+    """上傳 IO List (A) 與 iFIX 導出表 (B)，執行 mapping"""
+    a_bytes = await a_file.read()
+    b_bytes = await b_file.read()
+
+    a_headers, a_rows = _parse_io_csv(a_bytes)
+    if a_rows is None:
+        raise HTTPException(status_code=400, detail="無法解析 A 檔案（IO List），請確認 CSV 格式與編碼")
+
+    b_headers, b_rows = _parse_ifix_csv(b_bytes)
+    if b_rows is None:
+        raise HTTPException(status_code=400, detail="無法解析 B 檔案（iFIX 導出表），請確認檔案格式")
+
+    has_a_tag = any("A_TAG" in r for r in b_rows)
+    if not has_a_tag:
+        raise HTTPException(status_code=400, detail="B 檔案中找不到 A_TAG 欄位")
+
+    b_index = {}
+    for row in b_rows:
+        key = row.get("A_TAG", "").strip().upper()
+        if key:
+            b_index[key] = row
+
+    results = []
+    match_count = 0
+    unmatch_count = 0
+    for a_row in a_rows:
+        tag = a_row.get("Tag Name", "").strip()
+        join_key = tag.upper()
+        b_match = b_index.get(join_key)
+
+        out = dict(a_row)
+        if b_match:
+            match_count += 1
+            out["_matched"] = True
+            for src, tgt in IO_MAPPING_FIELDS.items():
+                if src in b_match:
+                    out[tgt] = b_match[src]
+        else:
+            unmatch_count += 1
+            out["_matched"] = False
+
+        for col in IO_OUTPUT_COLUMNS:
+            if col not in out:
+                out[col] = ""
+        results.append(out)
+
+    mapping_id = str(uuid.uuid4())[:8]
+    _io_mapping_cache[mapping_id] = results
+
+    preview = []
+    for r in results:
+        preview.append({col: r.get(col, "") for col in IO_OUTPUT_COLUMNS + ["_matched"]})
+
+    return {
+        "mapping_id": mapping_id,
+        "total": len(a_rows),
+        "matched": match_count,
+        "unmatched": unmatch_count,
+        "columns": IO_OUTPUT_COLUMNS,
+        "data": preview,
+    }
+
+
+@app.get("/api/io-mapping/download/{mapping_id}")
+async def io_mapping_download(mapping_id: str):
+    """下載 mapping 結果 CSV"""
+    results = _io_mapping_cache.get(mapping_id)
+    if not results:
+        raise HTTPException(status_code=404, detail="Mapping 結果不存在或已過期")
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=IO_OUTPUT_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for row in results:
+        writer.writerow({col: row.get(col, "") for col in IO_OUTPUT_COLUMNS})
+
+    content = output.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=IO_Mapping_Result_{mapping_id}.csv"},
+    )
