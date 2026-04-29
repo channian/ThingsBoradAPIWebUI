@@ -81,14 +81,27 @@ class PGClient:
                     password_hash VARCHAR(255) NOT NULL,
                     display_name VARCHAR(255),
                     role VARCHAR(20) NOT NULL DEFAULT 'operator',
+                    perm_group VARCHAR(50) NOT NULL DEFAULT 'viewer',
                     is_active BOOLEAN DEFAULT true,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS activity_log (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100) NOT NULL,
+                    action VARCHAR(100) NOT NULL,
+                    detail TEXT,
+                    ip_addr VARCHAR(45),
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_activity_log_created
+                    ON activity_log (created_at);
+                CREATE INDEX IF NOT EXISTS idx_activity_log_user
+                    ON activity_log (username);
             """)
 
-    def _ensure_scale_status_column(self, conn):
-        """確保暫存表有 scale_status 欄位"""
+    def _ensure_extra_columns(self, conn):
+        """確保各表有必要的額外欄位"""
         with conn.cursor() as cur:
             cur.execute("""
                 DO $$
@@ -101,6 +114,14 @@ class PGClient:
                         ALTER TABLE scada_tag_config
                         ADD COLUMN scale_status VARCHAR(20) DEFAULT 'pending';
                     END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'kepitsimple_user'
+                        AND column_name = 'perm_group'
+                    ) THEN
+                        ALTER TABLE kepitsimple_user
+                        ADD COLUMN perm_group VARCHAR(50) NOT NULL DEFAULT 'viewer';
+                    END IF;
                 END $$;
             """)
 
@@ -108,7 +129,7 @@ class PGClient:
         """測試 PG 連線並確保參照表存在"""
         with self._get_conn() as conn:
             self._ensure_ref_tables(conn)
-            self._ensure_scale_status_column(conn)
+            self._ensure_extra_columns(conn)
             with conn.cursor() as cur:
                 cur.execute("SELECT version()")
                 version = cur.fetchone()[0]
@@ -422,26 +443,30 @@ class PGClient:
         with self._get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT id, username, display_name, role, is_active, created_at, updated_at
+                    SELECT id, username, display_name, role, perm_group,
+                           is_active, created_at, updated_at
                     FROM kepitsimple_user ORDER BY id
                 """)
                 return [dict(r) for r in cur.fetchall()]
 
     def create_user(self, username: str, password_hash: str,
-                    display_name: str = "", role: str = "operator") -> dict:
+                    display_name: str = "", role: str = "operator",
+                    perm_group: str = "viewer") -> dict:
         """建立使用者"""
         with self._get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
-                    INSERT INTO kepitsimple_user (username, password_hash, display_name, role)
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING id, username, display_name, role, is_active, created_at
-                """, (username, password_hash, display_name, role))
+                    INSERT INTO kepitsimple_user
+                        (username, password_hash, display_name, role, perm_group)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, username, display_name, role, perm_group,
+                              is_active, created_at
+                """, (username, password_hash, display_name, role, perm_group))
                 return dict(cur.fetchone())
 
     def update_user(self, user_id: int, **fields) -> bool:
-        """更新使用者欄位（display_name, role, is_active）"""
-        allowed = {"display_name", "role", "is_active"}
+        """更新使用者欄位"""
+        allowed = {"display_name", "role", "is_active", "perm_group"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False
@@ -486,6 +511,59 @@ class PGClient:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM kepitsimple_user")
                 return cur.fetchone()[0]
+
+    # ── 操作日誌 (activity_log) ──────────────────────────
+
+    def add_activity_log(self, username: str, action: str,
+                         detail: str = "", ip_addr: str = ""):
+        """新增操作日誌"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO activity_log (username, action, detail, ip_addr)
+                    VALUES (%s, %s, %s, %s)
+                """, (username, action, detail, ip_addr))
+
+    def get_activity_logs(self, page: int = 1, page_size: int = 50,
+                          username: str = None, action: str = None) -> dict:
+        """查詢操作日誌（分頁）"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                where_parts = []
+                params = []
+                if username:
+                    where_parts.append("username = %s")
+                    params.append(username)
+                if action:
+                    where_parts.append("action = %s")
+                    params.append(action)
+                where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+                cur.execute(f"SELECT COUNT(*) FROM activity_log {where_sql}", params)
+                total = cur.fetchone()["count"]
+
+                offset = (page - 1) * page_size
+                cur.execute(f"""
+                    SELECT id, username, action, detail, ip_addr, created_at
+                    FROM activity_log {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = [dict(r) for r in cur.fetchall()]
+                return {"total": total, "page": page,
+                        "page_size": page_size, "rows": rows}
+
+    def cleanup_activity_logs(self, days: int = 7) -> int:
+        """清理超過指定天數的操作日誌"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM activity_log
+                    WHERE created_at < NOW() - INTERVAL '%s days'
+                """, (days,))
+                count = cur.rowcount
+                log.info(f"已清理 {count} 筆超過 {days} 天的操作日誌")
+                return count
 
     # ── PG 正式表寫入 ─────────────────────────────────
 

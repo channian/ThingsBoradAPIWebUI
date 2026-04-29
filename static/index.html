@@ -227,6 +227,7 @@
         .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; border: 1px solid var(--line-2); white-space: nowrap; }
         .badge-create { background: rgba(34,197,94,.12); color: #86efac; border-color: rgba(34,197,94,.35); }
         .badge-delete, .badge-delete_direct { background: rgba(239,68,68,.12); color: #fca5a5; border-color: rgba(239,68,68,.35); }
+        .badge-info { background: rgba(96,165,250,.12); color: #93c5fd; border-color: rgba(96,165,250,.35); }
         .badge-dry { background: rgba(245,158,11,.12); color: #fcd34d; border-color: rgba(245,158,11,.35); }
         .badge-live { background: rgba(239,68,68,.15); color: #fca5a5; border-color: rgba(239,68,68,.4); }
         .selected-row { background: rgba(34,211,238,.05) !important; }
@@ -342,7 +343,7 @@
         </div>
         <div class="header-actions">
             <span v-if="auth.token" class="header-user">
-                <strong>{{ auth.displayName || auth.user }}</strong>&nbsp;/&nbsp;{{ auth.role }}
+                <strong>{{ auth.displayName || auth.user }}</strong>&nbsp;/&nbsp;{{ auth.role }}&nbsp;/&nbsp;{{ auth.permGroup }}
             </span>
             <button v-if="auth.token" class="theme-toggle" @click="userLogout">登出</button>
         </div>
@@ -400,7 +401,7 @@
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     歷史紀錄
                 </div>
-                <div class="tab" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">
+                <div v-if="canKepwareImport" class="tab" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">
                     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Kepware 匯入
                 </div>
@@ -1146,6 +1147,7 @@
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
                     <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; auth.role === 'admin' && loadUsers()">帳號管理</div>
+                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'logs' }" @click="settingsSubTab = 'logs'; loadActivityLogs()">操作日誌</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
@@ -1422,7 +1424,8 @@
                             <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;font-size:13px;min-width:200px">
                                 <div style="margin-bottom:4px"><strong>帳號：</strong>{{ auth.user }}</div>
                                 <div style="margin-bottom:4px"><strong>顯示名稱：</strong>{{ auth.displayName || '-' }}</div>
-                                <div><strong>角色：</strong>{{ auth.role }}</div>
+                                <div style="margin-bottom:4px"><strong>角色：</strong>{{ auth.role }}</div>
+                                <div><strong>權限群組：</strong>{{ auth.permGroup }}</div>
                             </div>
                             <div style="flex:1;min-width:250px">
                                 <div style="font-weight:600;margin-bottom:8px">變更密碼</div>
@@ -1450,12 +1453,19 @@
                             <div class="form-group small"><label>角色</label>
                                 <select v-model="userForm.role"><option value="operator">operator</option><option value="admin">admin</option></select>
                             </div>
+                            <div class="form-group small"><label>權限群組</label>
+                                <select v-model="userForm.permGroup">
+                                    <option value="viewer">viewer（檢視者）</option>
+                                    <option value="operator">operator（操作者）</option>
+                                    <option value="kepware_admin">kepware_admin（Kepware 管理）</option>
+                                </select>
+                            </div>
                             <button class="btn btn-primary btn-sm" @click="createUser">新增帳號</button>
                         </div>
                         <!-- User list -->
                         <div v-if="userList.length" class="table-wrapper">
                             <table>
-                                <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>角色</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead>
+                                <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>角色</th><th>權限群組</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead>
                                 <tbody>
                                     <tr v-for="u in userList" :key="u.id">
                                         <td>{{ u.id }}</td>
@@ -1464,6 +1474,13 @@
                                         <td>
                                             <select :value="u.role" @change="updateUserRole(u.id, $event.target.value)" style="padding:2px 6px;font-size:12px;border-radius:4px;border:1px solid var(--border)">
                                                 <option value="operator">operator</option><option value="admin">admin</option>
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <select :value="u.perm_group || 'viewer'" @change="updateUserGroup(u.id, $event.target.value)" style="padding:2px 6px;font-size:12px;border-radius:4px;border:1px solid var(--border)">
+                                                <option value="viewer">viewer</option>
+                                                <option value="operator">operator</option>
+                                                <option value="kepware_admin">kepware_admin</option>
                                             </select>
                                         </td>
                                         <td>
@@ -1481,6 +1498,61 @@
                             </table>
                         </div>
                         <div v-if="!userList.length" style="text-align:center;padding:30px;color:var(--text-light)">無使用者資料</div>
+                    </div>
+                </div>
+
+                <!-- Activity Logs -->
+                <div v-show="settingsSubTab === 'logs'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                            操作日誌
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+                            <div class="form-group small">
+                                <label>使用者</label>
+                                <input v-model="actLog.filterUser" placeholder="篩選使用者" style="width:120px">
+                            </div>
+                            <div class="form-group small">
+                                <label>操作類型</label>
+                                <select v-model="actLog.filterAction" style="width:140px">
+                                    <option value="">全部</option>
+                                    <option value="login">登入</option>
+                                    <option value="staging_import">匯入暫存表</option>
+                                    <option value="execute_tb">TB 建點</option>
+                                    <option value="execute_pg">PG 寫入</option>
+                                    <option value="execute_scale">Scale 設定</option>
+                                    <option value="create_user">新增使用者</option>
+                                    <option value="update_user">更新使用者</option>
+                                    <option value="cleanup_logs">清理日誌</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary btn-sm" @click="actLog.page = 1; loadActivityLogs()">查詢</button>
+                            <button class="btn btn-outline btn-sm" style="color:var(--error);border-color:var(--error)" @click="cleanupLogs()">手動清理</button>
+                            <span style="font-size:12px;color:var(--fg-3);margin-left:auto">共 {{ actLog.total }} 筆（每週自動清理 7 天前的記錄）</span>
+                        </div>
+                        <div v-if="actLog.loading" style="text-align:center;padding:20px;color:var(--fg-3)">載入中...</div>
+                        <div v-else-if="actLog.rows.length" class="table-wrapper">
+                            <table>
+                                <thead><tr><th>時間</th><th>使用者</th><th>操作</th><th>詳情</th><th>IP</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="log in actLog.rows" :key="log.id">
+                                        <td style="font-size:12px;white-space:nowrap">{{ formatISOTime(log.created_at) }}</td>
+                                        <td><strong>{{ log.username }}</strong></td>
+                                        <td><span class="badge badge-info">{{ log.action }}</span></td>
+                                        <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis">{{ log.detail || '-' }}</td>
+                                        <td style="font-size:12px;font-family:var(--font-mono)">{{ log.ip_addr || '-' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-else style="text-align:center;padding:30px;color:var(--text-light)">無日誌資料</div>
+                        <!-- Pagination -->
+                        <div v-if="actLogTotalPages > 1" style="display:flex;justify-content:center;gap:8px;margin-top:12px">
+                            <button class="btn btn-outline btn-sm" :disabled="actLog.page <= 1" @click="actLog.page--; loadActivityLogs()">上一頁</button>
+                            <span style="font-size:13px;line-height:28px">{{ actLog.page }} / {{ actLogTotalPages }}</span>
+                            <button class="btn btn-outline btn-sm" :disabled="actLog.page >= actLogTotalPages" @click="actLog.page++; loadActivityLogs()">下一頁</button>
+                        </div>
                     </div>
                 </div>
 
@@ -1517,6 +1589,7 @@ createApp({
             token: localStorage.getItem('kep_token') || '',
             user: localStorage.getItem('kep_user') || '',
             role: localStorage.getItem('kep_role') || '',
+            permGroup: localStorage.getItem('kep_perm_group') || 'viewer',
             displayName: localStorage.getItem('kep_display') || '',
             username: '', password: '', logging: false, error: '',
         })
@@ -1535,10 +1608,12 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || '登入失敗') }
                 const data = await resp.json()
                 auth.token = data.token; auth.user = data.username
-                auth.role = data.role; auth.displayName = data.display_name || ''
+                auth.role = data.role; auth.permGroup = data.perm_group || 'viewer'
+                auth.displayName = data.display_name || ''
                 localStorage.setItem('kep_token', data.token)
                 localStorage.setItem('kep_user', data.username)
                 localStorage.setItem('kep_role', data.role)
+                localStorage.setItem('kep_perm_group', data.perm_group || 'viewer')
                 localStorage.setItem('kep_display', data.display_name || '')
                 auth.username = ''; auth.password = ''
             } catch (e) { auth.error = e.message }
@@ -1546,9 +1621,10 @@ createApp({
         }
 
         function userLogout() {
-            auth.token = ''; auth.user = ''; auth.role = ''; auth.displayName = ''
+            auth.token = ''; auth.user = ''; auth.role = ''; auth.permGroup = 'viewer'; auth.displayName = ''
             localStorage.removeItem('kep_token'); localStorage.removeItem('kep_user')
-            localStorage.removeItem('kep_role'); localStorage.removeItem('kep_display')
+            localStorage.removeItem('kep_role'); localStorage.removeItem('kep_perm_group')
+            localStorage.removeItem('kep_display')
         }
 
         // ── Personal Account Settings ──
@@ -1574,7 +1650,7 @@ createApp({
 
         // ── User Management State ──
         const userList = ref([])
-        const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator' })
+        const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator', permGroup: 'viewer' })
 
         async function loadUsers() {
             try {
@@ -1589,10 +1665,10 @@ createApp({
             try {
                 const resp = await fetch('/api/admin/users', {
                     method: 'POST', headers: authHeaders(),
-                    body: JSON.stringify({ username: userForm.username, password: userForm.password, display_name: userForm.displayName, role: userForm.role })
+                    body: JSON.stringify({ username: userForm.username, password: userForm.password, display_name: userForm.displayName, role: userForm.role, perm_group: userForm.permGroup })
                 })
                 if (!resp.ok) { const e = await resp.json(); alert(e.detail || '建立失敗'); return }
-                userForm.username = ''; userForm.password = ''; userForm.displayName = ''; userForm.role = 'operator'
+                userForm.username = ''; userForm.password = ''; userForm.displayName = ''; userForm.role = 'operator'; userForm.permGroup = 'viewer'
                 loadUsers()
             } catch (e) { alert(e.message) }
         }
@@ -1614,12 +1690,47 @@ createApp({
             alert('密碼已重設')
         }
 
+        async function updateUserGroup(userId, newGroup) {
+            await fetch(`/api/admin/users/${userId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ perm_group: newGroup }) })
+            loadUsers()
+        }
+
         async function deleteUser(userId, username) {
             if (!confirm(`確定刪除帳號 ${username}？`)) return
             const resp = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE', headers: authHeaders() })
             if (!resp.ok) { const e = await resp.json(); alert(e.detail || '刪除失敗'); return }
             loadUsers()
         }
+
+        // ── Activity Log ──
+        const actLog = reactive({ rows: [], total: 0, page: 1, pageSize: 30, filterUser: '', filterAction: '', loading: false })
+        const actLogTotalPages = computed(() => Math.max(1, Math.ceil(actLog.total / actLog.pageSize)))
+
+        async function loadActivityLogs() {
+            actLog.loading = true
+            try {
+                const body = { page: actLog.page, page_size: actLog.pageSize }
+                if (actLog.filterUser) body.username = actLog.filterUser
+                if (actLog.filterAction) body.action = actLog.filterAction
+                const resp = await fetch('/api/admin/logs/query', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) })
+                if (resp.status === 401) { userLogout(); return }
+                if (resp.ok) {
+                    const data = await resp.json()
+                    actLog.rows = data.rows; actLog.total = data.total
+                }
+            } catch (e) { console.error(e) }
+            finally { actLog.loading = false }
+        }
+
+        async function cleanupLogs() {
+            if (!confirm('確定清理超過保留期限的日誌？')) return
+            try {
+                const resp = await fetch('/api/admin/logs/cleanup', { method: 'POST', headers: authHeaders() })
+                if (resp.ok) { const d = await resp.json(); alert(`已清理 ${d.deleted} 筆日誌`); loadActivityLogs() }
+            } catch (e) { alert(e.message) }
+        }
+
+        const canKepwareImport = computed(() => auth.role === 'admin' || auth.permGroup === 'kepware_admin' || auth.permGroup === 'operator')
 
         const conn = reactive({ url: '', username: '', password: '', token: null, status: 'disconnected' })
         const connStatusText = computed(() => ({ disconnected: '未連線', connecting: '連線中...', connected: '已連線', error: '連線失敗' })[conn.status])
@@ -2477,8 +2588,9 @@ createApp({
 
         return {
             // Auth
-            auth, userLogin, userLogout, authHeaders, pwForm, pwMsg, changeMyPassword,
-            userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
+            auth, userLogin, userLogout, authHeaders, pwForm, pwMsg, changeMyPassword, canKepwareImport,
+            userList, userForm, loadUsers, createUser, updateUserRole, updateUserGroup, toggleUserActive, resetUserPassword, deleteUser,
+            actLog, actLogTotalPages, loadActivityLogs, cleanupLogs,
             // IO Mapping
             ioMap, ioMapPickFile, filteredIoMap, ioMapTotalPages, pagedIoMap,
             executeIoMapping, downloadIoMapping,

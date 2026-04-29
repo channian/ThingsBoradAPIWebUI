@@ -11,11 +11,12 @@ import json
 import logging
 import os
 import queue
+import threading
 import uuid
 import datetime
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +33,7 @@ from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
 from app.auth import (
     hash_password, verify_password, create_token,
-    get_current_user, require_admin,
+    get_current_user, require_admin, require_group, PERM_GROUPS,
 )
 
 # ── Logging ────────────────────────────────────────────
@@ -111,15 +112,45 @@ def _ensure_admin_user():
                 password_hash=hash_password(admin_pass),
                 display_name="管理員",
                 role="admin",
+                perm_group="kepware_admin",
             )
             log.info(f"[auth] 自動建立初始管理員帳號: {admin_user}")
     except Exception as e:
         log.warning(f"[auth] 無法檢查/建立初始帳號（PG 可能尚未連線）: {e}")
 
 
+def _log_activity(request, user: dict, action: str, detail: str = ""):
+    """記錄使用者操作日誌"""
+    try:
+        ip = request.client.host if request.client else ""
+        username = user.get("sub", "") if isinstance(user, dict) else str(user)
+        pg_client.add_activity_log(username, action, detail, ip)
+    except Exception as e:
+        log.warning(f"[activity_log] 寫入失敗: {e}")
+
+
+LOG_CLEANUP_DAYS = int(os.getenv("LOG_CLEANUP_DAYS", "7"))
+_cleanup_stop = threading.Event()
+
+
+def _weekly_log_cleanup():
+    """每週清理過期日誌的背景執行緒"""
+    while not _cleanup_stop.wait(timeout=3600):
+        now = datetime.datetime.now()
+        if now.weekday() == 0 and now.hour == 3:
+            try:
+                count = pg_client.cleanup_activity_logs(days=LOG_CLEANUP_DAYS)
+                log.info(f"[cleanup] 每週日誌清理完成，清除 {count} 筆")
+            except Exception as e:
+                log.warning(f"[cleanup] 日誌清理失敗: {e}")
+
+
 @app.on_event("startup")
 async def on_startup():
     _ensure_admin_user()
+    t = threading.Thread(target=_weekly_log_cleanup, daemon=True)
+    t.start()
+    log.info("[cleanup] 日誌清理排程已啟動（每週一凌晨 3 點）")
 
 
 # ── 歷史紀錄管理 ──────────────────────────────────────
@@ -350,12 +381,14 @@ class UserCreateRequest(BaseModel):
     password: str
     display_name: str = ""
     role: str = "operator"
+    perm_group: str = "viewer"
 
 
 class UserUpdateRequest(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    perm_group: Optional[str] = None
 
 
 class UserPasswordRequest(BaseModel):
@@ -366,7 +399,7 @@ class UserPasswordRequest(BaseModel):
 # ── API: 使用者認證 ───────────────────────────────────
 
 @app.post("/api/user/login")
-async def user_login(req: UserLoginRequest):
+async def user_login(req: UserLoginRequest, request: Request):
     """使用者登入取得 JWT Token"""
     user = pg_client.get_user_by_username(req.username)
     if not user:
@@ -375,11 +408,15 @@ async def user_login(req: UserLoginRequest):
         raise HTTPException(status_code=403, detail="帳號已停用")
     if not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
-    token = create_token(user["username"], user["role"], user.get("display_name", ""))
+    grp = user.get("perm_group", "viewer")
+    token = create_token(user["username"], user["role"],
+                         user.get("display_name", ""), perm_group=grp)
+    _log_activity(request, {"sub": user["username"]}, "login", "使用者登入")
     return {
         "token": token,
         "username": user["username"],
         "role": user["role"],
+        "perm_group": grp,
         "display_name": user.get("display_name", ""),
     }
 
@@ -412,30 +449,38 @@ async def admin_list_users(user: dict = Depends(require_admin)):
 
 
 @app.post("/api/admin/users")
-async def admin_create_user(req: UserCreateRequest,
+async def admin_create_user(req: UserCreateRequest, request: Request,
                             user: dict = Depends(require_admin)):
     """新增使用者"""
     if pg_client.get_user_by_username(req.username):
         raise HTTPException(status_code=409, detail=f"帳號 {req.username} 已存在")
     if req.role not in ("admin", "operator"):
         raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
+    if req.perm_group not in PERM_GROUPS:
+        raise HTTPException(status_code=400, detail=f"權限群組必須是 {'/'.join(PERM_GROUPS)}")
     result = pg_client.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         display_name=req.display_name,
         role=req.role,
+        perm_group=req.perm_group,
     )
+    _log_activity(request, user, "create_user", f"新增使用者 {req.username} (群組: {req.perm_group})")
     return result
 
 
 @app.put("/api/admin/users/{user_id}")
 async def admin_update_user(user_id: int, req: UserUpdateRequest,
+                            request: Request,
                             user: dict = Depends(require_admin)):
     """更新使用者資訊"""
     fields = {k: v for k, v in req.dict().items() if v is not None}
     if "role" in fields and fields["role"] not in ("admin", "operator"):
         raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
+    if "perm_group" in fields and fields["perm_group"] not in PERM_GROUPS:
+        raise HTTPException(status_code=400, detail=f"權限群組必須是 {'/'.join(PERM_GROUPS)}")
     pg_client.update_user(user_id, **fields)
+    _log_activity(request, user, "update_user", f"更新使用者 ID={user_id} {fields}")
     return {"success": True}
 
 
@@ -456,6 +501,53 @@ async def admin_delete_user(user_id: int,
         raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
     pg_client.delete_user(user_id)
     return {"success": True}
+
+
+# ── API: 權限群組 ────────────────────────────────────
+
+@app.get("/api/admin/perm-groups")
+async def admin_perm_groups(user: dict = Depends(require_admin)):
+    """取得可用的權限群組列表"""
+    groups = [
+        {"id": "viewer", "name": "檢視者", "desc": "僅可檢視，無法操作 Kepware 匯入"},
+        {"id": "operator", "name": "操作者", "desc": "可推導欄位、匯入暫存表，不可執行建點"},
+        {"id": "kepware_admin", "name": "Kepware 管理員", "desc": "完整 Kepware 匯入權限（推導、建點、Scale）"},
+    ]
+    return groups
+
+
+# ── API: 操作日誌 ────────────────────────────────────
+
+class LogQueryRequest(BaseModel):
+    page: int = 1
+    page_size: int = 50
+    username: Optional[str] = None
+    action: Optional[str] = None
+
+
+@app.post("/api/admin/logs/query")
+async def admin_query_logs(req: LogQueryRequest,
+                           user: dict = Depends(require_admin)):
+    """查詢操作日誌（分頁 + 篩選）"""
+    try:
+        return pg_client.get_activity_logs(
+            page=req.page, page_size=req.page_size,
+            username=req.username, action=req.action,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查詢日誌失敗: {e}")
+
+
+@app.post("/api/admin/logs/cleanup")
+async def admin_cleanup_logs(request: Request,
+                             user: dict = Depends(require_admin)):
+    """手動清理過期日誌"""
+    try:
+        count = pg_client.cleanup_activity_logs(days=LOG_CLEANUP_DAYS)
+        _log_activity(request, user, "cleanup_logs", f"手動清理 {count} 筆日誌")
+        return {"success": True, "deleted": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理日誌失敗: {e}")
 
 
 # ── API: TB 認證 ──────────────────────────────────────
@@ -969,13 +1061,15 @@ async def pg_test_connection():
 # ── API: 暫存表 (scada_tag_config) ───────────────────
 
 @app.post("/api/pg/staging/import")
-async def pg_staging_import(req: StagingImportRequest):
+async def pg_staging_import(req: StagingImportRequest, request: Request,
+                            user: dict = Depends(require_group("kepware_admin", "operator"))):
     """將已上傳的 CSV 資料匯入 PG 暫存表"""
     rows = _csv_store_get(req.upload_id)
     if rows is None:
         raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
     try:
         result = pg_client.import_staging(rows)
+        _log_activity(request, user, "staging_import", f"匯入暫存表 {result.get('inserted',0)} 筆")
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"匯入暫存表失敗: {e}")
@@ -1184,7 +1278,8 @@ async def pg_delete_ref(req: RefDeleteRequest):
 # ── API: Tag 推導 ────────────────────────────────────
 
 @app.post("/api/pg/derive/tb")
-async def pg_derive_tb(req: DeriveRequest):
+async def pg_derive_tb(req: DeriveRequest,
+                       user: dict = Depends(require_group("kepware_admin", "operator"))):
     """推導 TB 建點欄位"""
     try:
         staging = pg_client.get_staging_list(
@@ -1201,7 +1296,8 @@ async def pg_derive_tb(req: DeriveRequest):
 
 
 @app.post("/api/pg/derive/pg")
-async def pg_derive_pg(req: DeriveRequest):
+async def pg_derive_pg(req: DeriveRequest,
+                       user: dict = Depends(require_group("kepware_admin", "operator"))):
     """推導 PG 正式表欄位"""
     try:
         staging = pg_client.get_staging_list(
@@ -1220,7 +1316,8 @@ async def pg_derive_pg(req: DeriveRequest):
 # ── API: 執行建點 / 寫入 ──────────────────────────────
 
 @app.post("/api/pg/execute/tb")
-async def pg_execute_tb(req: ExecuteTbRequest):
+async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
+                        user: dict = Depends(require_group("kepware_admin"))):
     """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status（含限速）"""
     import time, random
     try:
@@ -1296,6 +1393,7 @@ async def pg_execute_tb(req: ExecuteTbRequest):
         if success_ids:
             pg_client.update_staging_status(success_ids, "tb_status", "done")
 
+        _log_activity(request, user, "execute_tb", f"TB 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆")
         return {
             "success": len(success_ids),
             "failed": len(failed),
@@ -1308,7 +1406,8 @@ async def pg_execute_tb(req: ExecuteTbRequest):
 
 
 @app.post("/api/pg/execute/pg")
-async def pg_execute_pg(req: ExecutePgRequest):
+async def pg_execute_pg(req: ExecutePgRequest, request: Request,
+                        user: dict = Depends(require_group("kepware_admin"))):
     """執行 PG 寫入：推導欄位 → 寫入正式表 → 更新 pg_status"""
     try:
         # 1. 取得 pending 的暫存資料並推導
@@ -1336,6 +1435,7 @@ async def pg_execute_pg(req: ExecutePgRequest):
             pg_client.update_staging_status(success_ids, "pg_status", "done")
             log.info(f"[executePG] 更新 {len(success_ids)} 筆狀態為 done")
 
+        _log_activity(request, user, "execute_pg", f"PG 寫入成功 {result['inserted']} 筆")
         return {
             **result,
             "message": f"成功寫入 {result['inserted']} 筆至正式表"
@@ -1359,7 +1459,8 @@ async def kw_gw_test(req: KwGwSettingsRequest):
 
 
 @app.post("/api/pg/derive/scale")
-async def pg_derive_scale(req: DeriveScaleRequest):
+async def pg_derive_scale(req: DeriveScaleRequest,
+                          user: dict = Depends(require_group("kepware_admin", "operator"))):
     """推導 Scale 配置欄位（從暫存表的 scale_enabled/raw_low/raw_high/scaled_low/scaled_high）"""
     try:
         staging = pg_client.get_staging_list(
@@ -1377,7 +1478,8 @@ async def pg_derive_scale(req: DeriveScaleRequest):
 
 
 @app.post("/api/pg/execute/scale")
-async def pg_execute_scale(req: ExecuteScaleRequest):
+async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
+                           user: dict = Depends(require_group("kepware_admin"))):
     """執行 Scale 設定：推導欄位 → 呼叫 Kepware GW API → 更新 scale_status"""
     import time, random
     try:
@@ -1441,6 +1543,7 @@ async def pg_execute_scale(req: ExecuteScaleRequest):
         if success_ids:
             pg_client.update_staging_status(success_ids, "scale_status", "done")
 
+        _log_activity(request, user, "execute_scale", f"Scale 設定成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆")
         return {
             "success": len(success_ids),
             "failed": len(failed),
