@@ -302,11 +302,10 @@
     <div v-if="!auth.token" class="login-overlay">
         <div class="login-card">
             <div class="login-header">
-                <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:40px;height:40px">
-                    <rect width="36" height="36" rx="8" fill="#0d1118"/>
-                    <rect x="1" y="1" width="34" height="34" rx="7" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="1"/>
-                    <path d="M10 12h6l2 4-4 2 4 6h-4l-3-5-1 1v4H7V12h3z" fill="#22d3ee"/>
-                    <path d="M20 12h3l2 4h3l-2 4 2 4h-3l-2-4h-1v4h-3V12h1z" fill="#67e8f9" opacity="0.8"/>
+                <svg viewBox="0 0 36 36" fill="none" style="width:40px;height:40px">
+                    <rect width="36" height="36" rx="8" fill="#131826"/>
+                    <rect x=".75" y=".75" width="34.5" height="34.5" rx="7.25" stroke="#22d3ee" stroke-opacity=".25" stroke-width=".5"/>
+                    <path d="M11 10v16M11 18l8-8M11 18l8 8" stroke="#22d3ee" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 <h2 style="margin:8px 0 0;font-size:22px;font-weight:800;letter-spacing:-0.02em">Kep It Simple</h2>
                 <p style="margin:4px 0 0;color:var(--fg-3);font-family:var(--font-mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase">Kepware Point Management System</p>
@@ -330,11 +329,10 @@
 
     <header class="header">
         <div class="header-icon">
-            <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="36" height="36" rx="8" fill="#0d1118"/>
-                <rect x="1" y="1" width="34" height="34" rx="7" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="1"/>
-                <path d="M10 12h6l2 4-4 2 4 6h-4l-3-5-1 1v4H7V12h3z" fill="#22d3ee"/>
-                <path d="M20 12h3l2 4h3l-2 4 2 4h-3l-2-4h-1v4h-3V12h1z" fill="#67e8f9" opacity="0.8"/>
+            <svg viewBox="0 0 36 36" fill="none">
+                <rect width="36" height="36" rx="8" fill="#131826"/>
+                <rect x=".75" y=".75" width="34.5" height="34.5" rx="7.25" stroke="#22d3ee" stroke-opacity=".25" stroke-width=".5"/>
+                <path d="M11 10v16M11 18l8-8M11 18l8 8" stroke="#22d3ee" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
         </div>
         <div>
@@ -343,8 +341,9 @@
         </div>
         <div class="header-actions">
             <span v-if="auth.token" class="header-user">
-                <strong>{{ auth.displayName || auth.user }}</strong>&nbsp;/&nbsp;{{ auth.role }}&nbsp;/&nbsp;{{ auth.permGroup }}
+                <strong>{{ auth.displayName || auth.user }}</strong>&nbsp;/&nbsp;{{ auth.role }}
             </span>
+            <button v-if="auth.token" class="theme-toggle" @click="showPwDialog = true">修改密碼</button>
             <button v-if="auth.token" class="theme-toggle" @click="userLogout">登出</button>
         </div>
     </header>
@@ -405,7 +404,7 @@
                     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Kepware 匯入
                 </div>
-                <div class="tab" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'; loadConfig()">
+                <div v-if="auth.role === 'admin'" class="tab" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'; loadConfig()">
                     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     設定
                 </div>
@@ -1141,13 +1140,13 @@
             <!-- =============== Settings Tab =============== -->
             <div v-show="activeTab === 'settings'">
                 <div class="sub-tabs">
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'dropdown' }" @click="settingsSubTab = 'dropdown'">下拉選項管理</div>
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'dropdown' }" @click="settingsSubTab = 'dropdown'">下拉選項管理</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'defaults' }" @click="settingsSubTab = 'defaults'">預設值</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'mapping' }" @click="settingsSubTab = 'mapping'">映射規則</div>
                     <div class="sub-tab" :class="{ active: settingsSubTab === 'profiles' }" @click="settingsSubTab = 'profiles'">DeviceProfile</div>
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
-                    <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; auth.role === 'admin' && loadUsers()">帳號管理</div>
-                    <div v-if="auth.role === 'admin'" class="sub-tab" :class="{ active: settingsSubTab === 'logs' }" @click="settingsSubTab = 'logs'; loadActivityLogs()">操作日誌</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'reftables' }" @click="settingsSubTab = 'reftables'; loadRefTables()">PG 參照表</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'accounts' }" @click="settingsSubTab = 'accounts'; loadUsers()">帳號管理</div>
+                    <div class="sub-tab" :class="{ active: settingsSubTab === 'logs' }" @click="settingsSubTab = 'logs'; loadActivityLogs()">操作日誌</div>
                 </div>
 
                 <!-- Dropdown Options Management -->
@@ -1414,36 +1413,16 @@
 
                 <!-- Account Management -->
                 <div v-show="settingsSubTab === 'accounts'">
-                    <!-- Personal account info -->
                     <div class="settings-section">
-                        <div class="settings-section-title">
-                            <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                            個人帳號
-                        </div>
-                        <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
-                            <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;font-size:13px;min-width:200px">
-                                <div style="margin-bottom:4px"><strong>帳號：</strong>{{ auth.user }}</div>
-                                <div style="margin-bottom:4px"><strong>顯示名稱：</strong>{{ auth.displayName || '-' }}</div>
-                                <div style="margin-bottom:4px"><strong>角色：</strong>{{ auth.role }}</div>
-                                <div><strong>權限群組：</strong>{{ auth.permGroup }}</div>
-                            </div>
-                            <div style="flex:1;min-width:250px">
-                                <div style="font-weight:600;margin-bottom:8px">變更密碼</div>
-                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-                                    <div class="form-group small"><label>目前密碼</label><input v-model="pwForm.oldPassword" type="password" placeholder="目前密碼"></div>
-                                    <div class="form-group small"><label>新密碼</label><input v-model="pwForm.newPassword" type="password" placeholder="新密碼"></div>
-                                    <div class="form-group small"><label>確認新密碼</label><input v-model="pwForm.confirmPassword" type="password" placeholder="再輸入一次"></div>
-                                    <button class="btn btn-primary btn-sm" @click="changeMyPassword">變更密碼</button>
-                                </div>
-                                <div v-if="pwMsg.text" :style="{ color: pwMsg.error ? 'var(--error)' : 'var(--success)', fontSize: '13px', marginTop: '6px' }">{{ pwMsg.text }}</div>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Admin: user management -->
-                    <div v-if="auth.role === 'admin'" class="settings-section">
                         <div class="settings-section-title">
                             <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                             使用者管理
+                        </div>
+                        <div style="padding:8px 12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;color:var(--fg-3);margin-bottom:14px;line-height:1.6">
+                            <strong style="color:var(--fg-2)">角色說明：</strong>
+                            <strong>admin</strong> 全部權限（含設定管理） ｜
+                            <strong>operator</strong> 所有功能（不含設定） ｜
+                            <strong>user</strong> 基本功能（不含 Kepware 匯入與設定）
                         </div>
                         <!-- Add user form -->
                         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
@@ -1451,13 +1430,10 @@
                             <div class="form-group small"><label>密碼</label><input v-model="userForm.password" type="password" placeholder="密碼"></div>
                             <div class="form-group small"><label>顯示名稱</label><input v-model="userForm.displayName" placeholder="選填"></div>
                             <div class="form-group small"><label>角色</label>
-                                <select v-model="userForm.role"><option value="operator">operator</option><option value="admin">admin</option></select>
-                            </div>
-                            <div class="form-group small"><label>權限群組</label>
-                                <select v-model="userForm.permGroup">
-                                    <option value="viewer">viewer（檢視者）</option>
-                                    <option value="operator">operator（操作者）</option>
-                                    <option value="kepware_admin">kepware_admin（Kepware 管理）</option>
+                                <select v-model="userForm.role">
+                                    <option value="user">user</option>
+                                    <option value="operator">operator</option>
+                                    <option value="admin">admin</option>
                                 </select>
                             </div>
                             <button class="btn btn-primary btn-sm" @click="createUser">新增帳號</button>
@@ -1465,7 +1441,7 @@
                         <!-- User list -->
                         <div v-if="userList.length" class="table-wrapper">
                             <table>
-                                <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>角色</th><th>權限群組</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead>
+                                <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>角色</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead>
                                 <tbody>
                                     <tr v-for="u in userList" :key="u.id">
                                         <td>{{ u.id }}</td>
@@ -1473,14 +1449,9 @@
                                         <td>{{ u.display_name || '-' }}</td>
                                         <td>
                                             <select :value="u.role" @change="updateUserRole(u.id, $event.target.value)" style="padding:2px 6px;font-size:12px;border-radius:4px;border:1px solid var(--border)">
-                                                <option value="operator">operator</option><option value="admin">admin</option>
-                                            </select>
-                                        </td>
-                                        <td>
-                                            <select :value="u.perm_group || 'viewer'" @change="updateUserGroup(u.id, $event.target.value)" style="padding:2px 6px;font-size:12px;border-radius:4px;border:1px solid var(--border)">
-                                                <option value="viewer">viewer</option>
+                                                <option value="user">user</option>
                                                 <option value="operator">operator</option>
-                                                <option value="kepware_admin">kepware_admin</option>
+                                                <option value="admin">admin</option>
                                             </select>
                                         </td>
                                         <td>
@@ -1562,6 +1533,23 @@
 
     <footer class="footer">Kep It Simple &mdash; Developed and Maintained by 4K60 CIM</footer>
 
+    <!-- Password Change Dialog -->
+    <div class="modal-overlay" v-if="showPwDialog" @click.self="showPwDialog = false">
+        <div class="modal-box" style="max-width:400px">
+            <h3>修改密碼</h3>
+            <div style="display:flex;flex-direction:column;gap:12px;margin:16px 0">
+                <div class="form-group"><label>目前密碼</label><input v-model="pwForm.oldPassword" type="password" placeholder="目前密碼"></div>
+                <div class="form-group"><label>新密碼</label><input v-model="pwForm.newPassword" type="password" placeholder="新密碼"></div>
+                <div class="form-group"><label>確認新密碼</label><input v-model="pwForm.confirmPassword" type="password" placeholder="再輸入一次"></div>
+            </div>
+            <div v-if="pwMsg.text" :style="{ color: pwMsg.error ? 'var(--error)' : 'var(--success)', fontSize: '13px', marginBottom: '8px' }">{{ pwMsg.text }}</div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" @click="showPwDialog = false; pwForm.oldPassword = ''; pwForm.newPassword = ''; pwForm.confirmPassword = ''; pwMsg.text = ''">取消</button>
+                <button class="btn btn-primary" @click="changeMyPassword">確認修改</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirm Dialog -->
     <div class="modal-overlay" v-if="modal.show" @click.self="modal.show = false">
         <div class="modal-box">
@@ -1589,7 +1577,6 @@ createApp({
             token: localStorage.getItem('kep_token') || '',
             user: localStorage.getItem('kep_user') || '',
             role: localStorage.getItem('kep_role') || '',
-            permGroup: localStorage.getItem('kep_perm_group') || 'viewer',
             displayName: localStorage.getItem('kep_display') || '',
             username: '', password: '', logging: false, error: '',
         })
@@ -1608,12 +1595,10 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || '登入失敗') }
                 const data = await resp.json()
                 auth.token = data.token; auth.user = data.username
-                auth.role = data.role; auth.permGroup = data.perm_group || 'viewer'
-                auth.displayName = data.display_name || ''
+                auth.role = data.role; auth.displayName = data.display_name || ''
                 localStorage.setItem('kep_token', data.token)
                 localStorage.setItem('kep_user', data.username)
                 localStorage.setItem('kep_role', data.role)
-                localStorage.setItem('kep_perm_group', data.perm_group || 'viewer')
                 localStorage.setItem('kep_display', data.display_name || '')
                 auth.username = ''; auth.password = ''
             } catch (e) { auth.error = e.message }
@@ -1621,14 +1606,13 @@ createApp({
         }
 
         function userLogout() {
-            auth.token = ''; auth.user = ''; auth.role = ''; auth.permGroup = 'viewer'; auth.displayName = ''
+            auth.token = ''; auth.user = ''; auth.role = ''; auth.displayName = ''
             localStorage.removeItem('kep_token'); localStorage.removeItem('kep_user')
-            localStorage.removeItem('kep_role'); localStorage.removeItem('kep_perm_group')
-            localStorage.removeItem('kep_display')
+            localStorage.removeItem('kep_role'); localStorage.removeItem('kep_display')
         }
 
         // ── Personal Account Settings ──
-        const showAccountDialog = ref(false)
+        const showPwDialog = ref(false)
         const pwForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
         const pwMsg = reactive({ text: '', error: false })
 
@@ -1650,7 +1634,7 @@ createApp({
 
         // ── User Management State ──
         const userList = ref([])
-        const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator', permGroup: 'viewer' })
+        const userForm = reactive({ username: '', password: '', displayName: '', role: 'operator' })
 
         async function loadUsers() {
             try {
@@ -1665,10 +1649,10 @@ createApp({
             try {
                 const resp = await fetch('/api/admin/users', {
                     method: 'POST', headers: authHeaders(),
-                    body: JSON.stringify({ username: userForm.username, password: userForm.password, display_name: userForm.displayName, role: userForm.role, perm_group: userForm.permGroup })
+                    body: JSON.stringify({ username: userForm.username, password: userForm.password, display_name: userForm.displayName, role: userForm.role })
                 })
                 if (!resp.ok) { const e = await resp.json(); alert(e.detail || '建立失敗'); return }
-                userForm.username = ''; userForm.password = ''; userForm.displayName = ''; userForm.role = 'operator'; userForm.permGroup = 'viewer'
+                userForm.username = ''; userForm.password = ''; userForm.displayName = ''; userForm.role = 'operator'
                 loadUsers()
             } catch (e) { alert(e.message) }
         }
@@ -1688,11 +1672,6 @@ createApp({
             if (!newPass) return
             await fetch(`/api/admin/users/${userId}/reset-password`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ new_password: newPass }) })
             alert('密碼已重設')
-        }
-
-        async function updateUserGroup(userId, newGroup) {
-            await fetch(`/api/admin/users/${userId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ perm_group: newGroup }) })
-            loadUsers()
         }
 
         async function deleteUser(userId, username) {
@@ -1730,7 +1709,7 @@ createApp({
             } catch (e) { alert(e.message) }
         }
 
-        const canKepwareImport = computed(() => auth.role === 'admin' || auth.permGroup === 'kepware_admin' || auth.permGroup === 'operator')
+        const canKepwareImport = computed(() => auth.role === 'admin' || auth.role === 'operator')
 
         const conn = reactive({ url: '', username: '', password: '', token: null, status: 'disconnected' })
         const connStatusText = computed(() => ({ disconnected: '未連線', connecting: '連線中...', connected: '已連線', error: '連線失敗' })[conn.status])
@@ -2588,8 +2567,8 @@ createApp({
 
         return {
             // Auth
-            auth, userLogin, userLogout, authHeaders, pwForm, pwMsg, changeMyPassword, canKepwareImport,
-            userList, userForm, loadUsers, createUser, updateUserRole, updateUserGroup, toggleUserActive, resetUserPassword, deleteUser,
+            auth, userLogin, userLogout, authHeaders, showPwDialog, pwForm, pwMsg, changeMyPassword, canKepwareImport,
+            userList, userForm, loadUsers, createUser, updateUserRole, toggleUserActive, resetUserPassword, deleteUser,
             actLog, actLogTotalPages, loadActivityLogs, cleanupLogs,
             // IO Mapping
             ioMap, ioMapPickFile, filteredIoMap, ioMapTotalPages, pagedIoMap,

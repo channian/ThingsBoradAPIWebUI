@@ -33,7 +33,7 @@ from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
 from app.auth import (
     hash_password, verify_password, create_token,
-    get_current_user, require_admin, require_group, PERM_GROUPS,
+    get_current_user, require_admin, require_role, VALID_ROLES,
 )
 
 # ── Logging ────────────────────────────────────────────
@@ -112,7 +112,6 @@ def _ensure_admin_user():
                 password_hash=hash_password(admin_pass),
                 display_name="管理員",
                 role="admin",
-                perm_group="kepware_admin",
             )
             log.info(f"[auth] 自動建立初始管理員帳號: {admin_user}")
     except Exception as e:
@@ -381,14 +380,12 @@ class UserCreateRequest(BaseModel):
     password: str
     display_name: str = ""
     role: str = "operator"
-    perm_group: str = "viewer"
 
 
 class UserUpdateRequest(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
-    perm_group: Optional[str] = None
 
 
 class UserPasswordRequest(BaseModel):
@@ -408,15 +405,13 @@ async def user_login(req: UserLoginRequest, request: Request):
         raise HTTPException(status_code=403, detail="帳號已停用")
     if not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
-    grp = user.get("perm_group", "viewer")
     token = create_token(user["username"], user["role"],
-                         user.get("display_name", ""), perm_group=grp)
+                         user.get("display_name", ""))
     _log_activity(request, {"sub": user["username"]}, "login", "使用者登入")
     return {
         "token": token,
         "username": user["username"],
         "role": user["role"],
-        "perm_group": grp,
         "display_name": user.get("display_name", ""),
     }
 
@@ -454,18 +449,15 @@ async def admin_create_user(req: UserCreateRequest, request: Request,
     """新增使用者"""
     if pg_client.get_user_by_username(req.username):
         raise HTTPException(status_code=409, detail=f"帳號 {req.username} 已存在")
-    if req.role not in ("admin", "operator"):
-        raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
-    if req.perm_group not in PERM_GROUPS:
-        raise HTTPException(status_code=400, detail=f"權限群組必須是 {'/'.join(PERM_GROUPS)}")
+    if req.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"角色必須是 {'/'.join(VALID_ROLES)}")
     result = pg_client.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         display_name=req.display_name,
         role=req.role,
-        perm_group=req.perm_group,
     )
-    _log_activity(request, user, "create_user", f"新增使用者 {req.username} (群組: {req.perm_group})")
+    _log_activity(request, user, "create_user", f"新增使用者 {req.username} (角色: {req.role})")
     return result
 
 
@@ -475,10 +467,8 @@ async def admin_update_user(user_id: int, req: UserUpdateRequest,
                             user: dict = Depends(require_admin)):
     """更新使用者資訊"""
     fields = {k: v for k, v in req.dict().items() if v is not None}
-    if "role" in fields and fields["role"] not in ("admin", "operator"):
-        raise HTTPException(status_code=400, detail="角色必須是 admin 或 operator")
-    if "perm_group" in fields and fields["perm_group"] not in PERM_GROUPS:
-        raise HTTPException(status_code=400, detail=f"權限群組必須是 {'/'.join(PERM_GROUPS)}")
+    if "role" in fields and fields["role"] not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"角色必須是 {'/'.join(VALID_ROLES)}")
     pg_client.update_user(user_id, **fields)
     _log_activity(request, user, "update_user", f"更新使用者 ID={user_id} {fields}")
     return {"success": True}
@@ -501,19 +491,6 @@ async def admin_delete_user(user_id: int,
         raise HTTPException(status_code=400, detail="不能刪除自己的帳號")
     pg_client.delete_user(user_id)
     return {"success": True}
-
-
-# ── API: 權限群組 ────────────────────────────────────
-
-@app.get("/api/admin/perm-groups")
-async def admin_perm_groups(user: dict = Depends(require_admin)):
-    """取得可用的權限群組列表"""
-    groups = [
-        {"id": "viewer", "name": "檢視者", "desc": "僅可檢視，無法操作 Kepware 匯入"},
-        {"id": "operator", "name": "操作者", "desc": "可推導欄位、匯入暫存表，不可執行建點"},
-        {"id": "kepware_admin", "name": "Kepware 管理員", "desc": "完整 Kepware 匯入權限（推導、建點、Scale）"},
-    ]
-    return groups
 
 
 # ── API: 操作日誌 ────────────────────────────────────
@@ -1062,7 +1039,7 @@ async def pg_test_connection():
 
 @app.post("/api/pg/staging/import")
 async def pg_staging_import(req: StagingImportRequest, request: Request,
-                            user: dict = Depends(require_group("kepware_admin", "operator"))):
+                            user: dict = Depends(require_role("admin", "operator"))):
     """將已上傳的 CSV 資料匯入 PG 暫存表"""
     rows = _csv_store_get(req.upload_id)
     if rows is None:
@@ -1279,7 +1256,7 @@ async def pg_delete_ref(req: RefDeleteRequest):
 
 @app.post("/api/pg/derive/tb")
 async def pg_derive_tb(req: DeriveRequest,
-                       user: dict = Depends(require_group("kepware_admin", "operator"))):
+                       user: dict = Depends(require_role("admin", "operator"))):
     """推導 TB 建點欄位"""
     try:
         staging = pg_client.get_staging_list(
@@ -1297,7 +1274,7 @@ async def pg_derive_tb(req: DeriveRequest,
 
 @app.post("/api/pg/derive/pg")
 async def pg_derive_pg(req: DeriveRequest,
-                       user: dict = Depends(require_group("kepware_admin", "operator"))):
+                       user: dict = Depends(require_role("admin", "operator"))):
     """推導 PG 正式表欄位"""
     try:
         staging = pg_client.get_staging_list(
@@ -1317,7 +1294,7 @@ async def pg_derive_pg(req: DeriveRequest,
 
 @app.post("/api/pg/execute/tb")
 async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
-                        user: dict = Depends(require_group("kepware_admin"))):
+                        user: dict = Depends(require_role("admin", "operator"))):
     """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status（含限速）"""
     import time, random
     try:
@@ -1407,7 +1384,7 @@ async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
 
 @app.post("/api/pg/execute/pg")
 async def pg_execute_pg(req: ExecutePgRequest, request: Request,
-                        user: dict = Depends(require_group("kepware_admin"))):
+                        user: dict = Depends(require_role("admin", "operator"))):
     """執行 PG 寫入：推導欄位 → 寫入正式表 → 更新 pg_status"""
     try:
         # 1. 取得 pending 的暫存資料並推導
@@ -1460,7 +1437,7 @@ async def kw_gw_test(req: KwGwSettingsRequest):
 
 @app.post("/api/pg/derive/scale")
 async def pg_derive_scale(req: DeriveScaleRequest,
-                          user: dict = Depends(require_group("kepware_admin", "operator"))):
+                          user: dict = Depends(require_role("admin", "operator"))):
     """推導 Scale 配置欄位（從暫存表的 scale_enabled/raw_low/raw_high/scaled_low/scaled_high）"""
     try:
         staging = pg_client.get_staging_list(
@@ -1479,7 +1456,7 @@ async def pg_derive_scale(req: DeriveScaleRequest,
 
 @app.post("/api/pg/execute/scale")
 async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
-                           user: dict = Depends(require_group("kepware_admin"))):
+                           user: dict = Depends(require_role("admin", "operator"))):
     """執行 Scale 設定：推導欄位 → 呼叫 Kepware GW API → 更新 scale_status"""
     import time, random
     try:

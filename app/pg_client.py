@@ -443,30 +443,29 @@ class PGClient:
         with self._get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT id, username, display_name, role, perm_group,
+                    SELECT id, username, display_name, role,
                            is_active, created_at, updated_at
                     FROM kepitsimple_user ORDER BY id
                 """)
                 return [dict(r) for r in cur.fetchall()]
 
     def create_user(self, username: str, password_hash: str,
-                    display_name: str = "", role: str = "operator",
-                    perm_group: str = "viewer") -> dict:
+                    display_name: str = "", role: str = "operator") -> dict:
         """建立使用者"""
         with self._get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
                     INSERT INTO kepitsimple_user
-                        (username, password_hash, display_name, role, perm_group)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING id, username, display_name, role, perm_group,
+                        (username, password_hash, display_name, role)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, username, display_name, role,
                               is_active, created_at
-                """, (username, password_hash, display_name, role, perm_group))
+                """, (username, password_hash, display_name, role))
                 return dict(cur.fetchone())
 
     def update_user(self, user_id: int, **fields) -> bool:
         """更新使用者欄位"""
-        allowed = {"display_name", "role", "is_active", "perm_group"}
+        allowed = {"display_name", "role", "is_active"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False

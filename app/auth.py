@@ -23,6 +23,8 @@ log = logging.getLogger("auth")
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "kepitsimple-default-secret-change-me")
 TOKEN_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
+VALID_ROLES = ("admin", "operator", "user")
+
 
 # ── 密碼工具（PBKDF2-SHA256）──────────────────────────
 
@@ -52,13 +54,11 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
-def create_token(username: str, role: str, display_name: str = "",
-                 perm_group: str = "viewer") -> str:
+def create_token(username: str, role: str, display_name: str = "") -> str:
     header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     exp = int(time.time()) + TOKEN_EXPIRE_HOURS * 3600
     payload = _b64url_encode(json.dumps({
-        "sub": username, "role": role, "name": display_name,
-        "grp": perm_group, "exp": exp,
+        "sub": username, "role": role, "name": display_name, "exp": exp,
     }).encode())
     sig_input = f"{header}.{payload}".encode()
     sig = _b64url_encode(hmac.new(SECRET_KEY.encode(), sig_input, hashlib.sha256).digest())
@@ -105,20 +105,13 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-PERM_GROUPS = ("viewer", "operator", "kepware_admin")
-PERM_LEVELS = {g: i for i, g in enumerate(PERM_GROUPS)}
-
-
-def require_group(*allowed_groups):
-    """檢查使用者是否屬於允許的權限群組（admin 角色自動放行）"""
+def require_role(*allowed_roles):
+    """檢查使用者角色是否在允許清單中"""
     def _check(user: dict = Depends(get_current_user)) -> dict:
-        if user.get("role") == "admin":
-            return user
-        user_group = user.get("grp", "viewer")
-        if user_group not in allowed_groups:
+        if user.get("role") not in allowed_roles:
             raise HTTPException(
                 status_code=403,
-                detail=f"需要 {'/'.join(allowed_groups)} 群組權限",
+                detail=f"需要 {'/'.join(allowed_roles)} 角色權限",
             )
         return user
     return _check
