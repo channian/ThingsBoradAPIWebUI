@@ -713,6 +713,8 @@ class PGClient:
 
             site_prefix = parts[0] if len(parts) > 0 else ""
             floor = parts[1] if len(parts) > 1 else ""
+            if floor.upper() == "BF":
+                floor = "B1F"
             # system 優先用 CSV 的 system_code，fallback 才從 tag_name 拆
             system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
 
@@ -793,6 +795,8 @@ class PGClient:
 
             site_prefix = parts[0] if len(parts) > 0 else ""
             floor = parts[1] if len(parts) > 1 else ""
+            if floor.upper() == "BF":
+                floor = "B1F"
             # system 優先用 CSV 的 system_code，fallback 才從 tag_name 拆
             system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
 
@@ -886,6 +890,8 @@ class PGClient:
             parts = tag_name.split("_") if tag_name else []
             site_prefix = parts[0] if len(parts) > 0 else ""
             floor = parts[1] if len(parts) > 1 else ""
+            if floor.upper() == "BF":
+                floor = "B1F"
             system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
 
             io_device = row.get("io_device", "")
