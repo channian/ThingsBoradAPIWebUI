@@ -2220,7 +2220,7 @@ createApp({
             imp.importing = true
             try {
                 const resp = await fetch('/api/pg/staging/import', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ upload_id: imp.uploadId })
                 })
                 if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
@@ -2233,7 +2233,7 @@ createApp({
             staging.loading = true
             try {
                 const resp = await fetch('/api/pg/staging/query', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({
                         page: staging.page, page_size: staging.pageSize,
                         tb_status: staging.filterTb || null,
@@ -2316,7 +2316,7 @@ createApp({
             tbDerive.loading = true
             try {
                 const resp = await fetch('/api/pg/derive/tb', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ tb_status: 'pending' })
                 })
                 if (!resp.ok) throw new Error('Derive failed')
@@ -2331,7 +2331,7 @@ createApp({
             pgDerive.loading = true
             try {
                 const resp = await fetch('/api/pg/derive/pg', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ pg_status: 'pending' })
                 })
                 if (!resp.ok) {
@@ -2356,7 +2356,7 @@ createApp({
             tbDerive.result = null
             try {
                 const resp = await fetch('/api/pg/execute/tb', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({
                         tb_url: conn.url,
                         tb_username: conn.username,
@@ -2390,7 +2390,7 @@ createApp({
             pgDerive.result = null
             try {
                 const resp = await fetch('/api/pg/execute/pg', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({})
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Execute failed') }
@@ -2437,7 +2437,7 @@ createApp({
             scaleDerive.loading = true
             try {
                 const resp = await fetch('/api/pg/derive/scale', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ scale_status: 'pending' })
                 })
                 if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${resp.status}`) }
@@ -2458,7 +2458,7 @@ createApp({
             scaleDerive.result = null
             try {
                 const resp = await fetch('/api/pg/execute/scale', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({
                         kw_gw_url: kwGw.url,
                         kw_gw_username: kwGw.username,
