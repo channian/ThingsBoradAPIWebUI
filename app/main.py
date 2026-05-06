@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import queue
+import requests
 import threading
 import uuid
 import datetime
@@ -336,9 +337,9 @@ class DeriveRequest(BaseModel):
 
 
 class ExecuteTbRequest(BaseModel):
-    tb_url: str
-    tb_username: str
-    tb_password: str
+    kw_gw_url: str
+    kw_gw_username: str
+    kw_gw_password: str
     ids: Optional[list] = None
     delay: float = 0.2
     batch_size: int = 50
@@ -359,6 +360,17 @@ class ExecuteScaleRequest(BaseModel):
     kw_gw_username: str
     kw_gw_password: str
     ids: Optional[list] = None
+    delay: float = 0.2
+    batch_size: int = 50
+    batch_pause: float = 5.0
+
+
+class KwBatchDeleteRequest(BaseModel):
+    upload_id: str
+    kw_gw_url: str
+    kw_gw_username: str
+    kw_gw_password: str
+    dry_run: bool = True
     delay: float = 0.2
     batch_size: int = 50
     batch_pause: float = 5.0
@@ -912,6 +924,93 @@ async def delete_devices_direct(req: DirectDeleteRequest):
     return {"task_id": task.id}
 
 
+@app.post("/api/kw/delete-batch")
+async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
+                          user: dict = Depends(require_role("admin", "operator"))):
+    """透過 Kepware API 批次刪除 Tag（從 CSV 推導路徑）"""
+    rows = _csv_store_get(req.upload_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
+
+    task = task_manager.create_task("kw_delete", {
+        "rows": rows,
+        "dry_run": req.dry_run,
+        "kw_gw_url": req.kw_gw_url,
+        "kw_gw_username": req.kw_gw_username,
+        "kw_gw_password": req.kw_gw_password,
+        "delay": req.delay,
+        "batch_size": req.batch_size,
+        "batch_pause": req.batch_pause,
+    })
+    task.csv_filename = "(Kepware 批次刪除)"
+    task.on_complete = _append_history
+
+    def _exec_kw_delete(task):
+        import datetime as dt, time, random
+        task.started_at = dt.datetime.now().isoformat()
+        params = task.params
+        csv_rows = params["rows"]
+        dry_run = params.get("dry_run", True)
+
+        derived = pg_client.derive_kw_fields(csv_rows)
+        if not derived:
+            task.push_log("warning", "無可處理的 Tag 資料")
+            task.push_complete({"total": 0, "success": 0, "fail": 0, "skip": 0})
+            return
+
+        if not dry_run:
+            try:
+                client = KepwareGatewayClient(params["kw_gw_url"])
+                client.login(params["kw_gw_username"], params["kw_gw_password"])
+                task.push_log("info", "Kepware Gateway 登入成功")
+            except Exception as e:
+                task.push_log("error", f"Kepware 登入失敗: {e}")
+                task.push_complete({"total": len(derived), "success": 0, "fail": 0, "skip": 0})
+                return
+
+        total = len(derived)
+        success = fail = 0
+        for idx, item in enumerate(derived, 1):
+            tag = item["tag_name"]
+            ch = item["channel_name"]
+            dev = item["device_name"]
+            grp = item["tag_groups"] or None
+            if dry_run:
+                task.push_log("info", f"[預演] 模擬刪除 Tag: {ch}/{dev}/{grp or ''}/{tag}")
+                success += 1
+                task.add_result(tag, "success", "預演")
+            else:
+                try:
+                    client.delete_tag(ch, dev, tag, tag_group=grp)
+                    task.push_log("success", f"[成功] 已刪除 Tag: {tag}")
+                    success += 1
+                    task.add_result(tag, "success", "")
+                except requests.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else "?"
+                    if status == 404:
+                        task.push_log("warning", f"[略過] Tag 不存在: {tag}")
+                        success += 1
+                        task.add_result(tag, "success", "不存在")
+                    else:
+                        task.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
+                        fail += 1
+                        task.add_result(tag, "fail", f"HTTP {status}")
+                except Exception as e:
+                    task.push_log("error", f"[異常] {tag}: {e}")
+                    fail += 1
+                    task.add_result(tag, "fail", str(e))
+
+            task.push_progress(idx, total, success, fail, 0)
+            time.sleep(params.get("delay", 0.2) + random.uniform(0.01, 0.05))
+            if success > 0 and success % params.get("batch_size", 50) == 0:
+                time.sleep(params.get("batch_pause", 5))
+
+        task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0})
+
+    task_manager.run_in_background(task, _exec_kw_delete)
+    return {"task_id": task.id}
+
+
 # ── API: 設定管理 ─────────────────────────────────────
 
 @app.get("/api/config")
@@ -1257,7 +1356,7 @@ async def pg_delete_ref(req: RefDeleteRequest):
 @app.post("/api/pg/derive/tb")
 async def pg_derive_tb(req: DeriveRequest,
                        user: dict = Depends(require_role("admin", "operator"))):
-    """推導 TB 建點欄位"""
+    """推導 Kepware 建點欄位（tag group + tag）"""
     try:
         staging = pg_client.get_staging_list(
             page=0, page_size=9999,
@@ -1266,7 +1365,7 @@ async def pg_derive_tb(req: DeriveRequest,
         rows = staging["data"]
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
-        results = pg_client.derive_tb_fields(rows)
+        results = pg_client.derive_kw_fields(rows)
         return {"data": results, "total": len(results)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
@@ -1295,10 +1394,9 @@ async def pg_derive_pg(req: DeriveRequest,
 @app.post("/api/pg/execute/tb")
 async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
                         user: dict = Depends(require_role("admin", "operator"))):
-    """執行 TB 建點：推導欄位 → 呼叫 TB API 建立裝置 → 更新 tb_status（含限速）"""
+    """執行 Kepware 建點：推導欄位 → 建立 tag group + tag → 更新 tb_status（含限速）"""
     import time, random
     try:
-        # 1. 取得 pending 的暫存資料並推導
         staging = pg_client.get_staging_list(page=0, page_size=9999, tb_status="pending")
         rows = staging["data"]
         if req.ids:
@@ -1306,80 +1404,86 @@ async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
         if not rows:
             return {"success": 0, "failed": 0, "errors": [], "message": "無待建點資料"}
 
-        derived = pg_client.derive_tb_fields(rows)
-        log.info(f"[executeTB] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}, batch_pause={req.batch_pause}")
+        derived = pg_client.derive_kw_fields(rows)
+        log.info(f"[executeKW] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}, batch_pause={req.batch_pause}")
 
-        # 2. 登入 TB 並逐筆建立裝置（含限速）
-        client = ThingsBoardClient(req.tb_url)
-        client.login(req.tb_username, req.tb_password)
+        client = KepwareGatewayClient(req.kw_gw_url)
+        client.login(req.kw_gw_username, req.kw_gw_password)
+
+        # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
+        unique_groups = {}
+        for item in derived:
+            ch = item["channel_name"]
+            dev = item["device_name"]
+            grp = item["tag_groups"]
+            if grp:
+                unique_groups[(ch, dev, grp)] = True
+        for (ch, dev, grp) in unique_groups:
+            try:
+                client.ensure_tag_groups(ch, dev, grp)
+            except Exception as e:
+                log.warning(f"[executeKW] tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
 
         success_ids = []
         failed = []
         success_count = 0
         for idx, item in enumerate(derived):
-            # 先檢查是否已存在
             try:
-                existing = client.get_device_by_name(item["tb_name"])
-                if existing:
-                    success_ids.append(item["id"])  # 視為已完成
-                    success_count += 1
-                    continue
-            except Exception:
-                pass
-
-            # 組裝 TB API payload（與 task_manager 格式一致）
-            payload = {
-                "name": item["tb_name"],
-                "type": item["tb_type"],
-                "label": item["tb_label"],
-                "additionalInfo": {"description": item.get("tb_description", "")},
-            }
-            try:
-                resp = client.create_device(payload)
-                if resp.status_code in (200, 201):
+                client.create_tag(
+                    channel_name=item["channel_name"],
+                    device_name=item["device_name"],
+                    tag_name=item["tag_name"],
+                    address=item.get("address") or None,
+                    description=item.get("description") or None,
+                    tag_group=item["tag_groups"] or None,
+                )
+                success_ids.append(item["id"])
+                success_count += 1
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 409:
                     success_ids.append(item["id"])
                     success_count += 1
-                elif resp.status_code == 429:
-                    log.warning(f"[executeTB] 收到 429 限速，暫停 {req.batch_pause} 秒")
+                elif e.response is not None and e.response.status_code == 429:
+                    log.warning(f"[executeKW] 收到 429 限速，暫停 {req.batch_pause} 秒")
                     time.sleep(req.batch_pause)
-                    # 重試一次
-                    resp = client.create_device(payload)
-                    if resp.status_code in (200, 201):
+                    try:
+                        client.create_tag(
+                            channel_name=item["channel_name"],
+                            device_name=item["device_name"],
+                            tag_name=item["tag_name"],
+                            address=item.get("address") or None,
+                            description=item.get("description") or None,
+                            tag_group=item["tag_groups"] or None,
+                        )
                         success_ids.append(item["id"])
                         success_count += 1
-                    else:
-                        failed.append({
-                            "name": item["tb_name"],
-                            "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"
-                        })
+                    except Exception as retry_e:
+                        failed.append({"name": item["tag_name"], "reason": str(retry_e)})
                 else:
-                    failed.append({
-                        "name": item["tb_name"],
-                        "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"
-                    })
+                    status = e.response.status_code if e.response is not None else "?"
+                    text = e.response.text[:200] if e.response is not None else str(e)
+                    failed.append({"name": item["tag_name"], "reason": f"HTTP {status}: {text}"})
             except Exception as e:
-                failed.append({"name": item["tb_name"], "reason": str(e)})
+                failed.append({"name": item["tag_name"], "reason": str(e)})
 
-            # 限速控制：單筆延遲 + 批次暫停
             time.sleep(req.delay + random.uniform(0.01, 0.05))
             if success_count > 0 and success_count % req.batch_size == 0:
-                log.info(f"[executeTB] 已處理 {success_count} 筆，冷卻暫停 {req.batch_pause} 秒")
+                log.info(f"[executeKW] 已處理 {success_count} 筆，冷卻暫停 {req.batch_pause} 秒")
                 time.sleep(req.batch_pause)
 
-        # 3. 更新成功的暫存資料狀態
         if success_ids:
             pg_client.update_staging_status(success_ids, "tb_status", "done")
 
-        _log_activity(request, user, "execute_tb", f"TB 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆")
+        _log_activity(request, user, "execute_tb", f"Kepware 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆")
         return {
             "success": len(success_ids),
             "failed": len(failed),
             "errors": failed,
-            "message": f"成功建立 {len(success_ids)} 筆裝置"
+            "message": f"成功建立 {len(success_ids)} 筆 Tag"
         }
     except Exception as e:
-        log.error(f"[executeTB] TB 建點失敗: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"TB 建點失敗: {e}")
+        log.error(f"[executeKW] Kepware 建點失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Kepware 建點失敗: {e}")
 
 
 @app.post("/api/pg/execute/pg")

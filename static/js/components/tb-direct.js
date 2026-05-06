@@ -1,6 +1,6 @@
 import { authHeaders } from '../shared.js'
 
-export function useTbDirect(auth, conn) {
+export function useTbDirect(auth, conn, kwGw, dragTarget) {
     const { reactive, ref, computed, nextTick } = Vue
 
     function newOpState(defaults = {}) {
@@ -16,7 +16,6 @@ export function useTbDirect(auth, conn) {
     }
     const create = newOpState()
     const del = newOpState()
-    const dragTarget = ref(null)
 
     const modal = reactive({ show: false, title: '', message: '', onConfirm: () => {} })
     const createLogArea = ref(null)
@@ -98,10 +97,27 @@ export function useTbDirect(auth, conn) {
         } catch (e) { state.running = false; alert('啟動任務失敗: ' + e.message) }
     }
 
+    async function startKwDelete() {
+        if (!del.uploadId) return
+        if (kwGw.status !== 'connected') { alert('請先連線 Kepware Gateway'); return }
+        del.running = true; del.logs = []; del.summary = null
+        del.progress = { current: 0, total: 0, success: 0, fail: 0, skip: 0 }
+        try {
+            const resp = await fetch('/api/kw/delete-batch', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': auth.token ? `Bearer ${auth.token}` : '' },
+                body: JSON.stringify({ upload_id: del.uploadId, dry_run: del.dryRun,
+                    kw_gw_url: kwGw.url, kw_gw_username: kwGw.username, kw_gw_password: kwGw.password,
+                    delay: del.settings.delay, batch_size: del.settings.batchSize, batch_pause: del.settings.batchPause }) })
+            if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Execute failed') }
+            const data = await resp.json()
+            del.taskId = data.task_id
+            connectSSE(data.task_id, del, deleteLogArea)
+        } catch (e) { del.running = false; alert('啟動任務失敗: ' + e.message) }
+    }
+
     function confirmDelete() {
-        if (del.dryRun) { startTask('delete'); return }
-        modal.title = '確認刪除'; modal.message = `即將以 LIVE 模式刪除 ${del.totalRows} 筆裝置，此操作無法復原！確定要繼續嗎？`
-        modal.onConfirm = () => startTask('delete'); modal.show = true
+        if (del.dryRun) { startKwDelete(); return }
+        modal.title = '確認刪除'; modal.message = `即將以 LIVE 模式刪除 ${del.totalRows} 筆 Tag，此操作無法復原！確定要繼續嗎？`
+        modal.onConfirm = () => startKwDelete(); modal.show = true
     }
 
     async function checkDeviceProfiles() {
@@ -125,7 +141,7 @@ export function useTbDirect(auth, conn) {
     }
 
     return {
-        create, del, dragTarget, modal, createLogArea, deleteLogArea,
+        create, del, modal, createLogArea, deleteLogArea,
         createProgress, deleteProgress, hasTypeHeader, dpCheck,
         testConnection, uploadCSV, handleFileSelect, handleDrop,
         startTask, confirmDelete, checkDeviceProfiles, connectSSE,

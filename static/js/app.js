@@ -29,11 +29,12 @@ createApp({
         const userLogout = () => _userLogout(auth)
         const authHeaders = () => _authHeaders(auth)
 
-        const tbDirect = useTbDirect(auth, conn)
+        const dragTarget = ref(null)
+        const importComp = useImport(auth, conn, dragTarget)
+        const tbDirect = useTbDirect(auth, conn, importComp.kwGw, dragTarget)
         const ioMapping = useIoMapping(auth)
         const queryComp = useQuery(conn, tbDirect.connectSSE)
         const historyComp = useHistory()
-        const importComp = useImport(auth, conn, tbDirect.dragTarget)
         const settings = useSettings(auth, conn)
 
         const confirmDeleteSelected = () => queryComp.confirmDeleteSelected(tbDirect.modal)
@@ -46,7 +47,7 @@ createApp({
 
         return {
             auth, userLogin, userLogout, authHeaders, canKepwareImport,
-            conn, connStatusText, activeTab,
+            conn, connStatusText, activeTab, dragTarget,
             formatTime, formatISOTime, typeLabel, truncate,
             ...tbDirect,
             ...ioMapping,

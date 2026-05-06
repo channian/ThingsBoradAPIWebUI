@@ -1,7 +1,7 @@
 """Kepware API Gateway Client
 
-提供登入認證與 Kepware Tag Scaling 設定操作。
-使用 Kepware 內建的 PUT /api/config/tags 修改 Tag 縮放設定。
+提供登入認證、Tag Group/Tag CRUD 與 Tag Scaling 設定操作。
+透過 Kepware API Gateway（KepwareAPIWeb）REST 介面操作。
 """
 import os
 import logging
@@ -78,6 +78,109 @@ class KepwareGatewayClient:
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
+
+    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        """共用 HTTP 請求，自動帶 headers / verify / proxies"""
+        resp = requests.request(
+            method, f"{self.base_url}{path}",
+            headers=self._headers, timeout=15,
+            verify=self.verify, proxies=self.proxies,
+            **kwargs,
+        )
+        return resp
+
+    # ── Tag Group CRUD ──
+
+    def create_tag_group(self, channel_name: str, device_name: str,
+                         name: str, description: str = None,
+                         parent_group: str = None) -> dict:
+        """建立 Tag 群組（支援巢狀：指定 parent_group）"""
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "name": name,
+        }
+        if description:
+            payload["description"] = description
+        if parent_group:
+            payload["parent_group"] = parent_group
+        resp = requests.post(
+            f"{self.base_url}/api/config/tag_groups",
+            headers=self._headers, json=payload,
+            timeout=15, verify=self.verify, proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def ensure_tag_groups(self, channel_name: str, device_name: str,
+                          group_path: str) -> None:
+        """確保多層 tag group 路徑存在，不存在則逐層建立
+
+        group_path 格式: "2F/CHS" → 先建 2F，再建 CHS (parent=2F)
+        """
+        if not group_path:
+            return
+        parts = group_path.split("/")
+        for i, part in enumerate(parts):
+            parent = "/".join(parts[:i]) if i > 0 else None
+            try:
+                self.create_tag_group(channel_name, device_name, part,
+                                      parent_group=parent)
+                log.info(f"[KepwareGW] 建立 tag group: {channel_name}/{device_name}/{'/'.join(parts[:i+1])}")
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 409:
+                    pass  # 已存在，略過
+                else:
+                    raise
+
+    # ── Tag CRUD ──
+
+    def create_tag(self, channel_name: str, device_name: str,
+                   tag_name: str, address: str = None,
+                   data_type: int = None, description: str = None,
+                   tag_group: str = None) -> dict:
+        """建立 Tag"""
+        tag_obj = {"name": tag_name}
+        if address is not None:
+            tag_obj["address"] = address
+        if data_type is not None:
+            tag_obj["data_type"] = data_type
+        if description is not None:
+            tag_obj["description"] = description
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "tag": tag_obj,
+        }
+        if tag_group:
+            payload["tag_group"] = tag_group
+        resp = requests.post(
+            f"{self.base_url}/api/config/tags",
+            headers=self._headers, json=payload,
+            timeout=15, verify=self.verify, proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_tag(self, channel_name: str, device_name: str,
+                   tag_name: str, tag_group: str = None) -> dict:
+        """刪除 Tag"""
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "tag_name": tag_name,
+        }
+        if tag_group:
+            payload["tag_group"] = tag_group
+        resp = requests.delete(
+            f"{self.base_url}/api/config/tags",
+            headers=self._headers, json=payload,
+            timeout=15, verify=self.verify, proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Tag Scaling ──
 
     def set_tag_scaling(self, config: dict) -> dict:
         """設定 Kepware Tag 的內建 Scaling

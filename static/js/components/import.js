@@ -200,15 +200,16 @@ export function useImport(auth, conn, dragTarget) {
 
     async function executeTB() {
         if (!tbDerive.data.length) return
+        if (kwGw.status !== 'connected') { alert('請先連線 Kepware Gateway'); return }
         const chainMsg = importSettings.autoChain ? '（含 PG 匯入）' : ''
-        if (!confirm(`確定要建立 ${tbDerive.data.length} 筆裝置到 ThingsBoard？${chainMsg}`)) return
+        if (!confirm(`確定要建立 ${tbDerive.data.length} 筆 Tag 到 Kepware？${chainMsg}`)) return
         tbDerive.executing = true
         tbDerive.result = null
         try {
             const resp = await fetch('/api/pg/execute/tb', {
                 method: 'POST', headers: _headers(),
                 body: JSON.stringify({
-                    tb_url: conn.url, tb_username: conn.username, tb_password: conn.password,
+                    kw_gw_url: kwGw.url, kw_gw_username: kwGw.username, kw_gw_password: kwGw.password,
                     delay: importSettings.delay, batch_size: importSettings.batchSize, batch_pause: importSettings.batchPause,
                 })
             })

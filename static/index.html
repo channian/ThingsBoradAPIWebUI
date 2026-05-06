@@ -343,11 +343,21 @@
                         <div class="form-group small"><label>批次大小</label><input type="number" v-model.number="del.settings.batchSize" min="1"></div>
                         <div class="form-group small"><label>批次暫停(秒)</label><input type="number" v-model.number="del.settings.batchPause" min="0"></div>
                     </div>
+                    <!-- Kepware Gateway 連線 -->
+                    <div style="margin:12px 0 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center">
+                        <input v-model="kwGw.url" placeholder="Kepware GW URL" style="width:220px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                        <input v-model="kwGw.username" placeholder="帳號" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                        <input v-model="kwGw.password" type="password" placeholder="密碼" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                        <button class="btn btn-outline btn-sm" @click="testKwGwConnection" :disabled="kwGw.testing">
+                            {{ kwGw.testing ? '測試中...' : '測試連線' }}
+                        </button>
+                        <span class="conn-status" :class="kwGw.status">{{ kwGw.statusText }}</span>
+                    </div>
                     <div v-if="!del.dryRun && !del.running" class="alert alert-warning">
                         <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        注意：目前為 LIVE 模式，執行後將會真正刪除 ThingsBoard 上的裝置！
+                        注意：目前為 LIVE 模式，執行後將會真正刪除 Kepware 上的 Tag！
                     </div>
-                    <button class="btn btn-danger" @click="confirmDelete" :disabled="del.running || conn.status !== 'connected'">
+                    <button class="btn btn-danger" @click="confirmDelete" :disabled="del.running || kwGw.status !== 'connected'">
                         <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                         {{ del.running ? '執行中...' : '開始刪除' }}
                     </button>
@@ -487,7 +497,7 @@
                 <div class="sub-tabs">
                     <div class="sub-tab" :class="{ active: importSubTab === 'upload' }" @click="importSubTab = 'upload'">1. CSV 上傳</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'staging' }" @click="importSubTab = 'staging'; loadStaging()">2. 暫存資料</div>
-                    <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. TB 建點</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. Kepware 建點</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'pg' }" @click="importSubTab = 'pg'; derivePG()">4. PG 匯入</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'scale' }" @click="importSubTab = 'scale'; deriveScale()">5. Scale 設定</div>
                 </div>
@@ -625,7 +635,17 @@
                     <div class="settings-section">
                         <div class="settings-section-title">
                             <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                            TB 建點推導預覽（tb_status = pending）
+                            Kepware 建點推導預覽（tb_status = pending）
+                        </div>
+                        <!-- Kepware Gateway 連線 -->
+                        <div style="margin-bottom:14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center">
+                            <input v-model="kwGw.url" placeholder="Kepware GW URL" style="width:220px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <input v-model="kwGw.username" placeholder="帳號" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <input v-model="kwGw.password" type="password" placeholder="密碼" style="width:120px;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+                            <button class="btn btn-outline btn-sm" @click="testKwGwConnection" :disabled="kwGw.testing">
+                                {{ kwGw.testing ? '測試中...' : '測試連線' }}
+                            </button>
+                            <span class="conn-status" :class="kwGw.status">{{ kwGw.statusText }}</span>
                         </div>
                         <button class="btn btn-primary btn-sm" @click="deriveTB()" :disabled="tbDerive.loading" style="margin-bottom:14px">
                             <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -634,19 +654,18 @@
                         <div v-if="tbDerive.data.length" class="table-wrapper">
                             <table>
                                 <thead><tr>
-                                    <th>Name</th><th>Type (DeviceProfile)</th>
-                                    <th>Label</th><th>Description</th><th>Profile 存在</th>
+                                    <th>Tag Name</th><th>tb_type</th><th>Channel</th>
+                                    <th>Device</th><th>Tag Groups</th><th>Address</th><th>Description</th>
                                 </tr></thead>
                                 <tbody>
                                     <tr v-for="r in pagedTbData()" :key="r.id">
-                                        <td :title="r.tb_name" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_name }}</td>
+                                        <td :title="r.tag_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.tag_name }}</td>
                                         <td><code style="font-size:12px">{{ r.tb_type }}</code></td>
-                                        <td :title="r.tb_label" style="max-width:250px;overflow:hidden;text-overflow:ellipsis">{{ r.tb_label }}</td>
-                                        <td>{{ r.tb_description }}</td>
-                                        <td>
-                                            <span v-if="r.profile_exists" style="color:var(--success)">&#10003;</span>
-                                            <span v-else style="color:var(--error)">&#10007;</span>
-                                        </td>
+                                        <td>{{ r.channel_name }}</td>
+                                        <td>{{ r.device_name }}</td>
+                                        <td><code style="font-size:12px">{{ r.tag_groups }}</code></td>
+                                        <td :title="r.address" style="max-width:160px;overflow:hidden;text-overflow:ellipsis">{{ r.address }}</td>
+                                        <td :title="r.description" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.description || '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -662,9 +681,7 @@
                             無 pending 狀態的暫存資料
                         </div>
                         <div v-if="tbDerive.data.length" style="margin-top:14px; font-size:13px; color:var(--text-secondary)">
-                            共 {{ tbDerive.data.length }} 筆待建點，
-                            <span style="color:var(--success)">{{ tbDerive.data.filter(r => r.profile_exists).length }} 個 Profile 存在</span>，
-                            <span style="color:var(--error)">{{ tbDerive.data.filter(r => !r.profile_exists).length }} 個不存在</span>
+                            共 {{ tbDerive.data.length }} 筆待建點
                         </div>
                         <!-- 限速設定 -->
                         <div v-if="tbDerive.data.length" style="margin-top:14px; padding:12px; background:var(--bg-secondary); border-radius:8px; display:flex; flex-wrap:wrap; align-items:center; gap:16px; font-size:13px">
@@ -686,10 +703,11 @@
                             </label>
                         </div>
                         <div v-if="tbDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
-                            <button class="btn btn-success btn-sm" @click="executeTB()" :disabled="tbDerive.executing || pgDerive.executing">
+                            <button class="btn btn-success btn-sm" @click="executeTB()" :disabled="tbDerive.executing || pgDerive.executing || kwGw.status !== 'connected'">
                                 <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
                                 {{ tbDerive.executing ? '建點中...' : (importSettings.autoChain ? '執行建點 + PG 匯入' : '執行建點') }}
                             </button>
+                            <span v-if="kwGw.status !== 'connected'" style="font-size:13px;color:var(--warning)">請先連線 Kepware Gateway</span>
                             <span v-if="tbDerive.result" :style="{ color: tbDerive.result.failed ? 'var(--warning)' : 'var(--success)' }">
                                 {{ tbDerive.result.message }}
                                 <span v-if="tbDerive.result.failed"> ({{ tbDerive.result.failed }} 筆失敗)</span>
@@ -1202,7 +1220,7 @@
                                     <option value="">全部</option>
                                     <option value="login">登入</option>
                                     <option value="staging_import">匯入暫存表</option>
-                                    <option value="execute_tb">TB 建點</option>
+                                    <option value="execute_tb">Kepware 建點</option>
                                     <option value="execute_pg">PG 寫入</option>
                                     <option value="execute_scale">Scale 設定</option>
                                     <option value="create_user">新增使用者</option>

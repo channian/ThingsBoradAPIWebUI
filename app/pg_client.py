@@ -776,6 +776,75 @@ class PGClient:
 
         return results
 
+    def derive_kw_fields(self, staging_rows: list) -> list:
+        """對暫存表資料推導 Kepware 建點所需欄位
+
+        從 tb_type (DeviceProfile) 拆解 Kepware 路徑：
+        tb_type "K8CHS-CHS-2F-CHS" → channel=K8CHS, device=CHS, tag_groups=2F/CHS
+        """
+        devices = {d["device_name"]: d for d in self.get_devices()}
+        profiles = {p["name"]: p for p in self.get_tb_profiles()}
+        locations = self.get_locations()
+
+        results = []
+        for row in staging_rows:
+            tag_name = row.get("tag_name", "")
+            if not tag_name:
+                continue
+            parts = tag_name.split("_") if tag_name else []
+
+            site_prefix = parts[0] if len(parts) > 0 else ""
+            floor = parts[1] if len(parts) > 1 else ""
+            if floor.upper() == "BF":
+                floor = "B1F"
+            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
+
+            io_device = row.get("io_device", "")
+            driver_type = _resolve_driver_type(io_device, devices)
+
+            scada_node_name = (row.get("scada_node_name") or "").strip()
+            site_val = (row.get("site") or "").strip()
+            system_code_val = (row.get("system_code") or "").strip()
+            if scada_node_name:
+                nodename = scada_node_name.replace("_", "")
+            elif site_val or system_code_val:
+                nodename = site_val + system_code_val
+            else:
+                nodename = site_prefix + system
+
+            csv_profile = (row.get("device_profile") or "").strip()
+            if csv_profile:
+                tb_type = csv_profile
+            elif driver_type.upper() == "IFIX":
+                matched_loc = next((l for l in locations if l["site"] == site_val), None)
+                zone = matched_loc["zone"] if matched_loc else ""
+                tb_type = f"{nodename}-{zone}-{site_prefix}-{system}"
+            else:
+                tb_type = f"{nodename}-{system}-{floor}-{system}"
+
+            # 從 tb_type 拆 Kepware 路徑
+            tp = tb_type.split("-")
+            channel_name = tp[0] if len(tp) > 0 else ""
+            device_name = tp[1] if len(tp) > 1 else ""
+            tag_groups = "/".join(tp[2:]) if len(tp) > 2 else ""
+
+            profile_exists = tb_type in profiles
+
+            results.append({
+                "id": row.get("id"),
+                "tag_name": tag_name,
+                "tb_type": tb_type,
+                "channel_name": channel_name,
+                "device_name": device_name,
+                "tag_groups": tag_groups,
+                "address": row.get("io_address", ""),
+                "description": row.get("description", ""),
+                "driver_type": driver_type,
+                "profile_exists": profile_exists,
+            })
+
+        return results
+
     def derive_pg_fields(self, staging_rows: list) -> list:
         """對暫存表資料推導 PG 正式表所需欄位"""
         locations = self.get_locations()
