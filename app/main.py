@@ -201,6 +201,18 @@ async def serve_index():
     )
 
 
+@app.get("/static/js/{path:path}")
+async def serve_js(path: str):
+    file_path = os.path.join(STATIC_DIR, "js", path)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        file_path,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
