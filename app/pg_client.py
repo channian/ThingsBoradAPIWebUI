@@ -779,7 +779,7 @@ class PGClient:
     def derive_kw_fields(self, staging_rows: list) -> list:
         """對暫存表資料推導 Kepware 建點所需欄位
 
-        從 tb_type 拆解 Kepware 路徑（使用 / 作為 tag_groups 分隔符）：
+        從 tb_type (DeviceProfile) 拆解 Kepware 路徑：
         tb_type "K8CHS-CHS-2F-CHS" → channel=K8CHS, device=CHS, tag_groups=2F/CHS
         """
         devices = {d["device_name"]: d for d in self.get_devices()}
@@ -789,6 +789,8 @@ class PGClient:
         results = []
         for row in staging_rows:
             tag_name = row.get("tag_name", "")
+            if not tag_name:
+                continue
             parts = tag_name.split("_") if tag_name else []
 
             site_prefix = parts[0] if len(parts) > 0 else ""
@@ -820,7 +822,7 @@ class PGClient:
             else:
                 tb_type = f"{nodename}-{system}-{floor}-{system}"
 
-            # 從 tb_type 拆 Kepware 路徑（用 / 分隔 tag_groups）
+            # 從 tb_type 拆 Kepware 路徑
             tp = tb_type.split("-")
             channel_name = tp[0] if len(tp) > 0 else ""
             device_name = tp[1] if len(tp) > 1 else ""
