@@ -107,3 +107,87 @@ class KepwareGatewayClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def create_tag_group(self, channel_name: str, device_name: str,
+                         name: str, description: str = "",
+                         parent_group: str = None) -> dict:
+        """建立 Kepware Tag Group"""
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "name": name,
+            "description": description,
+        }
+        if parent_group:
+            payload["parent_group"] = parent_group
+        resp = requests.post(
+            f"{self.base_url}/api/config/tag_groups",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+            verify=self.verify,
+            proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def ensure_tag_groups(self, channel_name: str, device_name: str,
+                          group_path: str):
+        """遞迴建立多層 Tag Group（如 '2F/CHS' → 先建 2F 再建 CHS）"""
+        if not group_path:
+            return
+        parts = group_path.split("/")
+        for i, part in enumerate(parts):
+            parent = "/".join(parts[:i]) if i > 0 else None
+            try:
+                self.create_tag_group(channel_name, device_name, part,
+                                     parent_group=parent)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 409:
+                    pass  # already exists
+                else:
+                    raise
+
+    def create_tag(self, channel_name: str, device_name: str,
+                   tag_group: str, tag: dict) -> dict:
+        """建立 Kepware Tag
+
+        tag 範例: {"name": "...", "address": "...", "data_type": 8,
+                   "description": "..."}
+        """
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "tag_group": tag_group,
+            "tag": tag,
+        }
+        resp = requests.post(
+            f"{self.base_url}/api/config/tags",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+            verify=self.verify,
+            proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_tag(self, channel_name: str, device_name: str,
+                   tag_group: str, tag_name: str) -> dict:
+        """刪除 Kepware Tag"""
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "tag_group": tag_group,
+            "tag_name": tag_name,
+        }
+        resp = requests.delete(
+            f"{self.base_url}/api/config/tags",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+            verify=self.verify,
+            proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
