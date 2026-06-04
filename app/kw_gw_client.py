@@ -139,14 +139,16 @@ class KepwareGatewayClient:
                    tag_name: str, address: str = None,
                    data_type: int = None, description: str = None,
                    tag_group: str = None) -> dict:
-        """建立 Tag"""
-        tag_obj = {"name": tag_name}
+        """建立 Tag（使用 Kepware 原生屬性名稱）"""
+        tag_obj = {
+            "common.ALLTYPES_NAME": tag_name,
+        }
         if address is not None:
-            tag_obj["address"] = address
+            tag_obj["servermain.TAG_ADDRESS"] = address
         if data_type is not None:
-            tag_obj["data_type"] = data_type
+            tag_obj["servermain.TAG_DATA_TYPE"] = data_type
         if description is not None:
-            tag_obj["description"] = description
+            tag_obj["common.ALLTYPES_DESCRIPTION"] = description
         payload = {
             "channel_name": channel_name,
             "device_name": device_name,
