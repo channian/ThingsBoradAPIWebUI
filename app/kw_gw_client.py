@@ -116,17 +116,17 @@ class KepwareGatewayClient:
                           group_path: str) -> None:
         """確保多層 tag group 路徑存在，不存在則逐層建立
 
-        group_path 格式: "2F/CHS" → 先建 2F，再建 CHS (parent=2F)
+        group_path 格式: "2F.CHS" → 先建 2F，再建 CHS (parent=2F)
         """
         if not group_path:
             return
-        parts = group_path.split("/")
+        parts = group_path.split(".")
         for i, part in enumerate(parts):
-            parent = "/".join(parts[:i]) if i > 0 else None
+            parent = ".".join(parts[:i]) if i > 0 else None
             try:
                 self.create_tag_group(channel_name, device_name, part,
                                       parent_group=parent)
-                log.info(f"[KepwareGW] 建立 tag group: {channel_name}/{device_name}/{'/'.join(parts[:i+1])}")
+                log.info(f"[KepwareGW] 建立 tag group: {channel_name}/{device_name}/{'.'.join(parts[:i+1])}")
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 409:
                     pass  # 已存在，略過
@@ -137,18 +137,14 @@ class KepwareGatewayClient:
 
     def create_tag(self, channel_name: str, device_name: str,
                    tag_name: str, address: str = None,
-                   data_type: int = None, description: str = None,
+                   data_type: int = 0, description: str = None,
                    tag_group: str = None) -> dict:
-        """建立 Tag（使用 Kepware 原生屬性名稱）"""
-        tag_obj = {
-            "common.ALLTYPES_NAME": tag_name,
-        }
+        """建立 Tag"""
+        tag_obj = {"name": tag_name, "data_type": data_type}
         if address is not None:
-            tag_obj["servermain.TAG_ADDRESS"] = address
-        if data_type is not None:
-            tag_obj["servermain.TAG_DATA_TYPE"] = data_type
+            tag_obj["address"] = address
         if description is not None:
-            tag_obj["common.ALLTYPES_DESCRIPTION"] = description
+            tag_obj["description"] = description
         payload = {
             "channel_name": channel_name,
             "device_name": device_name,

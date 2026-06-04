@@ -826,9 +826,16 @@ class PGClient:
             tp = tb_type.split("-")
             channel_name = tp[0] if len(tp) > 0 else ""
             device_name = tp[1] if len(tp) > 1 else ""
-            tag_groups = "/".join(tp[2:]) if len(tp) > 2 else ""
+            tag_groups = ".".join(tp[2:]) if len(tp) > 2 else ""
 
             profile_exists = tb_type in profiles
+
+            # address 前綴：OPC 類加 ns=2;s=
+            io_address = row.get("io_address", "")
+            if driver_type.upper() in ("OPC", "OPC_UA"):
+                address = f"ns=2;s={io_address}" if io_address else ""
+            else:
+                address = io_address
 
             results.append({
                 "id": row.get("id"),
@@ -837,7 +844,7 @@ class PGClient:
                 "channel_name": channel_name,
                 "device_name": device_name,
                 "tag_groups": tag_groups,
-                "address": row.get("io_address", ""),
+                "address": address,
                 "description": row.get("description", ""),
                 "driver_type": driver_type,
                 "profile_exists": profile_exists,
