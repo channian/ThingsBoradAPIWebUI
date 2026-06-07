@@ -959,12 +959,26 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
 
     def _exec_kw_delete(task):
         import datetime as dt, time, random
+        from app.task_manager import _smart_get
         task.started_at = dt.datetime.now().isoformat()
         params = task.params
         csv_rows = params["rows"]
         dry_run = params.get("dry_run", True)
 
-        derived = pg_client.derive_kw_fields(csv_rows)
+        # 從 CSV 的 name/type 直接拆解 Kepware 路徑
+        derived = []
+        for row in csv_rows:
+            tag_name = _smart_get(row, "name")
+            tb_type = _smart_get(row, "type")
+            if not tag_name or not tb_type:
+                continue
+            tp = tb_type.split("-")
+            derived.append({
+                "tag_name": tag_name,
+                "channel_name": tp[0] if len(tp) > 0 else "",
+                "device_name": tp[1] if len(tp) > 1 else "",
+                "tag_groups": ".".join(tp[2:]) if len(tp) > 2 else "",
+            })
         if not derived:
             task.push_log("warning", "無可處理的 Tag 資料")
             task.push_complete({"total": 0, "success": 0, "fail": 0, "skip": 0})
