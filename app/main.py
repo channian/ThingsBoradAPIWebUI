@@ -1515,7 +1515,7 @@ async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
 @app.post("/api/pg/execute/pg")
 async def pg_execute_pg(req: ExecutePgRequest, request: Request,
                         user: dict = Depends(require_role("admin", "operator"))):
-    """執行 PG 寫入：推導欄位 → 寫入正式表 → 更新 pg_status"""
+    """執行 PG 寫入：推導欄位 → 寫入正式表 + Collector tags 表 → 更新 pg_status"""
     try:
         # 1. 取得 pending 的暫存資料並推導
         staging = pg_client.get_staging_list(page=0, page_size=9999, pg_status="pending")
@@ -1535,18 +1535,64 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
         result = pg_client.import_formal(derived)
         log.info(f"[executePG] import_formal 結果: {result}")
 
-        # 3. 更新成功的暫存資料狀態（排除有錯誤的 tagname）
+        # 3. 寫入 Collector DB tags 表
+        collector_result = None
+        collector_db = os.getenv("COLLECTOR_DB_DATABASE", "").strip()
+        if collector_db:
+            collector_rows = []
+            error_tagnames_formal = {e["tagname"] for e in result.get("errors", [])}
+            for d in derived:
+                if d["tagname"] in error_tagnames_formal:
+                    continue
+                collector_rows.append({
+                    "tagname": d["tagname"],
+                    "tag_address": d.get("tag_address", ""),
+                    "scan_group": d.get("scan_group", ""),
+                    "description": d.get("description", ""),
+                    "enable": True,
+                    "target_table": d.get("tabname", ""),
+                })
+            if collector_rows:
+                try:
+                    collector_result = pg_client.import_collector_tags(collector_rows)
+                    log.info(f"[executePG] Collector 寫入結果: {collector_result}")
+                except Exception as ce:
+                    log.error(f"[executePG] Collector 寫入失敗，回滾本地正式表: {ce}", exc_info=True)
+                    # 回滾：刪除剛寫入正式表的資料
+                    rollback_names = [r["tagname"] for r in collector_rows]
+                    try:
+                        pg_client.delete_formal_by_tagnames(rollback_names)
+                        log.info(f"[executePG] 已回滾 {len(rollback_names)} 筆正式表資料")
+                    except Exception as re:
+                        log.error(f"[executePG] 回滾失敗: {re}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Collector DB 寫入失敗（已回滾正式表）: {ce}"
+                    )
+        else:
+            log.info("[executePG] 未設定 COLLECTOR_DB_DATABASE，跳過 Collector 寫入")
+
+        # 4. 更新成功的暫存資料狀態（排除有錯誤的 tagname）
         error_tagnames = {e["tagname"] for e in result.get("errors", [])}
+        if collector_result:
+            error_tagnames |= {e["tagname"] for e in collector_result.get("errors", [])}
         success_ids = [r["id"] for r, d in zip(rows, derived) if d["tagname"] not in error_tagnames]
         if success_ids:
             pg_client.update_staging_status(success_ids, "pg_status", "done")
             log.info(f"[executePG] 更新 {len(success_ids)} 筆狀態為 done")
 
         _log_activity(request, user, "execute_pg", f"PG 寫入成功 {result['inserted']} 筆")
-        return {
+        resp = {
             **result,
             "message": f"成功寫入 {result['inserted']} 筆至正式表"
         }
+        if collector_result:
+            resp["collector_inserted"] = collector_result["inserted"]
+            resp["collector_errors"] = collector_result["errors"]
+            resp["message"] += f"，Collector {collector_result['inserted']} 筆"
+        return resp
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"[executePG] PG 寫入失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"PG 寫入失敗: {e}")
@@ -1660,6 +1706,53 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
     except Exception as e:
         log.error(f"[executeScale] Scale 設定失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Scale 設定失敗: {e}")
+
+
+# ── API: Collector DB + Reload ────────────────────────
+
+@app.get("/api/collector/test")
+async def collector_test_connection():
+    """測試 Collector DB 連線"""
+    try:
+        result = pg_client.test_collector_connection()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Collector DB 連線失敗: {e}")
+
+
+@app.post("/api/collector/reload")
+async def collector_reload(request: Request,
+                           user: dict = Depends(require_role("admin", "operator"))):
+    """呼叫 Collector /reload API 重新載入 tag 清單"""
+    reload_url = os.getenv("COLLECTOR_RELOAD_URL", "").strip()
+    reload_token = os.getenv("COLLECTOR_RELOAD_TOKEN", "").strip()
+    if not reload_url:
+        raise HTTPException(status_code=400, detail="未設定 COLLECTOR_RELOAD_URL 環境變數")
+    if not reload_token:
+        raise HTTPException(status_code=400, detail="未設定 COLLECTOR_RELOAD_TOKEN 環境變數")
+
+    try:
+        resp = requests.post(
+            reload_url,
+            headers={"X-Reload-Token": reload_token},
+            timeout=30,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            _log_activity(request, user, "collector_reload",
+                          f"Collector 重載成功，共 {data.get('total_tags', '?')} 筆 tag")
+            return {"success": True, **data}
+        else:
+            raise HTTPException(status_code=resp.status_code,
+                                detail=data.get("message", f"Collector 回傳 HTTP {resp.status_code}"))
+    except requests.RequestException as e:
+        log.error(f"[collector_reload] 呼叫失敗: {e}")
+        raise HTTPException(status_code=502, detail=f"無法連線 Collector: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[collector_reload] 未預期錯誤: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Collector 重載失敗: {e}")
 
 
 # ── IO Mapping ────────────────────────────────────────

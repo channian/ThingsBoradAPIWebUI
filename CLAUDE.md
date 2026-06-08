@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kepware point management system integrating ThingsBoard API + PostgreSQL + Kepware API Gateway. A FastAPI backend serves a Vue 3 SPA frontend (no build step) for batch device management and a 5-step Kepware import flow: CSV Upload → Staging → TB Device Creation → PG Formal Import → Kepware Scale Configuration.
+Kepware point management system integrating PostgreSQL + Kepware API Gateway + Collector. A FastAPI backend serves a Vue 3 SPA frontend (no build step) for batch device management and a 6-step Kepware import flow: CSV Upload → Staging → Kepware Tag Creation → PG Formal Import (+ Collector DB) → Kepware Scale Configuration → Collector Reload.
 
 ## Running the Project
 

@@ -116,6 +116,14 @@ class PGClient:
                     END IF;
                     IF NOT EXISTS (
                         SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'scada_tag_config'
+                        AND column_name = 'scan_group'
+                    ) THEN
+                        ALTER TABLE scada_tag_config
+                        ADD COLUMN scan_group VARCHAR(255) DEFAULT '';
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
                         WHERE table_name = 'kepitsimple_user'
                         AND column_name = 'perm_group'
                     ) THEN
@@ -172,6 +180,7 @@ class PGClient:
                     _get(row, "project_name", "專案名稱"),
                     _get(row, "data_owner", "DataOwner"),
                     _get(row, "device_profile", "device_profile"),
+                    _get(row, "scan_group", "Scan Group"),
                 )
                 clean_data.append(data_tuple)
             except Exception as e:
@@ -184,11 +193,12 @@ class PGClient:
                     # 使用 PostgreSQL 的 ON CONFLICT DO NOTHING (前提是 tag_name 有 Unique Constraint)
                     # 如果 tag_name 重複，資料庫會自動跳過該筆而不報錯
                     query = """
-                        INSERT INTO scada_tag_config 
-                        (site, system_code, scada_node_name, tag_name, 
-                         io_device, io_address, scale_enabled, 
-                         raw_low, raw_high, scaled_low, scaled_high, 
-                         description, project_name, data_owner, device_profile)
+                        INSERT INTO scada_tag_config
+                        (site, system_code, scada_node_name, tag_name,
+                         io_device, io_address, scale_enabled,
+                         raw_low, raw_high, scaled_low, scaled_high,
+                         description, project_name, data_owner, device_profile,
+                         scan_group)
                         VALUES %s
                         ON CONFLICT (tag_name) DO NOTHING
                         RETURNING id;
@@ -697,6 +707,113 @@ class PGClient:
             "total": len(derived_rows),
         }
 
+    def delete_formal_by_tagnames(self, tagnames: list) -> int:
+        """從正式表刪除指定 tagname 的資料（用於回滾）"""
+        if not tagnames:
+            return 0
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tags WHERE tagname = ANY(%s)",
+                    (tagnames,)
+                )
+                return cur.rowcount
+
+    # ── Collector DB 寫入 ──────────────────────────────
+
+    def _get_collector_conn_params(self):
+        """取得 Collector DB 連線參數（同主機，僅 database 不同）"""
+        collector_db = os.getenv("COLLECTOR_DB_DATABASE", "").strip()
+        if not collector_db:
+            raise RuntimeError("未設定 COLLECTOR_DB_DATABASE 環境變數")
+        params = dict(self.conn_params)
+        params["database"] = collector_db
+        return params
+
+    @contextmanager
+    def _get_collector_conn(self):
+        params = self._get_collector_conn_params()
+        conn = psycopg2.connect(**params)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def test_collector_connection(self) -> dict:
+        """測試 Collector DB 連線"""
+        with self._get_collector_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version()")
+                version = cur.fetchone()[0]
+                return {"success": True, "version": version}
+
+    def _ensure_collector_tags_table(self, conn):
+        """確保 Collector DB 的 tags 表存在"""
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    tag_id SERIAL PRIMARY KEY,
+                    tagname VARCHAR(255) NOT NULL UNIQUE,
+                    tag_address VARCHAR(500),
+                    scan_group VARCHAR(255) DEFAULT '',
+                    unit VARCHAR(100) DEFAULT '',
+                    description TEXT,
+                    enable BOOLEAN DEFAULT TRUE,
+                    target_table VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+    def import_collector_tags(self, rows: list) -> dict:
+        """將推導後的資料寫入 Collector DB 的 tags 表"""
+        log.info(f"[import_collector] 開始寫入 Collector tags，共 {len(rows)} 筆")
+        if not rows:
+            return {"inserted": 0, "errors": [], "total": 0}
+
+        inserted = 0
+        errors = []
+
+        with self._get_collector_conn() as conn:
+            self._ensure_collector_tags_table(conn)
+            with conn.cursor() as cur:
+                for row in rows:
+                    tagname = row.get("tagname", "")
+                    if not tagname:
+                        continue
+                    try:
+                        cur.execute("""
+                            INSERT INTO tags
+                            (tagname, tag_address, scan_group, description,
+                             enable, target_table)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (tagname) DO UPDATE SET
+                                tag_address = EXCLUDED.tag_address,
+                                scan_group = EXCLUDED.scan_group,
+                                description = EXCLUDED.description,
+                                enable = EXCLUDED.enable,
+                                target_table = EXCLUDED.target_table,
+                                updated_at = NOW()
+                        """, (
+                            tagname,
+                            row.get("tag_address", ""),
+                            row.get("scan_group", ""),
+                            row.get("description", ""),
+                            row.get("enable", True),
+                            row.get("target_table", ""),
+                        ))
+                        inserted += 1
+                    except Exception as e:
+                        log.error(f"[import_collector] 寫入失敗 tagname={tagname}: {e}")
+                        errors.append({"tagname": tagname, "reason": str(e)})
+
+        log.info(f"[import_collector] 完成: inserted={inserted}, errors={len(errors)}")
+        return {"inserted": inserted, "errors": errors, "total": len(rows)}
+
     # ── Tag 推導邏輯 ──────────────────────────────────
 
     def derive_tb_fields(self, staging_rows: list) -> list:
@@ -923,6 +1040,13 @@ class PGClient:
                 else:
                     tabname = f"{bu}_{site_prefix}_{system}" if bu else ""
 
+            # Collector 用欄位：address 加前綴
+            io_address = row.get("io_address", "")
+            if driver_type.upper() in ("OPC", "OPC_UA"):
+                tag_address = f"ns=2;s={io_address}" if io_address else ""
+            else:
+                tag_address = io_address
+
             results.append({
                 "id": row.get("id"),
                 "tagname": tag_name,
@@ -939,6 +1063,8 @@ class PGClient:
                 "owner": data_owner,
                 "department": department,
                 "data_type": "float",
+                "scan_group": row.get("scan_group", ""),
+                "tag_address": tag_address,
             })
 
         return results

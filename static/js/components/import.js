@@ -29,6 +29,9 @@ export function useImport(auth, conn, dragTarget) {
     const scaleDerive = reactive({ data: [], loading: false, executing: false, result: null, page: 0, pageSize: 50 })
     const scaleSettings = reactive({ delay: 0.2, batchSize: 50, batchPause: 5 })
 
+    const collectorConn = reactive({ status: 'disconnected', statusText: '未連線', testing: false })
+    const collectorReload = reactive({ loading: false, result: null })
+
     function _headers() { return authHeaders(auth) }
 
     async function testPGConnection() {
@@ -39,6 +42,16 @@ export function useImport(auth, conn, dragTarget) {
             pgConn.status = 'connected'; pgConn.statusText = '已連線'
         } catch (e) { pgConn.status = 'error'; pgConn.statusText = '連線失敗: ' + e.message }
         finally { pgConn.testing = false }
+    }
+
+    async function testCollectorConnection() {
+        collectorConn.testing = true
+        try {
+            const resp = await fetch('/api/collector/test')
+            if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail) }
+            collectorConn.status = 'connected'; collectorConn.statusText = '已連線'
+        } catch (e) { collectorConn.status = 'error'; collectorConn.statusText = '連線失敗: ' + e.message }
+        finally { collectorConn.testing = false }
     }
 
     async function handleImportFile(event) {
@@ -227,7 +240,7 @@ export function useImport(auth, conn, dragTarget) {
 
     async function executePG(skipConfirm = false) {
         if (!pgDerive.data.length) return
-        if (!skipConfirm && !confirm(`確定要將 ${pgDerive.data.length} 筆資料寫入 PG 正式表？`)) return
+        if (!skipConfirm && !confirm(`確定要將 ${pgDerive.data.length} 筆資料寫入 PG 正式表（含 Collector）？`)) return
         pgDerive.executing = true
         pgDerive.result = null
         try {
@@ -312,15 +325,40 @@ export function useImport(auth, conn, dragTarget) {
         } finally { scaleDerive.executing = false }
     }
 
+    async function executeCollectorReload() {
+        if (!confirm('確定要呼叫 Collector Reload？請確認 tags 表已寫入完成。')) return
+        collectorReload.loading = true
+        collectorReload.result = null
+        try {
+            const resp = await fetch('/api/collector/reload', {
+                method: 'POST', headers: _headers(),
+            })
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}))
+                throw new Error(err.detail || `HTTP ${resp.status}`)
+            }
+            const data = await resp.json()
+            collectorReload.result = {
+                success: true,
+                message: `Collector 重載成功，共 ${data.total_tags || '?'} 筆 tag`,
+            }
+        } catch (e) {
+            collectorReload.result = { success: false, message: `重載失敗: ${e.message}` }
+        } finally { collectorReload.loading = false }
+    }
+
     return {
         importSubTab, pgConn, imp, staging, tbDerive, pgDerive, importSettings,
         kwGw, scaleDerive, scaleSettings,
-        testPGConnection, handleImportFile, handleImportDrop, importToStaging,
+        collectorConn, collectorReload,
+        testPGConnection, testCollectorConnection,
+        handleImportFile, handleImportDrop, importToStaging,
         loadStaging, deleteSelectedStaging, clearAllStaging, toggleStagingSelect, toggleStagingSelectAll,
         deriveTB, derivePG, executeTB, executePG,
         pagedTbData, tbTotalPages, tbPrevPage, tbNextPage,
         pagedPgData, pgTotalPages, pgPrevPage, pgNextPage,
         testKwGwConnection, deriveScale, executeScale,
         pagedScaleData, scaleTotalPages, scalePrevPage, scaleNextPage,
+        executeCollectorReload,
     }
 }

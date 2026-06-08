@@ -487,9 +487,10 @@
                 <div class="sub-tabs">
                     <div class="sub-tab" :class="{ active: importSubTab === 'upload' }" @click="importSubTab = 'upload'">1. CSV 上傳</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'staging' }" @click="importSubTab = 'staging'; loadStaging()">2. 暫存資料</div>
-                    <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. TB 建點</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'tb' }" @click="importSubTab = 'tb'; deriveTB()">3. Kepware 建點</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'pg' }" @click="importSubTab = 'pg'; derivePG()">4. PG 匯入</div>
                     <div class="sub-tab" :class="{ active: importSubTab === 'scale' }" @click="importSubTab = 'scale'; deriveScale()">5. Scale 設定</div>
+                    <div class="sub-tab" :class="{ active: importSubTab === 'reload' }" @click="importSubTab = 'reload'">6. Collector Reload</div>
                 </div>
 
                 <!-- Step 1: CSV Upload to Staging -->
@@ -713,7 +714,8 @@
                             <table>
                                 <thead><tr>
                                     <th>tagname</th><th>description</th><th>node_name</th><th>driver_type</th>
-                                    <th>address</th><th>tabname</th><th>zone</th><th>bu</th>
+                                    <th>address</th><th>tabname</th><th>scan_group</th><th>tag_address</th>
+                                    <th>zone</th><th>bu</th>
                                     <th>site</th><th>floor</th><th>system</th><th>owner</th><th>department</th><th>data_type</th>
                                 </tr></thead>
                                 <tbody>
@@ -724,6 +726,8 @@
                                         <td>{{ r.driver_type || '-' }}</td>
                                         <td :title="r.address" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address || '-' }}</td>
                                         <td><code style="font-size:12px">{{ r.tabname || '-' }}</code></td>
+                                        <td>{{ r.scan_group || '-' }}</td>
+                                        <td :title="r.tag_address" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.tag_address || '-' }}</td>
                                         <td>{{ r.zone || '-' }}</td><td>{{ r.bu || '-' }}</td>
                                         <td>{{ r.site || '-' }}</td><td>{{ r.floor || '-' }}</td><td>{{ r.system || '-' }}</td>
                                         <td>{{ r.owner || '-' }}</td><td>{{ r.department || '-' }}</td>
@@ -742,14 +746,17 @@
                         <div v-if="!pgDerive.data.length && !pgDerive.loading" style="text-align:center; padding:40px; color:var(--text-light)">
                             無 pending 狀態的暫存資料
                         </div>
-                        <div v-if="pgDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px">
+                        <div v-if="pgDerive.data.length" style="margin-top:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap">
                             <button class="btn btn-success btn-sm" @click="executePG()" :disabled="pgDerive.executing">
                                 <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                                {{ pgDerive.executing ? '寫入中...' : '執行寫入正式表' }}
+                                {{ pgDerive.executing ? '寫入中...' : '執行寫入正式表（含 Collector）' }}
                             </button>
                             <span v-if="pgDerive.result" :style="{ color: pgDerive.result.errors?.length ? 'var(--warning)' : 'var(--success)' }">
                                 {{ pgDerive.result.message }}
                                 <span v-if="pgDerive.result.errors?.length"> ({{ pgDerive.result.errors.length }} 筆錯誤)</span>
+                            </span>
+                            <span v-if="pgDerive.result && pgDerive.result.collector_errors?.length" style="color:var(--warning); font-size:13px">
+                                Collector 錯誤 {{ pgDerive.result.collector_errors.length }} 筆
                             </span>
                         </div>
                     </div>
@@ -843,6 +850,37 @@
                             <span v-if="scaleDerive.result" :style="{ color: scaleDerive.result.errors?.length ? 'var(--warning)' : 'var(--success)' }">
                                 {{ scaleDerive.result.message }}
                                 <span v-if="scaleDerive.result.errors?.length"> ({{ scaleDerive.result.errors.length }} 筆錯誤)</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 6: Collector Reload -->
+                <div v-show="importSubTab === 'reload'">
+                    <div class="settings-section">
+                        <div class="settings-section-title">
+                            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            Collector Reload
+                        </div>
+                        <div style="margin-bottom:16px; padding:12px; background:var(--bg-secondary); border-radius:8px; font-size:13px; color:var(--text-secondary)">
+                            <p style="margin:0 0 8px 0">呼叫 Collector /reload API，通知 Collector 重新載入 tag 清單並重建 OPC UA Subscription。</p>
+                            <p style="margin:0; color:var(--warning)">請確保 Step 4（PG 匯入）和 Step 5（Scale 設定）已完成後再執行。重載期間約 3-5 秒資料空缺，屬正常現象。</p>
+                        </div>
+                        <!-- Collector DB 連線狀態 -->
+                        <div style="margin-bottom:14px; display:flex; align-items:center; gap:12px">
+                            <button class="btn btn-outline btn-sm" @click="testCollectorConnection" :disabled="collectorConn.testing">
+                                <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                {{ collectorConn.testing ? '測試中...' : '測試 Collector DB 連線' }}
+                            </button>
+                            <span class="conn-status" :class="collectorConn.status">{{ collectorConn.statusText }}</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:12px">
+                            <button class="btn btn-success btn-sm" @click="executeCollectorReload()" :disabled="collectorReload.loading">
+                                <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                {{ collectorReload.loading ? '重載中...' : '執行 Collector Reload' }}
+                            </button>
+                            <span v-if="collectorReload.result" :style="{ color: collectorReload.result.success ? 'var(--success)' : 'var(--warning)' }">
+                                {{ collectorReload.result.message }}
                             </span>
                         </div>
                     </div>
