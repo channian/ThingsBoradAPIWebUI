@@ -178,7 +178,7 @@ export function useImport(auth, conn, dragTarget) {
     async function deriveTB() {
         tbDerive.loading = true
         try {
-            const resp = await fetch('/api/pg/derive/tb', {
+            const resp = await fetch('/api/kw/derive', {
                 method: 'POST', headers: _headers(),
                 body: JSON.stringify({ tb_status: 'pending' })
             })
@@ -219,7 +219,7 @@ export function useImport(auth, conn, dragTarget) {
         tbDerive.executing = true
         tbDerive.result = null
         try {
-            const resp = await fetch('/api/pg/execute/tb', {
+            const resp = await fetch('/api/kw/execute', {
                 method: 'POST', headers: _headers(),
                 body: JSON.stringify({
                     kw_gw_url: kwGw.url, kw_gw_username: kwGw.username, kw_gw_password: kwGw.password,

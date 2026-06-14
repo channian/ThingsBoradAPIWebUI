@@ -4,13 +4,11 @@ FastAPI 應用主程式
 提供 REST API 端點 + SSE 即時推送 + 靜態檔案服務
 """
 
-import asyncio
 import csv
 import io
 import json
 import logging
 import os
-import queue
 import requests
 import threading
 import uuid
@@ -23,12 +21,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.tb_client import ThingsBoardClient
-from app.task_manager import (
-    TaskManager,
-    execute_batch_create,
-    execute_batch_delete,
-)
+from app.task_manager import TaskManager
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
@@ -45,7 +38,7 @@ log = logging.getLogger("main")
 
 # ── FastAPI App ────────────────────────────────────────
 
-app = FastAPI(title="Kepware ThingsBoard 點位管理系統")
+app = FastAPI(title="Kep It Simple · Kepware 點位管理系統")
 
 app.add_middleware(
     CORSMiddleware,
@@ -218,47 +211,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # ── 資料模型 ───────────────────────────────────────────
 
-class LoginRequest(BaseModel):
-    tb_url: str
-    username: str
-    password: str
-
-
-class ExecuteRequest(BaseModel):
-    upload_id: str
-    operation: str          # "create" | "delete"
-    dry_run: bool = True
-    tb_url: str
-    tb_username: str
-    tb_password: str
-    delay: float = 0.2
-    batch_size: int = 50
-    batch_pause: float = 5
-    csv_filename: str = ""
-
-
-class DeviceQueryRequest(BaseModel):
-    tb_url: str
-    tb_token: str
-    page: int = 0
-    page_size: int = 20
-    text_search: Optional[str] = None
-
-
-class DeviceExportRequest(BaseModel):
-    tb_url: str
-    tb_token: str
-    text_search: Optional[str] = None
-
-
-class DirectDeleteRequest(BaseModel):
-    tb_url: str
-    tb_username: str
-    tb_password: str
-    device_ids: list
-    dry_run: bool = True
-
-
 class DropdownUpdateRequest(BaseModel):
     field: str
     values: list
@@ -276,12 +228,6 @@ class DefaultsUpdateRequest(BaseModel):
 class MappingRuleUpdateRequest(BaseModel):
     rule_name: str
     mapping: dict
-
-
-class DeviceProfileCheckRequest(BaseModel):
-    tb_url: str
-    tb_token: str
-    type_names: list
 
 
 class StagingQueryRequest(BaseModel):
@@ -348,7 +294,7 @@ class DeriveRequest(BaseModel):
     pg_status: Optional[str] = "pending"
 
 
-class ExecuteTbRequest(BaseModel):
+class ExecuteKwRequest(BaseModel):
     kw_gw_url: str
     kw_gw_username: str
     kw_gw_password: str
@@ -551,19 +497,6 @@ async def admin_cleanup_logs(request: Request,
         raise HTTPException(status_code=500, detail=f"清理日誌失敗: {e}")
 
 
-# ── API: TB 認證 ──────────────────────────────────────
-
-@app.post("/api/auth/login")
-async def auth_login(req: LoginRequest):
-    """測試 ThingsBoard 連線並取得 Token"""
-    client = ThingsBoardClient(req.tb_url)
-    try:
-        token = client.login(req.username, req.password)
-        return {"success": True, "token": token}
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
-
-
 # ── API: CSV 上傳與預覽 ───────────────────────────────
 
 @app.post("/api/csv/upload")
@@ -653,115 +586,6 @@ async def upload_csv(file: UploadFile = File(...)):
     }
 
 
-# ── API: 任務執行 ─────────────────────────────────────
-
-@app.post("/api/tasks/execute")
-async def execute_task(req: ExecuteRequest):
-    """啟動批次新增或刪除任務"""
-    rows = _csv_store_get(req.upload_id)
-    if rows is None:
-        raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
-
-    task = task_manager.create_task(req.operation, {
-        "rows": rows,
-        "dry_run": req.dry_run,
-        "tb_url": req.tb_url,
-        "tb_username": req.tb_username,
-        "tb_password": req.tb_password,
-        "delay": req.delay,
-        "batch_size": req.batch_size,
-        "batch_pause": req.batch_pause,
-    })
-    task.csv_filename = req.csv_filename
-    task.on_complete = _append_history
-
-    executor = execute_batch_create if req.operation == "create" else execute_batch_delete
-    task_manager.run_in_background(task, executor)
-
-    return {"task_id": task.id}
-
-
-# ── API: 任務 SSE 串流 ────────────────────────────────
-
-@app.get("/api/tasks/{task_id}/stream")
-async def stream_task(task_id: str):
-    """Server-Sent Events 即時推送任務進度"""
-    task = task_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    async def event_generator():
-        for entry in list(task.log_history):
-            yield f"data: {json.dumps({'type': 'log', **entry}, ensure_ascii=False)}\n\n"
-        if task.progress["total"] > 0:
-            yield f"data: {json.dumps({'type': 'progress', **task.progress}, ensure_ascii=False)}\n\n"
-        if task.done and task.summary:
-            yield f"data: {json.dumps({'type': 'complete', **task.summary}, ensure_ascii=False)}\n\n"
-            return
-
-        while True:
-            try:
-                event = task.events.get_nowait()
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "complete":
-                    return
-            except queue.Empty:
-                if task.done:
-                    return
-                yield ": keepalive\n\n"
-                await asyncio.sleep(0.2)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.get("/api/tasks/{task_id}/status")
-async def task_status(task_id: str):
-    task = task_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {
-        "task_id": task.id,
-        "type": task.type,
-        "done": task.done,
-        "progress": task.progress,
-        "summary": task.summary,
-    }
-
-
-# ── API: 任務結果匯出 CSV ─────────────────────────────
-
-@app.get("/api/tasks/{task_id}/export")
-async def export_task_results(task_id: str):
-    """匯出任務的逐筆處理結果為 CSV"""
-    task = task_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["name", "status", "detail"])
-    for r in task.results:
-        writer.writerow([r["name"], r["status"], r["detail"]])
-
-    content = output.getvalue().encode("utf-8-sig")  # BOM for Excel
-    op_name = {"create": "新增", "delete": "刪除"}.get(task.type, task.type)
-    filename = f"result_{op_name}_{task.id}.csv"
-
-    return StreamingResponse(
-        io.BytesIO(content),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
 # ── API: 歷史紀錄 ─────────────────────────────────────
 
 @app.get("/api/history")
@@ -804,136 +628,6 @@ async def download_template(template_type: str):
     )
 
 
-# ── API: 裝置查詢 ─────────────────────────────────────
-
-@app.post("/api/devices/query")
-async def query_devices(req: DeviceQueryRequest):
-    client = ThingsBoardClient(req.tb_url)
-    client.set_token(req.tb_token)
-    try:
-        result = client.get_devices_page(
-            page=req.page,
-            page_size=req.page_size,
-            text_search=req.text_search,
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── API: 裝置清單匯出 CSV ─────────────────────────────
-
-@app.post("/api/devices/export")
-async def export_devices(req: DeviceExportRequest):
-    """匯出 ThingsBoard 裝置清單為 CSV（最多 2000 筆）"""
-    client = ThingsBoardClient(req.tb_url)
-    client.set_token(req.tb_token)
-
-    all_devices = []
-    page = 0
-    while True:
-        result = client.get_devices_page(
-            page=page, page_size=200,
-            text_search=req.text_search,
-        )
-        devices = result.get("data", [])
-        all_devices.extend(devices)
-        if not result.get("hasNext", False) or len(all_devices) >= 2000:
-            break
-        page += 1
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["name", "type", "label", "createdTime"])
-    for d in all_devices:
-        created = datetime.datetime.fromtimestamp(
-            d.get("createdTime", 0) / 1000
-        ).strftime("%Y-%m-%d %H:%M:%S") if d.get("createdTime") else ""
-        writer.writerow([
-            d.get("name", ""),
-            d.get("type", ""),
-            d.get("label", ""),
-            created,
-        ])
-
-    content = output.getvalue().encode("utf-8-sig")
-    today = datetime.datetime.now().strftime("%Y%m%d")
-    filename = f"devices_export_{today}.csv"
-
-    return StreamingResponse(
-        io.BytesIO(content),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-# ── API: 直接刪除裝置 ─────────────────────────────────
-
-@app.post("/api/devices/delete-direct")
-async def delete_devices_direct(req: DirectDeleteRequest):
-    task = task_manager.create_task("delete_direct", {
-        "rows": [],
-        "device_ids": req.device_ids,
-        "dry_run": req.dry_run,
-        "tb_url": req.tb_url,
-        "tb_username": req.tb_username,
-        "tb_password": req.tb_password,
-        "delay": 0.1,
-        "batch_size": 50,
-        "batch_pause": 3,
-    })
-    task.csv_filename = "(查詢頁面直接刪除)"
-    task.on_complete = _append_history
-
-    def _exec_direct_delete(task):
-        import datetime as dt
-        task.started_at = dt.datetime.now().isoformat()
-        params = task.params
-        device_ids = params["device_ids"]
-        dry_run = params.get("dry_run", True)
-
-        client = ThingsBoardClient(params["tb_url"])
-        try:
-            client.login(params["tb_username"], params["tb_password"])
-            task.push_log("info", "ThingsBoard 登入成功")
-        except Exception as e:
-            task.push_log("error", f"登入失敗: {e}")
-            task.push_complete({"total": len(device_ids), "success": 0,
-                                "fail": 0, "skip": 0})
-            return
-
-        total = len(device_ids)
-        success = 0
-        fail = 0
-
-        for idx, did in enumerate(device_ids, 1):
-            if dry_run:
-                task.push_log("info", f"[預演] 模擬刪除 ID: {did}")
-                success += 1
-                task.add_result(did, "success", "預演")
-            else:
-                try:
-                    resp = client.delete_device(did)
-                    if resp.status_code == 200:
-                        task.push_log("success", f"[成功] 已刪除 ID: {did}")
-                        success += 1
-                        task.add_result(did, "success", "")
-                    else:
-                        task.push_log("error",
-                                      f"[失敗] ID: {did} (HTTP {resp.status_code})")
-                        fail += 1
-                        task.add_result(did, "fail", f"HTTP {resp.status_code}")
-                except Exception as e:
-                    task.push_log("error", f"[異常] {e}")
-                    fail += 1
-                    task.add_result(did, "fail", str(e))
-            task.push_progress(idx, total, success, fail, 0)
-
-        task.push_complete({"total": total, "success": success,
-                            "fail": fail, "skip": 0})
-
-    task_manager.run_in_background(task, _exec_direct_delete)
-    return {"task_id": task.id}
 
 
 @app.post("/api/kw/delete-batch")
@@ -1111,43 +805,6 @@ async def delete_mapping_rule(rule_name: str):
     return {"success": True}
 
 
-# ── API: DeviceProfile 驗證 ──────────────────────────
-
-@app.post("/api/device-profiles/check")
-async def check_device_profiles(req: DeviceProfileCheckRequest):
-    """檢查指定的 type 名稱是否為合法的 DeviceProfile"""
-    client = ThingsBoardClient(req.tb_url)
-    client.set_token(req.tb_token)
-    try:
-        existing_profiles = client.get_all_device_profile_names()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"無法取得 DeviceProfile 列表: {e}")
-
-    results = {}
-    for name in req.type_names:
-        results[name] = name in existing_profiles
-
-    return {
-        "existing_profiles": existing_profiles,
-        "check_results": results,
-        "total_checked": len(req.type_names),
-        "valid_count": sum(1 for v in results.values() if v),
-        "invalid_count": sum(1 for v in results.values() if not v),
-    }
-
-
-@app.post("/api/device-profiles/list")
-async def list_device_profiles(req: DeviceQueryRequest):
-    """列出 ThingsBoard 上所有的 DeviceProfile"""
-    client = ThingsBoardClient(req.tb_url)
-    client.set_token(req.tb_token)
-    try:
-        existing_profiles = client.get_all_device_profile_names()
-        return {"profiles": existing_profiles, "total": len(existing_profiles)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"無法取得 DeviceProfile 列表: {e}")
-
-
 # ── API: PostgreSQL 連線 ─────────────────────────────
 
 @app.get("/api/pg/test")
@@ -1312,61 +969,6 @@ async def pg_add_tb_profile(req: RefTbProfileRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class SyncTbProfilesRequest(BaseModel):
-    tb_url: str
-    tb_username: str
-    tb_password: str
-
-
-@app.post("/api/pg/ref/tb-profiles/sync")
-async def pg_sync_tb_profiles(req: SyncTbProfilesRequest):
-    """從 ThingsBoard 一鍵同步所有 DeviceProfile 到 PG tb_device_profile 表"""
-    try:
-        client = ThingsBoardClient(req.tb_url)
-        client.login(req.tb_username, req.tb_password)
-
-        # 取得所有 DeviceProfile（含 description）
-        all_profiles = []
-        page = 0
-        while True:
-            result = client.get_device_profiles(page=page, page_size=100)
-            for dp in result.get("data", []):
-                all_profiles.append({
-                    "name": dp.get("name", ""),
-                    "description": dp.get("description", ""),
-                })
-            if not result.get("hasNext", False):
-                break
-            page += 1
-            if page > 50:
-                break
-
-        log.info(f"[syncTbProfiles] 從 TB 取得 {len(all_profiles)} 個 DeviceProfile")
-
-        # 逐筆 upsert 到 PG
-        synced = 0
-        errors = []
-        for p in all_profiles:
-            if not p["name"]:
-                continue
-            try:
-                pg_client.upsert_tb_profile(p["name"], p.get("description"))
-                synced += 1
-            except Exception as e:
-                errors.append({"name": p["name"], "reason": str(e)})
-
-        return {
-            "success": True,
-            "synced": synced,
-            "total": len(all_profiles),
-            "errors": errors,
-            "message": f"成功同步 {synced}/{len(all_profiles)} 個 DeviceProfile 到 PG",
-        }
-    except Exception as e:
-        log.error(f"[syncTbProfiles] 同步失敗: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"同步失敗: {e}")
-
-
 @app.post("/api/pg/ref/delete")
 async def pg_delete_ref(req: RefDeleteRequest):
     """刪除參照表資料"""
@@ -1379,9 +981,9 @@ async def pg_delete_ref(req: RefDeleteRequest):
 
 # ── API: Tag 推導 ────────────────────────────────────
 
-@app.post("/api/pg/derive/tb")
-async def pg_derive_tb(req: DeriveRequest,
-                       user: dict = Depends(require_role("admin", "operator"))):
+@app.post("/api/kw/derive")
+async def kw_derive(req: DeriveRequest,
+                    user: dict = Depends(require_role("admin", "operator"))):
     """推導 Kepware 建點欄位（tag group + tag）"""
     try:
         staging = pg_client.get_staging_list(
@@ -1417,9 +1019,9 @@ async def pg_derive_pg(req: DeriveRequest,
 
 # ── API: 執行建點 / 寫入 ──────────────────────────────
 
-@app.post("/api/pg/execute/tb")
-async def pg_execute_tb(req: ExecuteTbRequest, request: Request,
-                        user: dict = Depends(require_role("admin", "operator"))):
+@app.post("/api/kw/execute")
+async def kw_execute(req: ExecuteKwRequest, request: Request,
+                     user: dict = Depends(require_role("admin", "operator"))):
     """執行 Kepware 建點：推導欄位 → 建立 tag group + tag → 更新 tb_status（含限速）"""
     import time, random
     try:
