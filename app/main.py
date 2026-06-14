@@ -30,6 +30,42 @@ from app.auth import (
     get_current_user, require_admin, require_role, VALID_ROLES,
 )
 
+# ── Gateway 密碼加解密 (Fernet) ──────────────────────────
+
+from cryptography.fernet import Fernet
+import base64, hashlib
+
+def _get_fernet() -> Fernet:
+    raw_key = os.getenv("KW_ENCRYPT_KEY", "kepitsimple-default-encrypt-key")
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw_key.encode()).digest())
+    return Fernet(key)
+
+def _encrypt_password(plain: str) -> str:
+    return _get_fernet().encrypt(plain.encode()).decode()
+
+def _decrypt_password(token: str) -> str:
+    return _get_fernet().decrypt(token.encode()).decode()
+
+
+def _resolve_gw_credentials(gateway_id: int = None,
+                             kw_gw_url: str = None,
+                             kw_gw_username: str = None,
+                             kw_gw_password: str = None) -> tuple:
+    """Resolve gateway credentials from DB (by id) or manual params.
+    Returns (url, username, password, verify_ssl).
+    """
+    if gateway_id:
+        gw = pg_client.get_gateway(gateway_id)
+        if not gw:
+            raise HTTPException(status_code=404, detail=f"Gateway ID={gateway_id} 不存在")
+        return (gw["url"], gw["username"],
+                _decrypt_password(gw["password_enc"]),
+                gw.get("verify_ssl", True))
+    if not kw_gw_url:
+        raise HTTPException(status_code=400, detail="請指定 gateway_id 或提供 kw_gw_url")
+    return (kw_gw_url, kw_gw_username, kw_gw_password, True)
+
+
 # ── Logging ────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO,
@@ -295,9 +331,10 @@ class DeriveRequest(BaseModel):
 
 
 class ExecuteKwRequest(BaseModel):
-    kw_gw_url: str
-    kw_gw_username: str
-    kw_gw_password: str
+    gateway_id: Optional[int] = None
+    kw_gw_url: Optional[str] = None
+    kw_gw_username: Optional[str] = None
+    kw_gw_password: Optional[str] = None
     ids: Optional[list] = None
     delay: float = 0.2
     batch_size: int = 50
@@ -314,9 +351,10 @@ class DeriveScaleRequest(BaseModel):
 
 
 class ExecuteScaleRequest(BaseModel):
-    kw_gw_url: str
-    kw_gw_username: str
-    kw_gw_password: str
+    gateway_id: Optional[int] = None
+    kw_gw_url: Optional[str] = None
+    kw_gw_username: Optional[str] = None
+    kw_gw_password: Optional[str] = None
     ids: Optional[list] = None
     delay: float = 0.2
     batch_size: int = 50
@@ -325,9 +363,10 @@ class ExecuteScaleRequest(BaseModel):
 
 class KwBatchDeleteRequest(BaseModel):
     upload_id: str
-    kw_gw_url: str
-    kw_gw_username: str
-    kw_gw_password: str
+    gateway_id: Optional[int] = None
+    kw_gw_url: Optional[str] = None
+    kw_gw_username: Optional[str] = None
+    kw_gw_password: Optional[str] = None
     dry_run: bool = True
     delay: float = 0.2
     batch_size: int = 50
@@ -335,9 +374,30 @@ class KwBatchDeleteRequest(BaseModel):
 
 
 class KwGwSettingsRequest(BaseModel):
-    kw_gw_url: str
-    kw_gw_username: str
-    kw_gw_password: str
+    gateway_id: Optional[int] = None
+    kw_gw_url: Optional[str] = None
+    kw_gw_username: Optional[str] = None
+    kw_gw_password: Optional[str] = None
+
+
+class GatewayCreateRequest(BaseModel):
+    name: str
+    url: str
+    username: str
+    password: str
+    verify_ssl: bool = True
+    zone: Optional[str] = None
+    is_default: bool = False
+
+
+class GatewayUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    verify_ssl: Optional[bool] = None
+    zone: Optional[str] = None
+    is_default: Optional[bool] = None
 
 
 class UserLoginRequest(BaseModel):
@@ -630,6 +690,102 @@ async def download_template(template_type: str):
 
 
 
+# ── API: Kepware Gateway 管理 ───────────────────────────
+
+@app.get("/api/kw/gateways")
+async def kw_list_gateways(user: dict = Depends(get_current_user)):
+    """列出所有 Gateway（密碼不回傳）"""
+    try:
+        return pg_client.get_gateways()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查詢 Gateway 失敗: {e}")
+
+
+@app.post("/api/kw/gateways")
+async def kw_create_gateway(req: GatewayCreateRequest, request: Request,
+                            user: dict = Depends(require_admin)):
+    """新增 Gateway"""
+    try:
+        result = pg_client.create_gateway(
+            name=req.name,
+            url=req.url.rstrip("/"),
+            username=req.username,
+            password_enc=_encrypt_password(req.password),
+            verify_ssl=req.verify_ssl,
+            zone=req.zone,
+            is_default=req.is_default,
+        )
+        _log_activity(request, user, "create_gateway", f"新增 Gateway: {req.name}")
+        return result
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=409, detail=f"Gateway 名稱 '{req.name}' 已存在")
+        raise HTTPException(status_code=500, detail=f"新增 Gateway 失敗: {e}")
+
+
+@app.put("/api/kw/gateways/{gw_id}")
+async def kw_update_gateway(gw_id: int, req: GatewayUpdateRequest,
+                            request: Request,
+                            user: dict = Depends(require_admin)):
+    """更新 Gateway（密碼為空則不更新）"""
+    try:
+        fields = {}
+        if req.name is not None:
+            fields["name"] = req.name
+        if req.url is not None:
+            fields["url"] = req.url.rstrip("/")
+        if req.username is not None:
+            fields["username"] = req.username
+        if req.password:
+            fields["password_enc"] = _encrypt_password(req.password)
+        if req.verify_ssl is not None:
+            fields["verify_ssl"] = req.verify_ssl
+        if req.zone is not None:
+            fields["zone"] = req.zone
+        if req.is_default is not None:
+            fields["is_default"] = req.is_default
+        ok = pg_client.update_gateway(gw_id, **fields)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Gateway 不存在")
+        _log_activity(request, user, "update_gateway", f"更新 Gateway ID={gw_id}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新 Gateway 失敗: {e}")
+
+
+@app.delete("/api/kw/gateways/{gw_id}")
+async def kw_delete_gateway(gw_id: int, request: Request,
+                            user: dict = Depends(require_admin)):
+    """刪除 Gateway"""
+    try:
+        ok = pg_client.delete_gateway(gw_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Gateway 不存在")
+        _log_activity(request, user, "delete_gateway", f"刪除 Gateway ID={gw_id}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除 Gateway 失敗: {e}")
+
+
+@app.post("/api/kw/gateways/{gw_id}/test")
+async def kw_test_gateway(gw_id: int, user: dict = Depends(get_current_user)):
+    """測試指定 Gateway 連線"""
+    gw = pg_client.get_gateway(gw_id)
+    if not gw:
+        raise HTTPException(status_code=404, detail="Gateway 不存在")
+    try:
+        password = _decrypt_password(gw["password_enc"])
+        client = KepwareGatewayClient(gw["url"], verify=gw.get("verify_ssl", True))
+        client.login(gw["username"], password)
+        return {"success": True, "message": f"Gateway '{gw['name']}' 連線成功"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"連線失敗: {e}")
+
+
 @app.post("/api/kw/delete-batch")
 async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                           user: dict = Depends(require_role("admin", "operator"))):
@@ -638,12 +794,16 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
     if rows is None:
         raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
 
+    gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
+        req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+
     task = task_manager.create_task("kw_delete", {
         "rows": rows,
         "dry_run": req.dry_run,
-        "kw_gw_url": req.kw_gw_url,
-        "kw_gw_username": req.kw_gw_username,
-        "kw_gw_password": req.kw_gw_password,
+        "kw_gw_url": gw_url,
+        "kw_gw_username": gw_user,
+        "kw_gw_password": gw_pass,
+        "kw_gw_verify": gw_verify,
         "delay": req.delay,
         "batch_size": req.batch_size,
         "batch_pause": req.batch_pause,
@@ -680,7 +840,8 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
 
         if not dry_run:
             try:
-                client = KepwareGatewayClient(params["kw_gw_url"])
+                client = KepwareGatewayClient(params["kw_gw_url"],
+                                              verify=params.get("kw_gw_verify", True))
                 client.login(params["kw_gw_username"], params["kw_gw_password"])
                 task.push_log("info", "Kepware Gateway 登入成功")
             except Exception as e:
@@ -1035,8 +1196,10 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
         derived = pg_client.derive_kw_fields(rows)
         log.info(f"[executeKW] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}, batch_pause={req.batch_pause}")
 
-        client = KepwareGatewayClient(req.kw_gw_url)
-        client.login(req.kw_gw_username, req.kw_gw_password)
+        gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
+            req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+        client = KepwareGatewayClient(gw_url, verify=gw_verify)
+        client.login(gw_user, gw_pass)
 
         # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
         unique_groups = {}
@@ -1204,11 +1367,15 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
 
 @app.post("/api/kw-gw/test")
 async def kw_gw_test(req: KwGwSettingsRequest):
-    """測試 Kepware API Gateway 連線"""
+    """測試 Kepware API Gateway 連線（支援 gateway_id 或手動輸入）"""
     try:
-        client = KepwareGatewayClient(req.kw_gw_url)
-        client.login(req.kw_gw_username, req.kw_gw_password)
+        gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
+            req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+        client = KepwareGatewayClient(gw_url, verify=gw_verify)
+        client.login(gw_user, gw_pass)
         return {"success": True, "message": "Kepware API Gateway 連線成功"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"連線失敗: {e}")
 
@@ -1254,8 +1421,10 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
         log.info(f"[executeScale] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}")
 
         # 2. 登入 Kepware Gateway
-        client = KepwareGatewayClient(req.kw_gw_url)
-        client.login(req.kw_gw_username, req.kw_gw_password)
+        gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
+            req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+        client = KepwareGatewayClient(gw_url, verify=gw_verify)
+        client.login(gw_user, gw_pass)
 
         success_ids = []
         failed = []

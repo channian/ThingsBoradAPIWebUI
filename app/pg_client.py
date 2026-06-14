@@ -98,6 +98,18 @@ class PGClient:
                     ON activity_log (created_at);
                 CREATE INDEX IF NOT EXISTS idx_activity_log_user
                     ON activity_log (username);
+                CREATE TABLE IF NOT EXISTS kepware_gateway (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    url VARCHAR(500) NOT NULL,
+                    username VARCHAR(255) NOT NULL,
+                    password_enc VARCHAR(500) NOT NULL,
+                    verify_ssl BOOLEAN DEFAULT TRUE,
+                    zone VARCHAR(100),
+                    is_default BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
             """)
 
     def _ensure_extra_columns(self, conn):
@@ -520,6 +532,70 @@ class PGClient:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM kepitsimple_user")
                 return cur.fetchone()[0]
+
+    # ── Kepware Gateway 管理 ────────────────────────────
+
+    def get_gateways(self) -> list:
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, name, url, username, verify_ssl,
+                           zone, is_default, created_at, updated_at
+                    FROM kepware_gateway ORDER BY id
+                """)
+                return [dict(r) for r in cur.fetchall()]
+
+    def get_gateway(self, gw_id: int) -> dict:
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM kepware_gateway WHERE id = %s", (gw_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def create_gateway(self, name: str, url: str, username: str,
+                       password_enc: str, verify_ssl: bool = True,
+                       zone: str = None, is_default: bool = False) -> dict:
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if is_default:
+                    cur.execute("UPDATE kepware_gateway SET is_default = FALSE WHERE is_default = TRUE")
+                cur.execute("""
+                    INSERT INTO kepware_gateway
+                        (name, url, username, password_enc, verify_ssl, zone, is_default)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, name, url, username, verify_ssl,
+                              zone, is_default, created_at, updated_at
+                """, (name, url, username, password_enc, verify_ssl, zone, is_default))
+                return dict(cur.fetchone())
+
+    def update_gateway(self, gw_id: int, **fields) -> bool:
+        allowed = {"name", "url", "username", "password_enc",
+                   "verify_ssl", "zone", "is_default"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                if updates.get("is_default"):
+                    cur.execute("UPDATE kepware_gateway SET is_default = FALSE WHERE is_default = TRUE")
+                set_parts = []
+                params = []
+                for k, v in updates.items():
+                    set_parts.append(f"{k} = %s")
+                    params.append(v)
+                set_parts.append("updated_at = NOW()")
+                params.append(gw_id)
+                cur.execute(
+                    f"UPDATE kepware_gateway SET {', '.join(set_parts)} WHERE id = %s",
+                    params,
+                )
+                return cur.rowcount > 0
+
+    def delete_gateway(self, gw_id: int) -> bool:
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM kepware_gateway WHERE id = %s", (gw_id,))
+                return cur.rowcount > 0
 
     # ── 操作日誌 (activity_log) ──────────────────────────
 
