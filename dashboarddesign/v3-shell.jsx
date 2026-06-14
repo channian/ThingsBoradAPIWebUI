@@ -125,24 +125,47 @@ function Login3({ onLogin }) {
   return (
     <div className="lv3">
       <div className="lv3-left">
-        <MatrixRain3 />
-        <div className="lv3-scan"></div>
-        <div className="lv3-grid"></div>
+        <span className="lv3-tick tl"></span><span className="lv3-tick tr"></span>
+        <span className="lv3-tick bl"></span><span className="lv3-tick br"></span>
         <div className="lv3-brand">
-          <KisMark3 size={50} dark={true} />
+          <KisMark3 size={50} />
           <div>
             <h1>Kep It Simple</h1>
             <div className="sub">Kepware · Tag Management</div>
           </div>
         </div>
-        <div className="lv3-mid">
-          <h2>推導、比對、確認 —— 建點不再盲推。</h2>
-          <p>CSV 上傳 → 推導 + 結構驗證 → 可編輯預覽 → 確認執行。純 Kepware 路線的點位管理主控台。</p>
+        <div className="lv3-diagram">
+          <div className="cap">Tag Structure</div>
+          <div className="lv3-flow">
+            <div className="lv3-node">
+              <div className="nk">Gateway</div>
+              <div className="nv">Zone 1</div>
+              <div className="nc">:57412</div>
+            </div>
+            <div className="lv3-link"></div>
+            <div className="lv3-node">
+              <div className="nk">Channel</div>
+              <div className="nv">12</div>
+              <div className="nc">channels</div>
+            </div>
+            <div className="lv3-link"></div>
+            <div className="lv3-node">
+              <div className="nk">Device</div>
+              <div className="nv">48</div>
+              <div className="nc">devices</div>
+            </div>
+            <div className="lv3-link"></div>
+            <div className="lv3-node tag">
+              <div className="nk">Tag</div>
+              <div className="nv">7,204</div>
+              <div className="nc">tags</div>
+            </div>
+          </div>
         </div>
         <div className="lv3-readout">
           <div className="rr"><span className="rk">GATEWAY</span><span className="rv">10.11.64.70:57412</span></div>
-          <div className="rr"><span className="rk">ENVIRONMENT</span><span className="rv">Production · 工廠 A</span></div>
-          <div className="rr"><span className="rk">PLATFORM</span><span className="rv ok">● Kepware API Gateway · READY</span></div>
+          <div className="rr"><span className="rk">ENVIRONMENT</span><span className="rv">Production · Plant A</span></div>
+          <div className="rr"><span className="rk">PLATFORM</span><span className="rv ok"><span className="dot"></span>Kepware API Gateway · READY</span></div>
         </div>
       </div>
       <div className="lv3-right">
