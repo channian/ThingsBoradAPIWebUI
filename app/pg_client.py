@@ -892,344 +892,119 @@ class PGClient:
 
     # ── Tag 推導邏輯 ──────────────────────────────────
 
-    def derive_tb_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 TB 建點所需欄位"""
-        # 載入參照表做快取
+    def _load_derive_caches(self):
+        """載入推導用的參照表快取"""
         devices = {d["device_name"]: d for d in self.get_devices()}
         profiles = {p["name"]: p for p in self.get_tb_profiles()}
         locations = self.get_locations()
-
-        results = []
-        for row in staging_rows:
-            tag_name = row.get("tag_name", "")
-            parts = tag_name.split("_") if tag_name else []
-
-            site_prefix = parts[0] if len(parts) > 0 else ""
-            floor = parts[1] if len(parts) > 1 else ""
-            if floor.upper() == "BF":
-                floor = "B1F"
-            # system 優先用 CSV 的 system_code，fallback 才從 tag_name 拆
-            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
-
-            # 查 driver_type: 先查 device_config，查不到就用 io_device 值本身判斷
-            io_device = row.get("io_device", "")
-            driver_type = _resolve_driver_type(io_device, devices)
-
-            # 推導 nodename: 優先用 scada_node_name 去掉 _，否則用 site + system_code
-            scada_node_name = (row.get("scada_node_name") or "").strip()
-            site_val = (row.get("site") or "").strip()
-            system_code_val = (row.get("system_code") or "").strip()
-            if scada_node_name:
-                nodename = scada_node_name.replace("_", "")
-            elif site_val or system_code_val:
-                nodename = site_val + system_code_val
-            else:
-                nodename = site_prefix + system
-
-            # DeviceProfile: CSV 有填就優先用
-            csv_profile = (row.get("device_profile") or "").strip()
-            if csv_profile:
-                derived_profile = csv_profile
-            elif driver_type.upper() == "IFIX":
-                # PLC-IFIX: nodename-zone-site-system
-                matched_loc = next((l for l in locations if l["site"] == site_val), None)
-                zone = matched_loc["zone"] if matched_loc else ""
-                derived_profile = f"{nodename}-{zone}-{site_prefix}-{system}"
-            else:
-                derived_profile = f"{nodename}-{system}-{floor}-{system}"
-
-            # label: OPC 類加 ns=2;s= 前綴
-            io_address = row.get("io_address", "")
-            if driver_type.upper() in ("OPC", "OPC_UA"):
-                label = f"ns=2;s={io_address}"
-            else:
-                label = io_address
-
-            # 查 Tb_Device_Profile 確認是否存在
-            profile_exists = derived_profile in profiles
-            # tabname from Tb_Device_Profile.description
-            tabname = profiles.get(derived_profile, {}).get("description", "")
-
-            results.append({
-                "id": row.get("id"),
-                "tag_name": tag_name,
-                "tb_name": tag_name,
-                "tb_type": derived_profile,
-                "tb_label": label,
-                "tb_description": row.get("description", ""),
-                "profile_exists": profile_exists,
-                "tabname": tabname,
-                "driver_type": driver_type,
-                "nodename": nodename,
-                "site_prefix": site_prefix,
-                "floor": floor,
-                "system": system,
-                "source": "csv" if csv_profile else "derived",
-            })
-
-        return results
+        return devices, profiles, locations
 
     def derive_kw_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 Kepware 建點所需欄位
-
-        從 tb_type (DeviceProfile) 拆解 Kepware 路徑：
-        tb_type "K8CHS-CHS-2F-CHS" → channel=K8CHS, device=CHS, tag_groups=2F/CHS
-        """
-        devices = {d["device_name"]: d for d in self.get_devices()}
-        profiles = {p["name"]: p for p in self.get_tb_profiles()}
-        locations = self.get_locations()
-
+        """推導 Kepware 建點欄位（channel / device / tag_groups / address）"""
+        devices, profiles, locations = self._load_derive_caches()
         results = []
         for row in staging_rows:
-            tag_name = row.get("tag_name", "")
-            if not tag_name:
+            base = _derive_base_fields(row, devices, profiles, locations)
+            if not base:
                 continue
-            parts = tag_name.split("_") if tag_name else []
-
-            site_prefix = parts[0] if len(parts) > 0 else ""
-            floor = parts[1] if len(parts) > 1 else ""
-            if floor.upper() == "BF":
-                floor = "B1F"
-            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
-
-            io_device = row.get("io_device", "")
-            driver_type = _resolve_driver_type(io_device, devices)
-
-            scada_node_name = (row.get("scada_node_name") or "").strip()
-            site_val = (row.get("site") or "").strip()
-            system_code_val = (row.get("system_code") or "").strip()
-            if scada_node_name:
-                nodename = scada_node_name.replace("_", "")
-            elif site_val or system_code_val:
-                nodename = site_val + system_code_val
-            else:
-                nodename = site_prefix + system
-
-            csv_profile = (row.get("device_profile") or "").strip()
-            if csv_profile:
-                tb_type = csv_profile
-            elif driver_type.upper() == "IFIX":
-                matched_loc = next((l for l in locations if l["site"] == site_val), None)
-                zone = matched_loc["zone"] if matched_loc else ""
-                tb_type = f"{nodename}-{zone}-{site_prefix}-{system}"
-            else:
-                tb_type = f"{nodename}-{system}-{floor}-{system}"
-
-            # 從 tb_type 拆 Kepware 路徑
-            tp = tb_type.split("-")
-            channel_name = tp[0] if len(tp) > 0 else ""
-            device_name = tp[1] if len(tp) > 1 else ""
-            tag_groups = ".".join(tp[2:]) if len(tp) > 2 else ""
-
-            profile_exists = tb_type in profiles
-
-            # address 前綴：OPC 類加 ns=2;s=
-            io_address = row.get("io_address", "")
-            if driver_type.upper() in ("OPC", "OPC_UA"):
-                address = f"ns=2;s={io_address}" if io_address else ""
-            else:
-                address = io_address
-
             results.append({
                 "id": row.get("id"),
-                "tag_name": tag_name,
-                "tb_type": tb_type,
-                "channel_name": channel_name,
-                "device_name": device_name,
-                "tag_groups": tag_groups,
-                "address": address,
+                "tag_name": base["tag_name"],
+                "tb_type": base["tb_type"],
+                "channel_name": base["channel_name"],
+                "device_name": base["device_name"],
+                "tag_groups": base["tag_groups"],
+                "address": base["address"],
                 "description": row.get("description", ""),
-                "driver_type": driver_type,
-                "profile_exists": profile_exists,
+                "driver_type": base["driver_type"],
+                "profile_exists": base["profile_exists"],
             })
-
         return results
 
     def derive_pg_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 PG 正式表所需欄位"""
-        locations = self.get_locations()
+        """推導 PG 正式表欄位"""
+        devices, profiles, locations = self._load_derive_caches()
         ownerships = self.get_ownerships()
-        devices = {d["device_name"]: d for d in self.get_devices()}
-        profiles = {p["name"]: p for p in self.get_tb_profiles()}
-
-        # 建立 owner → department 快取
         owner_dept = {}
         for o in ownerships:
             owner_dept[o["data_owner"]] = o["department"]
 
         results = []
         for row in staging_rows:
-            tag_name = row.get("tag_name", "")
-            parts = tag_name.split("_") if tag_name else []
+            base = _derive_base_fields(row, devices, profiles, locations)
+            if not base:
+                continue
 
-            site_prefix = parts[0] if len(parts) > 0 else ""
-            floor = parts[1] if len(parts) > 1 else ""
-            if floor.upper() == "BF":
-                floor = "B1F"
-            # system 優先用 CSV 的 system_code，fallback 才從 tag_name 拆
-            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
-
-            # 查 location (site → bu, zone)
             site = row.get("site", "")
-            matched_loc = None
-            for loc in locations:
-                if loc["site"] == site:
-                    matched_loc = loc
-                    break
-            bu = matched_loc["bu"] if matched_loc else ""
-            zone = matched_loc["zone"] if matched_loc else ""
-
-            # 查 driver_type: 先查 device_config，查不到就用 io_device 值本身判斷
-            io_device = row.get("io_device", "")
-            driver_type = _resolve_driver_type(io_device, devices)
-
-            # 查 department
             data_owner = row.get("data_owner", "")
             department = owner_dept.get(data_owner, "")
 
-            # 推導 nodename: 優先用 scada_node_name 去掉 _，否則用 site + system_code
-            scada_node_name = (row.get("scada_node_name") or "").strip()
-            site_val = (row.get("site") or "").strip()
-            system_code_val = (row.get("system_code") or "").strip()
-            if scada_node_name:
-                nodename = scada_node_name.replace("_", "")
-            elif site_val or system_code_val:
-                nodename = site_val + system_code_val
-            else:
-                nodename = site_prefix + system
+            matched_loc = base["matched_loc"]
+            bu = matched_loc["bu"] if matched_loc else ""
+            zone = matched_loc["zone"] if matched_loc else ""
 
-            # tabname: 先查 Tb_Device_Profile，查不到就用規則推導
-            csv_profile = (row.get("device_profile") or "").strip()
-            if csv_profile and csv_profile in profiles:
-                tabname = profiles[csv_profile].get("description", "")
-            elif driver_type.upper() == "IFIX":
-                # PLC-IFIX: dp_name = nodename-zone-site-system
-                dp_name = f"{nodename}-{zone}-{site_prefix}-{system}"
-                if dp_name in profiles:
-                    tabname = profiles[dp_name].get("description", "")
+            tabname = base["tabname"]
+            if not tabname:
+                if base["driver_type"].upper() == "IFIX":
+                    tabname = f"{zone}_{base['site_prefix']}_{base['system']}" if zone else ""
                 else:
-                    tabname = f"{zone}_{site_prefix}_{system}" if zone else ""
-            else:
-                dp_name = f"{nodename}-{system}-{floor}-{system}"
-                if dp_name in profiles:
-                    tabname = profiles[dp_name].get("description", "")
-                else:
-                    tabname = f"{bu}_{site_prefix}_{system}" if bu else ""
-
-            # Collector 用欄位：address 加前綴
-            io_address = row.get("io_address", "")
-            if driver_type.upper() in ("OPC", "OPC_UA"):
-                tag_address = f"ns=2;s={io_address}" if io_address else ""
-            else:
-                tag_address = io_address
+                    tabname = f"{bu}_{base['site_prefix']}_{base['system']}" if bu else ""
 
             results.append({
                 "id": row.get("id"),
-                "tagname": tag_name,
+                "tagname": base["tag_name"],
                 "description": row.get("description", ""),
                 "node_name": row.get("scada_node_name", ""),
-                "driver_type": driver_type,
+                "driver_type": base["driver_type"],
                 "address": row.get("io_address", ""),
                 "tabname": tabname,
                 "zone": zone,
                 "bu": bu,
                 "site": site,
-                "floor": floor,
-                "system": system,
+                "floor": base["floor"],
+                "system": base["system"],
                 "owner": data_owner,
                 "department": department,
                 "data_type": "float",
                 "scan_group": row.get("scan_group", ""),
-                "tag_address": tag_address,
+                "tag_address": base["address"],
             })
-
         return results
 
     def derive_scale_fields(self, staging_rows: list) -> list:
-        """對暫存表資料推導 Kepware Tag Scaling 與 Data Type 設定
-
-        所有 tag 都會處理：
-        - scale_enabled=YES → scaling_type=1 (Linear)，帶 raw/scaled 值
-        - scale_enabled=NO  → scaling_type=0 (None)，data_type=8 (Float)
-
-        從 tb_type (DeviceProfile) 拆解 Kepware 路徑：
-        tb_type "K8CHS-CHS-2F-CHS" → channel=K8CHS, device=CHS, tag_group=2F.CHS
-        tag_name 送出格式: "{tag_group}.{tag_name}"（API 自動拆分 group）
-        """
-        devices = {d["device_name"]: d for d in self.get_devices()}
-        locations = self.get_locations()
+        """推導 Kepware Tag Scaling 與 Data Type 設定"""
+        devices, profiles, locations = self._load_derive_caches()
         results = []
         for row in staging_rows:
-            tag_name = row.get("tag_name", "")
-            if not tag_name:
+            base = _derive_base_fields(row, devices, profiles, locations)
+            if not base:
                 continue
 
-            # ── 推導 tb_type（與 derive_tb_fields 同邏輯）──
-            parts = tag_name.split("_") if tag_name else []
-            site_prefix = parts[0] if len(parts) > 0 else ""
-            floor = parts[1] if len(parts) > 1 else ""
-            if floor.upper() == "BF":
-                floor = "B1F"
-            system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
+            full_tag_name = (f"{base['tag_groups']}.{base['tag_name']}"
+                             if base["tag_groups"] else base["tag_name"])
 
-            io_device = row.get("io_device", "")
-            driver_type = _resolve_driver_type(io_device, devices)
-
-            scada_node_name = (row.get("scada_node_name") or "").strip()
-            site_val = (row.get("site") or "").strip()
-            system_code_val = (row.get("system_code") or "").strip()
-            if scada_node_name:
-                nodename = scada_node_name.replace("_", "")
-            elif site_val or system_code_val:
-                nodename = site_val + system_code_val
-            else:
-                nodename = site_prefix + system
-
-            csv_profile = (row.get("device_profile") or "").strip()
-            if csv_profile:
-                tb_type = csv_profile
-            elif driver_type.upper() == "IFIX":
-                matched_loc = next((l for l in locations if l["site"] == site_val), None)
-                zone = matched_loc["zone"] if matched_loc else ""
-                tb_type = f"{nodename}-{zone}-{site_prefix}-{system}"
-            else:
-                tb_type = f"{nodename}-{system}-{floor}-{system}"
-
-            # ── 從 tb_type 拆 Kepware 路徑 ──
-            tp = tb_type.split("-")
-            channel_name = tp[0] if len(tp) > 0 else ""
-            device_name = tp[1] if len(tp) > 1 else ""
-            # 剩餘段作為 tag_group，用 "." 接
-            tag_groups = ".".join(tp[2:]) if len(tp) > 2 else ""
-            # 完整 tag_name = tag_group.tag_name（API 自動拆分 group/tag）
-            full_tag_name = f"{tag_groups}.{tag_name}" if tag_groups else tag_name
-
-            # ── Scale 判斷 ──
             scale_enabled = row.get("scale_enabled")
             if scale_enabled:
                 raw_low = row.get("raw_low")
                 raw_high = row.get("raw_high")
                 scaled_low = row.get("scaled_low")
                 scaled_high = row.get("scaled_high")
-                # 有完整範圍才設 Linear，否則 fallback 為 None
-                if raw_low is not None and raw_high is not None and scaled_low is not None and scaled_high is not None:
-                    scaling_type = 1  # Linear
-                else:
-                    scaling_type = 0
+                has_range = all(v is not None for v in (raw_low, raw_high, scaled_low, scaled_high))
+                scaling_type = 1 if has_range else 0
             else:
                 scaling_type = 0
                 raw_low = raw_high = scaled_low = scaled_high = None
 
             entry = {
                 "id": row.get("id"),
-                "tag_name": tag_name,
-                "tb_type": tb_type,
-                "channel_name": channel_name,
-                "device_name": device_name,
+                "tag_name": base["tag_name"],
+                "tb_type": base["tb_type"],
+                "channel_name": base["channel_name"],
+                "device_name": base["device_name"],
                 "full_tag_name": full_tag_name,
                 "scale_enabled": bool(scale_enabled),
                 "scaling_type": scaling_type,
-                "data_type": 8,  # Float
+                "data_type": 8,
             }
             if scaling_type == 1:
                 entry.update({
@@ -1239,15 +1014,87 @@ class PGClient:
                     "scaling_scaled_high": float(scaled_high),
                     "scaling_clamp_low": False,
                     "scaling_clamp_high": False,
-                    "scaling_scaled_data_type": 8,  # Float
+                    "scaling_scaled_data_type": 8,
                 })
-
             results.append(entry)
-
         return results
 
 
 # ── 工具函式 ──────────────────────────────────────────
+
+def _derive_base_fields(row: dict, devices_cache: dict,
+                        profiles_cache: dict, locations: list) -> dict:
+    """共用推導邏輯，回傳 site_prefix/floor/system/driver_type/nodename/
+    tb_type/channel_name/device_name/tag_groups/address/profile_exists/tabname/matched_loc。
+    若 tag_name 為空回傳 None。
+    """
+    tag_name = row.get("tag_name", "")
+    if not tag_name:
+        return None
+    parts = tag_name.split("_")
+
+    site_prefix = parts[0] if len(parts) > 0 else ""
+    floor = parts[1] if len(parts) > 1 else ""
+    if floor.upper() == "BF":
+        floor = "B1F"
+    system = (row.get("system_code") or "").strip() or (parts[2] if len(parts) > 2 else "")
+
+    io_device = row.get("io_device", "")
+    driver_type = _resolve_driver_type(io_device, devices_cache)
+
+    scada_node_name = (row.get("scada_node_name") or "").strip()
+    site_val = (row.get("site") or "").strip()
+    system_code_val = (row.get("system_code") or "").strip()
+    if scada_node_name:
+        nodename = scada_node_name.replace("_", "")
+    elif site_val or system_code_val:
+        nodename = site_val + system_code_val
+    else:
+        nodename = site_prefix + system
+
+    matched_loc = next((l for l in locations if l["site"] == site_val), None)
+
+    csv_profile = (row.get("device_profile") or "").strip()
+    if csv_profile:
+        tb_type = csv_profile
+    elif driver_type.upper() == "IFIX":
+        zone = matched_loc["zone"] if matched_loc else ""
+        tb_type = f"{nodename}-{zone}-{site_prefix}-{system}"
+    else:
+        tb_type = f"{nodename}-{system}-{floor}-{system}"
+
+    tp = tb_type.split("-")
+    channel_name = tp[0] if len(tp) > 0 else ""
+    device_name = tp[1] if len(tp) > 1 else ""
+    tag_groups = ".".join(tp[2:]) if len(tp) > 2 else ""
+
+    io_address = row.get("io_address", "")
+    if driver_type.upper() in ("OPC", "OPC_UA"):
+        address = f"ns=2;s={io_address}" if io_address else ""
+    else:
+        address = io_address
+
+    profile_exists = tb_type in profiles_cache
+    tabname = profiles_cache.get(tb_type, {}).get("description", "")
+
+    return {
+        "tag_name": tag_name,
+        "site_prefix": site_prefix,
+        "floor": floor,
+        "system": system,
+        "driver_type": driver_type,
+        "nodename": nodename,
+        "tb_type": tb_type,
+        "channel_name": channel_name,
+        "device_name": device_name,
+        "tag_groups": tag_groups,
+        "address": address,
+        "io_address": io_address,
+        "profile_exists": profile_exists,
+        "tabname": tabname,
+        "matched_loc": matched_loc,
+    }
+
 
 def _resolve_driver_type(io_device: str, devices_cache: dict) -> str:
     """解析 driver_type：先查 device_config 表，查不到就用 io_device 值本身判斷"""

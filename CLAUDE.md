@@ -35,8 +35,7 @@ ThingsBoard CE     PostgreSQL           Kepware API GW
 | Module | Role |
 |--------|------|
 | `app/main.py` | FastAPI routes, request models, CSV parsing, SSE streaming, task orchestration |
-| `app/pg_client.py` | PostgreSQL operations: staging/formal table CRUD, reference table CRUD, field derivation logic (`derive_tb_fields`, `derive_pg_fields`, `derive_scale_fields`) |
-| `app/tb_client.py` | ThingsBoard REST API wrapper (login, device CRUD, DeviceProfile) |
+| `app/pg_client.py` | PostgreSQL operations: staging/formal table CRUD, reference table CRUD, gateway CRUD, field derivation logic (`_derive_base_fields` shared + `derive_kw_fields`, `derive_pg_fields`, `derive_scale_fields`) |
 | `app/kw_gw_client.py` | Kepware API Gateway wrapper (Bearer auth, `PUT /api/config/tags`) |
 | `app/task_manager.py` | Background task execution with SSE progress, batch throttling, 429 retry |
 | `app/config_manager.py` | `data/config.json` CRUD for dropdown options, defaults, mapping rules |
