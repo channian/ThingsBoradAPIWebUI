@@ -306,41 +306,62 @@ tbody tr:hover { background: rgba(54, 122, 223, 0.035); }
 .modal-box p { margin: 0 0 20px; font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }
 .modal-box .actions { display: flex; gap: 10px; justify-content: flex-end; }
 
-/* ============ Login (split) ============ */
-.lv3 { min-height: 100vh; display: grid; grid-template-columns: 1.1fr 1fr; }
+/* ============ Login (industrial blueprint) ============ */
+.lv3 { min-height: 100vh; display: grid; grid-template-columns: 1.12fr 1fr; }
 .lv3-left {
   position: relative; overflow: hidden;
-  background: linear-gradient(160deg, var(--french) 0%, var(--char) 78%);
-  color: #EAF1FC;
+  background: #EAF1FA;
+  color: var(--ink-1);
   display: flex; flex-direction: column; justify-content: space-between;
-  padding: 44px 48px;
+  padding: 46px 50px;
 }
-.lv3-rain { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.5; pointer-events: none; mix-blend-mode: screen; }
-.lv3-scan {
-  position: absolute; inset: 0; pointer-events: none; z-index: 1;
-  background: linear-gradient(180deg, transparent, rgba(57, 73, 136, 0.14) 47%, rgba(43, 100, 190, 0.32) 50%, rgba(57, 73, 136, 0.14) 53%, transparent);
-  background-size: 100% 260px;
-  animation: lv3-scan 11s linear infinite;
+/* fine + coarse blueprint grid */
+.lv3-left::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(54,122,223,.10) 1px, transparent 1px), linear-gradient(90deg, rgba(54,122,223,.10) 1px, transparent 1px);
+  background-size: 26px 26px;
 }
-@keyframes lv3-scan { from { background-position: 0 -280px; } to { background-position: 0 110%; } }
-.lv3-left > .lv3-brand, .lv3-left > .lv3-mid, .lv3-left > .lv3-readout { z-index: 2; }
-.lv3-grid {
-  position: absolute; inset: 0; opacity: 0.16; pointer-events: none;
-  background-image: linear-gradient(rgba(174,213,245,.35) 1px, transparent 1px), linear-gradient(90deg, rgba(174,213,245,.35) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse 90% 70% at 30% 20%, #000, transparent 75%);
+.lv3-left::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(54,122,223,.16) 1px, transparent 1px), linear-gradient(90deg, rgba(54,122,223,.16) 1px, transparent 1px);
+  background-size: 130px 130px;
+  mask-image: radial-gradient(ellipse 95% 80% at 35% 45%, #000, transparent 80%);
 }
-.lv3-brand { display: flex; align-items: center; gap: 14px; position: relative; }
-.lv3-brand h1 { margin: 0; font-size: 20px; font-weight: 800; color: #FFFFFF; }
-.lv3-brand .sub { font-family: var(--font-mono); font-size: 10px; color: var(--icy); letter-spacing: 0.12em; text-transform: uppercase; }
-.lv3-mid { position: relative; }
-.lv3-mid h2 { margin: 0 0 10px; font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.25; color: #FFFFFF; }
-.lv3-mid p { margin: 0; font-size: 14px; color: rgba(234, 241, 252, 0.75); max-width: 420px; }
-.lv3-readout { position: relative; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
-.lv3-readout .rr { display: flex; gap: 14px; }
-.lv3-readout .rk { width: 120px; color: rgba(174, 213, 245, 0.6); letter-spacing: 0.1em; }
-.lv3-readout .rv { color: #EAF1FC; }
-.lv3-readout .rv.ok { color: #6FD9A2; }
+.lv3-left > * { position: relative; z-index: 2; }
+/* registration ticks */
+.lv3-tick { position: absolute; width: 16px; height: 16px; border: 1.5px solid var(--azure-line); z-index: 2; }
+.lv3-tick.tl { top: 22px; left: 22px; border-right: none; border-bottom: none; }
+.lv3-tick.tr { top: 22px; right: 22px; border-left: none; border-bottom: none; }
+.lv3-tick.bl { bottom: 22px; left: 22px; border-right: none; border-top: none; }
+.lv3-tick.br { bottom: 22px; right: 22px; border-left: none; border-top: none; }
+
+.lv3-brand { display: flex; align-items: center; gap: 14px; }
+.lv3-brand h1 { margin: 0; font-size: 20px; font-weight: 800; color: var(--ink-1); }
+.lv3-brand .sub { font-family: var(--font-mono); font-size: 10px; color: var(--azure-deep); letter-spacing: 0.12em; text-transform: uppercase; margin-top: 2px; }
+
+/* node diagram */
+.lv3-diagram .cap { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 18px; }
+.lv3-flow { display: flex; align-items: center; }
+.lv3-node {
+  background: #FFFFFF; border: 1.4px solid var(--azure-line); border-radius: 10px; padding: 12px 15px; min-width: 96px;
+  box-shadow: 0 4px 14px rgba(57,73,136,.08); position: relative;
+}
+.lv3-node .nk { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-4); }
+.lv3-node .nv { font-size: 15px; font-weight: 800; color: var(--ink-1); margin-top: 2px; letter-spacing: -0.01em; }
+.lv3-node .nc { font-family: var(--font-mono); font-size: 10px; color: var(--azure-deep); margin-top: 3px; }
+.lv3-node.tag { border-color: var(--azure); background: linear-gradient(180deg, #FFFFFF, #F2F8FF); }
+.lv3-link { width: 34px; height: 1.6px; flex: none; position: relative;
+  background: repeating-linear-gradient(90deg, var(--azure-line) 0 6px, transparent 6px 11px); }
+.lv3-link::after { content: ""; position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+  width: 0; height: 0; border-left: 6px solid var(--azure-line); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+
+.lv3-readout { display: flex; flex-direction: column; gap: 9px; font-family: var(--font-mono); font-size: 11.5px; }
+.lv3-readout .rr { display: flex; gap: 16px; }
+.lv3-readout .rk { width: 118px; color: var(--ink-4); letter-spacing: 0.1em; }
+.lv3-readout .rv { color: var(--ink-2); }
+.lv3-readout .rv.ok { color: #0E7A42; display: flex; align-items: center; gap: 6px; }
+.lv3-readout .rv.ok .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 7px rgba(24,160,90,.55); }
+
 .lv3-right { display: flex; align-items: center; justify-content: center; padding: 40px; }
 .lv3-form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
 .lv3-form h3 { margin: 0 0 2px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
