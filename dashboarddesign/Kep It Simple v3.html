@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<title>Kep It Simple v3 · Daylight Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles-v3.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body class="v3">
+<template id="__bundler_thumbnail">
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+<rect width="100" height="100" fill="#1b2733" />
+<rect x="30" y="30" width="40" height="40" rx="8" fill="#7cc4ff" />
+<text x="50" y="58" font-family="monospace" font-size="22" font-weight="700" fill="#1b2733" text-anchor="middle">KS</text>
+</svg>
+</template>
+<div id="root"></div>
+
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="v3-shell.jsx"></script>
+<script type="text/babel" src="v3-import.jsx"></script>
+<script type="text/babel" src="v3-step3.jsx"></script>
+<script type="text/babel" src="v3-steps456.jsx"></script>
+<script type="text/babel" src="v3-delete.jsx"></script>
+<script type="text/babel" src="v3-iomap.jsx"></script>
+<script type="text/babel" src="v3-data-tabs.jsx"></script>
+<script type="text/babel" src="tabs-4.jsx"></script>
+<script type="text/babel" src="chat-widget.jsx"></script>
+<script type="text/babel">
+const { useState } = React;
+
+// 純 Kepware 路線：計畫書 §4.1 五大分頁 + 保留資料庫進階搜尋
+const V3_TABS = [
+  { id: 'import',   label: 'Kepware Import',   icon: 'kepware',  code: 'KEPWARE · IMPORT' },
+  { id: 'delete',   label: '批次刪除',          icon: 'trash',    code: 'KW · BATCH DELETE' },
+  { id: 'iomap',    label: 'IO Mapping',       icon: 'mapping',  code: 'IO · MAPPING' },
+  { id: 'query',    label: '查詢',              icon: 'search',   code: 'QUERY · LIST' },
+  { id: 'dbsearch', label: '資料庫進階搜尋',     icon: 'filter',   code: 'CASCADING · FILTER' },
+  { id: 'history',  label: '歷史',              icon: 'history',  code: 'AUDIT · HISTORY' },
+  { id: 'settings', label: '設定',              icon: 'settings', code: 'SYSTEM · SETTINGS' },
+];
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [tab, setTab] = useState('import');
+  const [gw, setGw] = useState({ zone: 'Zone1', url: 'https://10.11.64.70:57412', username: 'kw_admin', password: 'kepware', status: 'connected' });
+
+  if (!user) return <Login3 onLogin={setUser} />;
+
+  const active = V3_TABS.find(t => t.id === tab);
+
+  return (
+    <div className="v3-app">
+      <TopBar3 tabs={V3_TABS} tab={tab} setTab={setTab} gw={gw} user={user} onLogout={() => setUser(null)} />
+
+      <main className="v3-page" data-screen-label={active.label}>
+        <div className="v3-pagehead">
+          <h2>{active.label}</h2>
+          <span className="code">{active.code}</span>
+        </div>
+
+        {tab === 'import'   && <TabImportKW gw={gw} setGw={setGw} />}
+        {tab === 'delete'   && <TabDeleteKW gw={gw} setGw={setGw} />}
+        {tab === 'iomap'    && <TabIoMapV3 />}
+        {tab === 'query'    && <TabQueryV3 />}
+        {tab === 'dbsearch' && <TabDbSearch />}
+        {tab === 'history'  && <TabHistoryV3 />}
+        {tab === 'settings' && <TabSettingsV3 />}
+      </main>
+
+      <footer className="v3-foot">
+        <span>Kep It Simple · v3.0.0 · build 2026.06.13</span>
+        <span className="dot-sep">·</span>
+        <span>純 Kepware 路線 · 推導 + 比對 + 可編輯確認</span>
+        <span className="dot-sep">·</span>
+        <span>Kepware API Gateway</span>
+      </footer>
+
+      <ChatWidget />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
