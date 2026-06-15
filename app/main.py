@@ -660,6 +660,20 @@ async def clear_history():
     return {"success": True}
 
 
+@app.get("/api/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """查詢背景任務狀態"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {
+        "task_id": task.id,
+        "done": task.done,
+        "progress": task.progress,
+        "summary": task.summary,
+    }
+
+
 # ── API: CSV 範本下載 ─────────────────────────────────
 
 @app.get("/api/templates/{template_type}")
