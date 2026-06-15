@@ -89,6 +89,56 @@ class KepwareGatewayClient:
         )
         return resp
 
+    # ── Structure Listing ──
+
+    def list_channels(self) -> list:
+        """取得所有 Channel 清單"""
+        resp = self._request("GET", "/api/config/channels")
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_devices(self, channel_name: str) -> list:
+        """取得指定 Channel 下的 Device 清單"""
+        resp = self._request("GET", f"/api/config/channels/{channel_name}/devices")
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_tag_groups(self, channel_name: str, device_name: str) -> list:
+        """取得指定 Channel/Device 下的 Tag Group 清單（含巢狀）"""
+        resp = self._request("GET",
+                             f"/api/config/channels/{channel_name}/devices/{device_name}/tag_groups")
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_structure(self) -> dict:
+        """拉取完整結構樹：{ channel: { device: [group_paths] } }"""
+        structure = {}
+        channels = self.list_channels()
+        for ch in channels:
+            ch_name = ch if isinstance(ch, str) else ch.get("name", "")
+            if not ch_name:
+                continue
+            structure[ch_name] = {}
+            try:
+                devices = self.list_devices(ch_name)
+            except Exception:
+                continue
+            for dev in devices:
+                dev_name = dev if isinstance(dev, str) else dev.get("name", "")
+                if not dev_name:
+                    continue
+                try:
+                    groups = self.list_tag_groups(ch_name, dev_name)
+                    group_paths = []
+                    for g in groups:
+                        path = g if isinstance(g, str) else g.get("path", g.get("name", ""))
+                        if path:
+                            group_paths.append(path)
+                    structure[ch_name][dev_name] = group_paths
+                except Exception:
+                    structure[ch_name][dev_name] = []
+        return structure
+
     # ── Tag Group CRUD ──
 
     def create_tag_group(self, channel_name: str, device_name: str,

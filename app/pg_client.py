@@ -110,6 +110,15 @@ class PGClient:
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS kepware_structure (
+                    id SERIAL PRIMARY KEY,
+                    gateway_id INTEGER REFERENCES kepware_gateway(id) ON DELETE CASCADE,
+                    channel VARCHAR(255) NOT NULL,
+                    device VARCHAR(255),
+                    tag_group VARCHAR(500),
+                    synced_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(gateway_id, channel, device, tag_group)
+                );
             """)
 
     def _ensure_extra_columns(self, conn):
@@ -596,6 +605,71 @@ class PGClient:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM kepware_gateway WHERE id = %s", (gw_id,))
                 return cur.rowcount > 0
+
+    # ── Kepware 結構快取 ────────────────────────────────
+
+    def sync_structure(self, gateway_id: int, structure: dict) -> dict:
+        """將 Gateway 結構寫入 DB（先清舊資料再寫入）
+        structure: { channel: { device: [group_paths] } }
+        """
+        rows = []
+        for ch, devices in structure.items():
+            rows.append((gateway_id, ch, None, None))
+            for dev, groups in devices.items():
+                rows.append((gateway_id, ch, dev, None))
+                for grp in groups:
+                    rows.append((gateway_id, ch, dev, grp))
+
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM kepware_structure WHERE gateway_id = %s",
+                            (gateway_id,))
+                if rows:
+                    from psycopg2.extras import execute_values
+                    execute_values(cur, """
+                        INSERT INTO kepware_structure (gateway_id, channel, device, tag_group)
+                        VALUES %s
+                    """, rows)
+        channels = len(structure)
+        devices = sum(len(devs) for devs in structure.values())
+        groups = sum(len(g) for devs in structure.values() for g in devs.values())
+        return {"channels": channels, "devices": devices, "groups": groups}
+
+    def get_structure(self, gateway_id: int) -> dict:
+        """取得指定 Gateway 的結構快取，回傳 { channel: { device: [group_paths] } }"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT channel, device, tag_group
+                    FROM kepware_structure
+                    WHERE gateway_id = %s
+                    ORDER BY channel, device, tag_group
+                """, (gateway_id,))
+                rows = cur.fetchall()
+
+        result = {}
+        for r in rows:
+            ch = r["channel"]
+            dev = r["device"]
+            grp = r["tag_group"]
+            if ch not in result:
+                result[ch] = {}
+            if dev and dev not in result[ch]:
+                result[ch][dev] = []
+            if dev and grp:
+                result[ch][dev].append(grp)
+        return result
+
+    def get_structure_synced_at(self, gateway_id: int):
+        """取得結構快取的最後同步時間"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT MAX(synced_at) FROM kepware_structure
+                    WHERE gateway_id = %s
+                """, (gateway_id,))
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
 
     # ── 操作日誌 (activity_log) ──────────────────────────
 

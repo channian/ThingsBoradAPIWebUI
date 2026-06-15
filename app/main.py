@@ -328,6 +328,7 @@ class DeriveRequest(BaseModel):
     ids: Optional[list] = None
     tb_status: Optional[str] = "pending"
     pg_status: Optional[str] = "pending"
+    gateway_id: Optional[int] = None
 
 
 class ExecuteKwRequest(BaseModel):
@@ -786,6 +787,45 @@ async def kw_test_gateway(gw_id: int, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"連線失敗: {e}")
 
 
+@app.post("/api/kw/gateways/{gw_id}/sync")
+async def kw_sync_structure(gw_id: int, request: Request,
+                            user: dict = Depends(require_role("admin", "operator"))):
+    """從指定 Gateway 拉取 Channel/Device/TagGroup 結構並寫入 DB"""
+    gw = pg_client.get_gateway(gw_id)
+    if not gw:
+        raise HTTPException(status_code=404, detail="Gateway 不存在")
+    try:
+        password = _decrypt_password(gw["password_enc"])
+        client = KepwareGatewayClient(gw["url"], verify=gw.get("verify_ssl", True))
+        client.login(gw["username"], password)
+        structure = client.fetch_structure()
+        counts = pg_client.sync_structure(gw_id, structure)
+        _log_activity(request, user, "sync_structure",
+                      f"Gateway '{gw['name']}' 結構同步: {counts['channels']}ch/{counts['devices']}dev/{counts['groups']}grp")
+        return {"success": True, **counts}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[sync_structure] 同步失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"結構同步失敗: {e}")
+
+
+@app.get("/api/kw/gateways/{gw_id}/structure")
+async def kw_get_structure(gw_id: int, user: dict = Depends(get_current_user)):
+    """取得指定 Gateway 的快取結構"""
+    gw = pg_client.get_gateway(gw_id)
+    if not gw:
+        raise HTTPException(status_code=404, detail="Gateway 不存在")
+    structure = pg_client.get_structure(gw_id)
+    synced_at = pg_client.get_structure_synced_at(gw_id)
+    return {
+        "gateway_id": gw_id,
+        "gateway_name": gw["name"],
+        "structure": structure,
+        "synced_at": synced_at.isoformat() if synced_at else None,
+    }
+
+
 @app.post("/api/kw/delete-batch")
 async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                           user: dict = Depends(require_role("admin", "operator"))):
@@ -1145,7 +1185,7 @@ async def pg_delete_ref(req: RefDeleteRequest):
 @app.post("/api/kw/derive")
 async def kw_derive(req: DeriveRequest,
                     user: dict = Depends(require_role("admin", "operator"))):
-    """推導 Kepware 建點欄位（tag group + tag）"""
+    """推導 Kepware 建點欄位（tag group + tag），若指定 gateway_id 則比對結構快取"""
     try:
         staging = pg_client.get_staging_list(
             page=0, page_size=9999,
@@ -1155,6 +1195,23 @@ async def kw_derive(req: DeriveRequest,
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
         results = pg_client.derive_kw_fields(rows)
+
+        if req.gateway_id:
+            structure = pg_client.get_structure(req.gateway_id)
+            for item in results:
+                ch = item["channel_name"]
+                dev = item["device_name"]
+                grp = item["tag_groups"]
+                ch_exists = ch in structure
+                dev_exists = ch_exists and dev in structure.get(ch, {})
+                grp_exists = dev_exists and grp in structure.get(ch, {}).get(dev, [])
+                item["validation"] = {
+                    "channel_exists": ch_exists,
+                    "device_exists": dev_exists,
+                    "group_exists": grp_exists if grp else True,
+                    "group_auto_create": dev_exists and not grp_exists and bool(grp),
+                }
+
         return {"data": results, "total": len(results)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
