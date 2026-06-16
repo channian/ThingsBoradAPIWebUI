@@ -321,7 +321,7 @@ tbody tr:hover { background: rgba(54, 122, 223, 0.035); }
 .modal-box .actions { display: flex; gap: 10px; justify-content: flex-end; }
 
 /* ============ Login (industrial blueprint) ============ */
-.lv3 { min-height: 100vh; display: grid; grid-template-columns: 1.12fr 1fr; }
+.lv3 { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; }
 .lv3-left {
   position: relative; overflow: hidden;
   background: #EAF1FA;
