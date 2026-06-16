@@ -639,6 +639,48 @@ createApp({
             } catch (e) { pwForm.msg = e.message; pwForm.err = true }
         }
 
+        // ── Chat Widget ──
+        const chatBodyRef = ref(null)
+        const chat = reactive({
+            open: false,
+            input: '',
+            typing: false,
+            messages: [],
+            quickQuestions: [
+                '如何新增一個 Kepware Gateway？',
+                '建點流程有幾個步驟？',
+                'Scale 設定的原始值範圍怎麼填？',
+                '匯入 CSV 需要哪些欄位？',
+            ],
+        })
+
+        const _chatReplies = {
+            'gateway': 'Gateway 管理在「設定」頁籤 → Kepware Gateway 管理。點擊「新增 Gateway」填入名稱、URL、帳號密碼即可。建議先「測試」確認連線後再使用。',
+            '建點': '建點流程共 6 步驟：① CSV 上傳 → ② 暫存表確認 → ③ Kepware 建點（選 Gateway + 同步結構 + 推導 + 執行）→ ④ PG Import → ⑤ Scale 設定 → ⑥ Collector Reload',
+            'scale': 'Scale 欄位：\n• Raw Low / High：Kepware 原始 ADC 值（例如 0 ~ 65535）\n• Scaled Low / High：工程單位換算後的值（例如 0.0 ~ 100.0）\n• 類型：Linear（線性換算）',
+            'csv': 'CSV 必要欄位：\n• tag_name：點位名稱（格式：site_floor_system_…）\n• site：廠區代碼\n• system_code：系統代碼\n• device_profile：設備描述\n\n選填：description、scale_enabled、scaling_raw_low/high 等',
+        }
+
+        async function chatSend(text) {
+            const msg = (text || chat.input).trim()
+            if (!msg) return
+            chat.input = ''
+            chat.messages.push({ role: 'user', content: msg, time: new Date().toLocaleTimeString('zh-TW', { hour12: false }) })
+            chat.typing = true
+            await nextTick()
+            if (chatBodyRef.value) chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
+            await new Promise(r => setTimeout(r, 600 + Math.random() * 400))
+            const msgLower = msg.toLowerCase()
+            let reply = '這個問題我需要更多資訊才能回答。請參考系統說明文件，或聯繫管理員。'
+            for (const [key, val] of Object.entries(_chatReplies)) {
+                if (msgLower.includes(key)) { reply = val; break }
+            }
+            chat.typing = false
+            chat.messages.push({ role: 'assistant', content: reply, time: new Date().toLocaleTimeString('zh-TW', { hour12: false }) })
+            await nextTick()
+            if (chatBodyRef.value) chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
+        }
+
         // ── Utilities ──
         function formatTime(ts) {
             if (!ts) return '—'
@@ -682,6 +724,7 @@ createApp({
             userList, showUserCreate, newUser, loadUsers, createUser, resetUserPw, deleteUser,
             actLogs, loadActivityLogs,
             showPwDialog, pwForm, changePassword,
+            chatBodyRef, chat, chatSend,
             formatTime, statusKind,
         }
     }

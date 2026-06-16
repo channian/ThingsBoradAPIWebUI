@@ -250,11 +250,25 @@ tbody tr:hover { background: rgba(54, 122, 223, 0.035); }
 .file-name { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 4px 10px; background: var(--ok-soft); border: 1px solid rgba(24, 160, 90, 0.35); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; color: #0E7A42; }
 .file-name svg { width: 12px; height: 12px; margin: 0; }
 
+/* upload-zone: 與舊 style.css 兼容的通用拖放區塊 */
+.upload-zone {
+  border: 1.5px dashed var(--line-2);
+  border-radius: 12px;
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--soft);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.upload-zone:hover { border-color: var(--azure-line); background: var(--icy-soft); }
+.upload-zone.iomap-has-file { border-color: rgba(24, 160, 90, 0.5); background: var(--ok-soft); border-style: solid; }
+
 /* ============ Banner ============ */
-.banner { display: flex; gap: 12px; padding: 14px 16px; border-radius: 10px; border: 1px solid; margin-bottom: 14px; }
-.banner.warn { background: var(--warn-soft); border-color: rgba(217, 131, 36, 0.4); }
-.banner.err  { background: var(--err-soft); border-color: rgba(219, 71, 71, 0.45); }
-.banner.ok   { background: var(--ok-soft); border-color: rgba(24, 160, 90, 0.4); }
+.banner { display: flex; gap: 12px; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--azure-line); background: var(--icy-soft); color: var(--ink-2); font-size: 13px; line-height: 1.55; margin-bottom: 14px; }
+.banner.warn { background: var(--warn-soft); border-color: rgba(217, 131, 36, 0.4); color: var(--ink-1); }
+.banner.err  { background: var(--err-soft); border-color: rgba(219, 71, 71, 0.45); color: var(--ink-1); }
+.banner.ok   { background: var(--ok-soft); border-color: rgba(24, 160, 90, 0.4); color: var(--ink-1); }
 .banner-icon svg { width: 22px; height: 22px; }
 .banner.warn .banner-icon svg { color: var(--warn); }
 .banner.err  .banner-icon svg { color: var(--err); }
