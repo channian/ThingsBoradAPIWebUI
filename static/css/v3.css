@@ -376,8 +376,9 @@ tbody tr:hover { background: rgba(54, 122, 223, 0.035); }
 .lv3-readout .rv.ok { color: #0E7A42; display: flex; align-items: center; gap: 6px; }
 .lv3-readout .rv.ok .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 7px rgba(24,160,90,.55); }
 
-.lv3-right { display: flex; align-items: center; justify-content: center; padding: 40px; }
-.lv3-form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+.lv3-right { display: flex; align-items: center; justify-content: center; padding: 40px; position: relative; }
+.lv3-rain { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+.lv3-form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; position: relative; z-index: 1; }
 .lv3-form h3 { margin: 0 0 2px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 .lv3-form .hint { margin: 0 0 12px; font-size: 13px; color: var(--ink-3); }
 .lf-row { display: flex; flex-direction: column; gap: 5px; }

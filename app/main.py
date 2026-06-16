@@ -230,31 +230,15 @@ async def serve_index():
     )
 
 
-@app.get("/static/js/{path:path}")
-async def serve_js(path: str):
-    file_path = os.path.join(STATIC_DIR, "js", path)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(
-        file_path,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-@app.get("/static/css/{path:path}")
-async def serve_css(path: str):
-    file_path = os.path.join(STATIC_DIR, "css", path)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(
-        file_path,
-        media_type="text/css",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 
 # ── 資料模型 ───────────────────────────────────────────
