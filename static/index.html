@@ -330,10 +330,23 @@
                 <!-- Step 5: Scale -->
                 <div v-if="importStep === 4">
                     <div class="kis-card">
-                        <div class="kis-card-head"><div class="kis-card-title">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" style="width:16px;height:16px"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12"/></svg>
-                            Scale 設定
-                        </div></div>
+                        <div class="kis-card-head">
+                            <div class="kis-card-title">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" style="width:16px;height:16px"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12"/></svg>
+                                Scale 設定
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center">
+                                <label style="font-size:13px;color:var(--ink-3)">Gateway</label>
+                                <select class="select" v-model="selectedGwId" @change="onGwChange">
+                                    <option :value="null">-- 選擇 Gateway --</option>
+                                    <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div v-if="!selectedGwId" class="banner warn" style="margin-bottom:12px">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;flex-shrink:0"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
+                            <span>請先選擇 Gateway 才能執行 Scale 設定。</span>
+                        </div>
                         <div style="display:flex;gap:8px;margin-bottom:12px">
                             <button class="btn btn-outline" @click="deriveScale" :disabled="scaleDerive.loading">
                                 {{ scaleDerive.loading ? '推導中…' : '推導 Scale' }}

@@ -42,6 +42,37 @@ createApp({
             auth.token = ''; auth.user = ''; auth.role = ''; auth.displayName = ''
             localStorage.removeItem('kep_token'); localStorage.removeItem('kep_user')
             localStorage.removeItem('kep_role'); localStorage.removeItem('kep_display')
+            _resetState()
+        }
+
+        // 統一 401 處理：任何 API 回 401（且仍持有 token）視為登入過期，自動登出
+        const _nativeFetch = window.fetch.bind(window)
+        window.fetch = async (...args) => {
+            const resp = await _nativeFetch(...args)
+            if (resp.status === 401 && auth.token) {
+                doLogout()
+            }
+            return resp
+        }
+
+        // 登出時清空所有記憶體狀態，避免換使用者後殘留前一人資料
+        function _resetState() {
+            gwList.value = []; selectedGwId.value = null
+            structureSync.counts = null
+            Object.assign(imp, { fileName: null, totalRows: 0, headers: [], preview: [], importing: false, result: null, uploadId: null })
+            Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '' })
+            Object.assign(kwDerive, { data: [], loading: false, executing: false, result: null })
+            Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
+            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null })
+            Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
+            Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
+            Object.assign(queryResult, { data: [], total: 0 })
+            Object.assign(ioMapping, { fileA: null, fileB: null, executing: false, mappingId: null, result: null, data: [], columns: [] })
+            historyList.value = []
+            userList.value = []; actLogs.value = []
+            Object.keys(refData).forEach(k => delete refData[k]); activeRefTable.value = null
+            chat.messages = []; chat.open = false
+            importStep.value = 0; activeTab.value = 'import'
         }
 
         // ── Clock ──
@@ -432,14 +463,30 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 const taskId = data.task_id
+                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
+                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
                 const poll = async () => {
-                    const sr = await fetch(`/api/tasks/${taskId}`)
-                    if (!sr.ok) return
-                    const st = await sr.json()
-                    if (st.done) {
-                        delState.result = { success: st.summary?.success || 0, fail: st.summary?.fail || 0 }
+                    if (++attempts > 600) {
+                        alert('刪除任務逾時，請至「歷史」分頁確認結果')
                         delState.executing = false
-                    } else {
+                        return
+                    }
+                    try {
+                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
+                        if (!sr.ok) {
+                            if (++errors >= 5) { alert('無法取得刪除任務狀態，請至「歷史」分頁確認'); delState.executing = false; return }
+                            setTimeout(poll, 1000); return
+                        }
+                        errors = 0
+                        const st = await sr.json()
+                        if (st.done) {
+                            delState.result = { success: st.summary?.success || 0, fail: st.summary?.fail || 0 }
+                            delState.executing = false
+                        } else {
+                            setTimeout(poll, 1000)
+                        }
+                    } catch (e) {
+                        if (++errors >= 5) { alert('輪詢刪除狀態失敗: ' + e.message); delState.executing = false; return }
                         setTimeout(poll, 1000)
                     }
                 }
@@ -588,11 +635,14 @@ createApp({
         async function resetUserPw(id) {
             const pw = prompt('請輸入新密碼:')
             if (!pw) return
-            await fetch(`/api/admin/users/${id}/reset-password`, {
-                method: 'POST', headers: _headers(),
-                body: JSON.stringify({ new_password: pw }),
-            })
-            alert('密碼已重設')
+            try {
+                const resp = await fetch(`/api/admin/users/${id}/reset-password`, {
+                    method: 'POST', headers: _headers(),
+                    body: JSON.stringify({ new_password: pw }),
+                })
+                if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`) }
+                alert('密碼已重設')
+            } catch (e) { alert('重設失敗: ' + e.message) }
         }
 
         async function deleteUser(id) {
