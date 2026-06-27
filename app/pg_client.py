@@ -24,6 +24,8 @@ class PGClient:
             "database": os.getenv("PG_DATABASE", ""),
             "user": os.getenv("PG_USER", ""),
             "password": os.getenv("PG_PASSWORD", ""),
+            # 避免 PG 不可達時請求 thread 卡到 OS TCP timeout（預設約數分鐘）
+            "connect_timeout": int(os.getenv("PG_CONNECT_TIMEOUT", "10")),
         }
 
     @contextmanager

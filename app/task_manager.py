@@ -70,6 +70,9 @@ class Task:
 # ── 任務管理器 ─────────────────────────────────────────
 
 class TaskManager:
+    # 最多保留的任務數，避免 tasks dict 隨執行次數無限成長（每個 Task 持有完整 CSV 列、log、結果）
+    MAX_TASKS = 100
+
     def __init__(self):
         self.tasks: Dict[str, Task] = {}
 
@@ -77,7 +80,21 @@ class TaskManager:
         task_id = uuid.uuid4().hex[:8]
         task = Task(task_id, task_type, params)
         self.tasks[task_id] = task
+        self._evict_old_tasks()
         return task
+
+    def _evict_old_tasks(self):
+        """超過上限時，優先淘汰最舊的已完成任務（dict 保留插入順序）"""
+        if len(self.tasks) <= self.MAX_TASKS:
+            return
+        for tid in list(self.tasks.keys()):
+            if len(self.tasks) <= self.MAX_TASKS:
+                break
+            if self.tasks[tid].done:
+                del self.tasks[tid]
+        # 若仍超量（全部都還在執行中），淘汰最舊的
+        while len(self.tasks) > self.MAX_TASKS:
+            del self.tasks[next(iter(self.tasks))]
 
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.tasks.get(task_id)

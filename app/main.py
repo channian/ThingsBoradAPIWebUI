@@ -182,6 +182,13 @@ async def on_startup():
     log.info("[cleanup] 日誌清理排程已啟動（每週一凌晨 3 點）")
 
 
+@app.on_event("shutdown")
+async def on_shutdown():
+    """關閉時通知背景排程停止（reload 重啟時可乾淨結束）"""
+    _cleanup_stop.set()
+    log.info("[shutdown] 已通知背景排程停止")
+
+
 # ── 歷史紀錄管理 ──────────────────────────────────────
 
 def _load_history() -> list:
@@ -1666,6 +1673,7 @@ IO_OUTPUT_COLUMNS = [
 ]
 
 _io_mapping_cache = {}
+_IO_MAPPING_CACHE_MAX = 50  # 最多保留 50 筆 mapping 結果，超過則淘汰最舊的
 
 
 @app.post("/api/io-mapping/execute")
@@ -1721,6 +1729,9 @@ async def io_mapping_execute(
 
     mapping_id = str(uuid.uuid4())[:8]
     _io_mapping_cache[mapping_id] = results
+    # 限制快取大小：超過上限時淘汰最舊插入的項目（dict 保留插入順序）
+    while len(_io_mapping_cache) > _IO_MAPPING_CACHE_MAX:
+        _io_mapping_cache.pop(next(iter(_io_mapping_cache)))
 
     preview = []
     for r in results:
