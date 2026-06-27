@@ -786,12 +786,19 @@ class PGClient:
         inserted = 0
         skipped = 0
         errors = []
+        new_tagnames = []   # 本次「新插入」（非更新）的 tagname，供回滾時只刪這些
 
         try:
             with self._get_conn() as conn:
                 self._ensure_formal_table(conn)
                 log.info("[import_formal] 正式表 tags 已確認存在")
                 with conn.cursor() as cur:
+                    # 先查出本批中「已存在」的 tagname，區分新插入 vs 更新（回滾只刪新插入的）
+                    batch_tagnames = [r.get("tagname", "") for r in derived_rows if r.get("tagname")]
+                    existing_tagnames = set()
+                    if batch_tagnames:
+                        cur.execute("SELECT tagname FROM tags WHERE tagname = ANY(%s)", (batch_tagnames,))
+                        existing_tagnames = {r[0] for r in cur.fetchall()}
                     for i, row in enumerate(derived_rows):
                         tagname = row.get("tagname", "")
                         if not tagname:
@@ -838,6 +845,8 @@ class PGClient:
                                 row.get("data_type", "float"),
                             ))
                             inserted += 1
+                            if tagname not in existing_tagnames:
+                                new_tagnames.append(tagname)
                             log.info(f"[import_formal] 寫入成功: {tagname}")
                         except Exception as e:
                             log.error(f"[import_formal] 寫入失敗 tagname={tagname}: {e}")
@@ -849,14 +858,16 @@ class PGClient:
                 "skipped": skipped,
                 "errors": [{"tagname": "_connection", "reason": str(e)}],
                 "total": len(derived_rows),
+                "new_tagnames": new_tagnames,
             }
 
-        log.info(f"[import_formal] 完成: inserted={inserted}, skipped={skipped}, errors={len(errors)}")
+        log.info(f"[import_formal] 完成: inserted={inserted}, skipped={skipped}, errors={len(errors)}, new={len(new_tagnames)}")
         return {
             "inserted": inserted,
             "skipped": skipped,
             "errors": errors,
             "total": len(derived_rows),
+            "new_tagnames": new_tagnames,
         }
 
     def delete_formal_by_tagnames(self, tagnames: list) -> int:

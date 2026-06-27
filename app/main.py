@@ -32,7 +32,7 @@ from app.auth import (
 
 # ── Gateway 密碼加解密 (Fernet) ──────────────────────────
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 import base64, hashlib
 
 def _get_fernet() -> Fernet:
@@ -47,6 +47,18 @@ def _decrypt_password(token: str) -> str:
     return _get_fernet().decrypt(token.encode()).decode()
 
 
+def _decrypt_gw_password(gw: dict) -> str:
+    """解密 Gateway 密碼；金鑰變更導致無法解密時回傳清楚的 400 提示而非 opaque 500"""
+    try:
+        return _decrypt_password(gw["password_enc"])
+    except InvalidToken:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Gateway「{gw.get('name', gw.get('id'))}」的密碼無法解密"
+                   f"（加密金鑰 KW_ENCRYPT_KEY 可能已變更）。請在設定中編輯此 Gateway 並重新輸入密碼。",
+        )
+
+
 def _resolve_gw_credentials(gateway_id: int = None,
                              kw_gw_url: str = None,
                              kw_gw_username: str = None,
@@ -59,7 +71,7 @@ def _resolve_gw_credentials(gateway_id: int = None,
         if not gw:
             raise HTTPException(status_code=404, detail=f"Gateway ID={gateway_id} 不存在")
         return (gw["url"], gw["username"],
-                _decrypt_password(gw["password_enc"]),
+                _decrypt_gw_password(gw),
                 gw.get("verify_ssl", True))
     if not kw_gw_url:
         raise HTTPException(status_code=400, detail="請指定 gateway_id 或提供 kw_gw_url")
@@ -796,10 +808,12 @@ async def kw_test_gateway(gw_id: int, user: dict = Depends(get_current_user)):
     if not gw:
         raise HTTPException(status_code=404, detail="Gateway 不存在")
     try:
-        password = _decrypt_password(gw["password_enc"])
+        password = _decrypt_gw_password(gw)
         client = KepwareGatewayClient(gw["url"], verify=gw.get("verify_ssl", True))
         client.login(gw["username"], password)
         return {"success": True, "message": f"Gateway '{gw['name']}' 連線成功"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"連線失敗: {e}")
 
@@ -812,7 +826,7 @@ async def kw_sync_structure(gw_id: int, request: Request,
     if not gw:
         raise HTTPException(status_code=404, detail="Gateway 不存在")
     try:
-        password = _decrypt_password(gw["password_enc"])
+        password = _decrypt_gw_password(gw)
         client = KepwareGatewayClient(gw["url"], verify=gw.get("verify_ssl", True))
         client.login(gw["username"], password)
         structure = client.fetch_structure()
@@ -1346,6 +1360,8 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
             "errors": failed,
             "message": f"成功建立 {len(success_ids)} 筆 Tag"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"[executeKW] Kepware 建點失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Kepware 建點失敗: {e}")
@@ -1397,16 +1413,18 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
                     log.info(f"[executePG] Collector 寫入結果: {collector_result}")
                 except Exception as ce:
                     log.error(f"[executePG] Collector 寫入失敗，回滾本地正式表: {ce}", exc_info=True)
-                    # 回滾：刪除剛寫入正式表的資料
-                    rollback_names = [r["tagname"] for r in collector_rows]
+                    # 回滾：只刪除本次「新插入」的 tagname，避免誤刪原本就存在、只是被更新的資料
+                    collector_names = {r["tagname"] for r in collector_rows}
+                    rollback_names = [t for t in result.get("new_tagnames", []) if t in collector_names]
                     try:
                         pg_client.delete_formal_by_tagnames(rollback_names)
-                        log.info(f"[executePG] 已回滾 {len(rollback_names)} 筆正式表資料")
+                        log.info(f"[executePG] 已回滾 {len(rollback_names)} 筆新插入的正式表資料"
+                                 f"（{len(collector_names) - len(rollback_names)} 筆為既有資料，保留不刪）")
                     except Exception as re:
                         log.error(f"[executePG] 回滾失敗: {re}")
                     raise HTTPException(
                         status_code=500,
-                        detail=f"Collector DB 寫入失敗（已回滾正式表）: {ce}"
+                        detail=f"Collector DB 寫入失敗（已回滾本次新增的正式表資料）: {ce}"
                     )
         else:
             log.info("[executePG] 未設定 COLLECTOR_DB_DATABASE，跳過 Collector 寫入")
@@ -1548,6 +1566,8 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
             "errors": failed,
             "message": f"成功設定 {len(success_ids)} 筆 Scale"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"[executeScale] Scale 設定失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Scale 設定失敗: {e}")
