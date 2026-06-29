@@ -882,6 +882,77 @@ class PGClient:
                 )
                 return cur.rowcount
 
+    _ALLOWED_SEARCH_FIELDS = frozenset({
+        'tagname', 'system', 'site', 'bu', 'floor', 'zone',
+        'owner', 'department', 'driver_type', 'node_name', 'tablename',
+        'description', 'address', 'data_type',
+    })
+
+    def search_formal_tags(self, conditions: list, logic: str,
+                           page: int, page_size: int) -> dict:
+        """多條件查詢正式 tags 表，回傳分頁結果與 SQL 預覽"""
+        allowed_logic = 'AND' if logic.upper() != 'OR' else 'OR'
+        where_parts, params, preview_parts = [], [], []
+
+        for cond in conditions:
+            field = (cond.get('field') or '').lower().strip()
+            op = cond.get('op', 'contains')
+            value = cond.get('value', '') or ''
+
+            if field not in self._ALLOWED_SEARCH_FIELDS:
+                continue
+
+            if op == 'contains':
+                where_parts.append(f'"{field}" ILIKE %s')
+                params.append(f'%{value}%')
+                preview_parts.append(f"{field} ILIKE '%{value}%'")
+            elif op == 'equals':
+                where_parts.append(f'"{field}" = %s')
+                params.append(value)
+                preview_parts.append(f"{field} = '{value}'")
+            elif op == 'starts_with':
+                where_parts.append(f'"{field}" ILIKE %s')
+                params.append(f'{value}%')
+                preview_parts.append(f"{field} ILIKE '{value}%'")
+            elif op == 'ends_with':
+                where_parts.append(f'"{field}" ILIKE %s')
+                params.append(f'%{value}')
+                preview_parts.append(f"{field} ILIKE '%{value}'")
+            elif op == 'is_empty':
+                where_parts.append(f'("{field}" IS NULL OR "{field}" = \'\')')
+                preview_parts.append(f"({field} IS NULL OR {field} = '')")
+            elif op == 'not_empty':
+                where_parts.append(f'("{field}" IS NOT NULL AND "{field}" != \'\')')
+                preview_parts.append(f"({field} IS NOT NULL AND {field} != '')")
+
+        join_op = f' {allowed_logic} '
+        where_sql = join_op.join(where_parts) if where_parts else '1=1'
+        preview_where = join_op.join(preview_parts) if preview_parts else '1=1'
+        sql_preview = f'SELECT * FROM tags WHERE {preview_where} ORDER BY tag_id DESC'
+
+        offset = page * page_size
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f'SELECT COUNT(*) FROM tags WHERE {where_sql}', params)
+                total = cur.fetchone()['count']
+
+                cur.execute(
+                    f'SELECT tag_id,tagname,description,node_name,driver_type,address,'
+                    f'tablename,zone,bu,site,floor,system,owner,department,data_type,'
+                    f'created_date,updated_date FROM tags WHERE {where_sql} '
+                    f'ORDER BY tag_id DESC LIMIT %s OFFSET %s',
+                    params + [page_size, offset],
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+
+        total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
+        return {
+            'data': rows,
+            'total': total,
+            'total_pages': total_pages,
+            'sql_preview': sql_preview,
+        }
+
     # ── Collector DB 寫入 ──────────────────────────────
 
     def _get_collector_conn_params(self):

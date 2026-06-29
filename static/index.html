@@ -441,37 +441,104 @@
 
             <!-- ===== Query Tab ===== -->
             <div v-show="activeTab === 'query'" class="v3-tab-panel">
-                <div class="kis-card">
-                    <div class="kis-card-head"><div class="kis-card-title">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L13.5 13.5"/></svg>
-                        暫存表查詢
-                    </div></div>
-                    <div class="filter-bar">
-                        <label>建點</label>
-                        <select class="select" v-model="queryFilter.tb" @change="queryStaging">
-                            <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
-                        </select>
-                        <label>PG</label>
-                        <select class="select" v-model="queryFilter.pg" @change="queryStaging">
-                            <option value="">全部</option><option value="pending">pending</option><option value="done">done</option><option value="skip">skip</option>
-                        </select>
-                        <button class="btn btn-outline btn-sm" @click="queryStaging">查詢</button>
-                        <span style="font-size:13px;color:var(--ink-3)">{{ queryResult.total }} 筆</span>
+                <!-- 條件過濾器 -->
+                <div class="kis-card" style="margin-bottom:16px">
+                    <div class="kis-card-head">
+                        <div class="kis-card-title">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L13.5 13.5"/></svg>
+                            Tags 正式表查詢
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px">
+                                <button @click="dbQuery.logic='AND'" :class="['btn-logic', {active: dbQuery.logic==='AND'}]">AND</button>
+                                <button @click="dbQuery.logic='OR'"  :class="['btn-logic', {active: dbQuery.logic==='OR'}]">OR</button>
+                            </div>
+                            <button class="btn btn-outline btn-sm" @click="addCondition" :disabled="dbQuery.conditions.length >= 6">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px"><path d="M8 3v10M3 8h10"/></svg>
+                                加條件
+                            </button>
+                        </div>
                     </div>
+
+                    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+                        <div v-for="(cond, i) in dbQuery.conditions" :key="i"
+                             style="display:flex;gap:8px;align-items:center">
+                            <span v-if="i > 0" style="font-size:11px;font-weight:600;color:var(--azure);min-width:30px;text-align:center">{{ dbQuery.logic }}</span>
+                            <span v-else style="min-width:30px"></span>
+                            <select class="select" v-model="cond.field" style="flex:1.2">
+                                <option v-for="f in QUERY_FIELDS" :key="f.key" :value="f.key">{{ f.label }}</option>
+                            </select>
+                            <select class="select" v-model="cond.op" style="flex:0.8">
+                                <option v-for="o in QUERY_OPS" :key="o.key" :value="o.key">{{ o.label }}</option>
+                            </select>
+                            <input v-if="cond.op !== 'is_empty' && cond.op !== 'not_empty'"
+                                   class="input" v-model="cond.value" placeholder="值…"
+                                   style="flex:2" @keyup.enter="searchTags(true)">
+                            <span v-else style="flex:2;font-size:12px;color:var(--ink-3);padding-left:4px">（無需值）</span>
+                            <button class="icon-btn" @click="removeCondition(i)" title="移除條件" style="flex-shrink:0">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:13px;height:13px"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" @click="searchTags(true)" :disabled="dbQuery.loading">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="width:13px;height:13px"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L13.5 13.5"/></svg>
+                            {{ dbQuery.loading ? '查詢中…' : '查詢' }}
+                        </button>
+                        <button class="btn btn-outline btn-sm" @click="exportTags" :disabled="!dbQuery.total || dbQuery.exporting">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px"><path d="M8 11V3m0 8l-3-3m3 3l3-3M3 13h10"/></svg>
+                            {{ dbQuery.exporting ? '匯出中…' : '匯出 CSV' }}
+                        </button>
+                        <span v-if="dbQuery.total > 0" style="font-size:13px;color:var(--ink-3);margin-left:4px">
+                            共 <strong>{{ dbQuery.total }}</strong> 筆
+                        </span>
+                        <span v-if="dbQuery.total === 0 && dbQuery.sqlPreview" style="font-size:13px;color:var(--ink-3)">查無資料</span>
+                    </div>
+
+                    <div v-if="dbQuery.sqlPreview" style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-2);word-break:break-all;line-height:1.7">
+                        <span style="font-size:10px;font-weight:600;color:var(--ink-3);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">SQL Preview (read-only)</span>
+                        {{ dbQuery.sqlPreview }}
+                    </div>
+                </div>
+
+                <!-- 結果表格 -->
+                <div v-if="dbQuery.results.length" class="kis-card">
                     <div class="tbl-wrap">
                         <table>
-                            <thead><tr><th>ID</th><th>Tag Name</th><th>Site</th><th>System</th><th>建點</th><th>PG</th><th>Scale</th></tr></thead>
+                            <thead>
+                                <tr>
+                                    <th>ID</th><th>Tag Name</th><th>Node</th><th>Site</th><th>BU</th>
+                                    <th>Floor</th><th>System</th><th>Driver</th><th>Table</th><th>Data Type</th><th>Address</th>
+                                </tr>
+                            </thead>
                             <tbody>
-                                <tr v-for="r in queryResult.data" :key="r.id">
-                                    <td>{{ r.id }}</td>
-                                    <td class="td-mono">{{ r.tag_name }}</td>
-                                    <td>{{ r.site }}</td><td>{{ r.system_code }}</td>
-                                    <td><span class="pill" :class="'pill-' + statusKind(r.tb_status)">{{ r.tb_status }}</span></td>
-                                    <td><span class="pill" :class="'pill-' + statusKind(r.pg_status)">{{ r.pg_status }}</span></td>
-                                    <td><span class="pill" :class="'pill-' + statusKind(r.scale_status)">{{ r.scale_status }}</span></td>
+                                <tr v-for="r in dbQuery.results" :key="r.tag_id">
+                                    <td>{{ r.tag_id }}</td>
+                                    <td class="td-mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="r.tagname">{{ r.tagname }}</td>
+                                    <td>{{ r.node_name || '—' }}</td>
+                                    <td>{{ r.site || '—' }}</td>
+                                    <td>{{ r.bu || '—' }}</td>
+                                    <td>{{ r.floor || '—' }}</td>
+                                    <td>{{ r.system || '—' }}</td>
+                                    <td><span class="pill pill-muted">{{ r.driver_type || '—' }}</span></td>
+                                    <td>{{ r.tablename || '—' }}</td>
+                                    <td>{{ r.data_type || '—' }}</td>
+                                    <td class="td-mono" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="r.address">{{ r.address || '—' }}</td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div v-if="dbQuery.totalPages > 1" style="display:flex;justify-content:center;align-items:center;gap:12px;padding:12px 0 4px">
+                        <button class="btn btn-outline btn-sm" @click="dbQuery.page--; searchTags(false)" :disabled="dbQuery.page === 0 || dbQuery.loading">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px"><path d="M10 12L6 8l4-4"/></svg>
+                            上一頁
+                        </button>
+                        <span style="font-size:13px;color:var(--ink-2)">第 {{ dbQuery.page + 1 }} / {{ dbQuery.totalPages }} 頁</span>
+                        <button class="btn btn-outline btn-sm" @click="dbQuery.page++; searchTags(false)" :disabled="dbQuery.page >= dbQuery.totalPages - 1 || dbQuery.loading">
+                            下一頁
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px"><path d="M6 4l4 4-4 4"/></svg>
+                        </button>
                     </div>
                 </div>
             </div>

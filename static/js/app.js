@@ -66,7 +66,7 @@ createApp({
             Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
             Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
-            Object.assign(queryResult, { data: [], total: 0 })
+            Object.assign(dbQuery, { conditions: [{ field: 'tagname', op: 'contains', value: '' }], logic: 'AND', page: 0, totalPages: 0, total: 0, loading: false, exporting: false, results: [], sqlPreview: '' })
             Object.assign(ioMapping, { fileA: null, fileB: null, executing: false, mappingId: null, result: null, data: [], columns: [] })
             historyList.value = []
             userList.value = []; actLogs.value = []
@@ -494,24 +494,93 @@ createApp({
             } catch (e) { alert('刪除失敗: ' + e.message); delState.executing = false }
         }
 
-        // ── Query Tab ──
-        const queryFilter = reactive({ tb: '', pg: '' })
-        const queryResult = reactive({ data: [], total: 0 })
+        // ── Query Tab (Tags 正式表搜尋) ──
+        const QUERY_FIELDS = [
+            { key: 'tagname',     label: 'Tag Name' },
+            { key: 'system',      label: 'System' },
+            { key: 'site',        label: 'Site' },
+            { key: 'bu',          label: 'BU' },
+            { key: 'floor',       label: 'Floor' },
+            { key: 'zone',        label: 'Zone' },
+            { key: 'owner',       label: 'Owner' },
+            { key: 'department',  label: 'Department' },
+            { key: 'driver_type', label: 'Driver Type' },
+            { key: 'node_name',   label: 'Node Name' },
+            { key: 'tablename',   label: 'Table Name' },
+            { key: 'description', label: 'Description' },
+            { key: 'address',     label: 'Address' },
+            { key: 'data_type',   label: 'Data Type' },
+        ]
+        const QUERY_OPS = [
+            { key: 'contains',   label: '包含' },
+            { key: 'equals',     label: '等於' },
+            { key: 'starts_with',label: '開頭為' },
+            { key: 'ends_with',  label: '結尾為' },
+            { key: 'is_empty',   label: '為空' },
+            { key: 'not_empty',  label: '不為空' },
+        ]
+        const dbQuery = reactive({
+            conditions: [{ field: 'tagname', op: 'contains', value: '' }],
+            logic: 'AND',
+            page: 0,
+            totalPages: 0,
+            total: 0,
+            loading: false,
+            exporting: false,
+            results: [],
+            sqlPreview: '',
+        })
 
-        async function queryStaging() {
+        function addCondition() {
+            if (dbQuery.conditions.length < 6)
+                dbQuery.conditions.push({ field: 'tagname', op: 'contains', value: '' })
+        }
+
+        function removeCondition(i) {
+            dbQuery.conditions.splice(i, 1)
+            if (!dbQuery.conditions.length) addCondition()
+        }
+
+        async function searchTags(resetPage) {
+            if (resetPage) dbQuery.page = 0
+            dbQuery.loading = true
             try {
-                const resp = await fetch('/api/pg/staging/query', {
+                const resp = await fetch('/api/pg/tags/search', {
                     method: 'POST', headers: _headers(),
                     body: JSON.stringify({
-                        page: 0, page_size: 200,
-                        tb_status: queryFilter.tb || null,
-                        pg_status: queryFilter.pg || null,
+                        conditions: dbQuery.conditions,
+                        logic: dbQuery.logic,
+                        page: dbQuery.page,
+                        page_size: 50,
                     }),
                 })
-                if (!resp.ok) throw new Error('Query failed')
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
-                queryResult.data = data.data; queryResult.total = data.total
-            } catch (e) { console.error('查詢失敗:', e) }
+                dbQuery.results = data.data
+                dbQuery.total = data.total
+                dbQuery.totalPages = data.total_pages
+                dbQuery.sqlPreview = data.sql_preview || ''
+            } catch (e) { alert('查詢失敗: ' + e.message) }
+            finally { dbQuery.loading = false }
+        }
+
+        async function exportTags() {
+            dbQuery.exporting = true
+            try {
+                const resp = await fetch('/api/pg/tags/export', {
+                    method: 'POST', headers: _headers(),
+                    body: JSON.stringify({ conditions: dbQuery.conditions, logic: dbQuery.logic }),
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                const blob = await resp.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `tags_export_${Date.now()}.csv`
+                a.click()
+                URL.revokeObjectURL(url)
+            } catch (e) { alert('匯出失敗: ' + e.message) }
+            finally { dbQuery.exporting = false }
         }
 
         // ── IO Mapping ──
@@ -766,7 +835,7 @@ createApp({
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,
             delState, handleDeleteFile, onDeleteDrop, executeDelete,
-            queryFilter, queryResult, queryStaging,
+            QUERY_FIELDS, QUERY_OPS, dbQuery, addCondition, removeCondition, searchTags, exportTags,
             ioMapping, executeIoMapping, downloadIoMapping,
             historyList, loadHistory,
             pgConn, testPgConn,

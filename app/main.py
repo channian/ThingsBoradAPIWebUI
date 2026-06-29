@@ -289,6 +289,19 @@ class StagingQueryRequest(BaseModel):
     scale_status: Optional[str] = None
 
 
+class TagCondition(BaseModel):
+    field: str
+    op: str = "contains"
+    value: str = ""
+
+
+class TagsSearchRequest(BaseModel):
+    conditions: list = []
+    logic: str = "AND"
+    page: int = 0
+    page_size: int = 50
+
+
 class StagingStatusRequest(BaseModel):
     ids: list
     field: str
@@ -1077,6 +1090,56 @@ async def pg_staging_query(req: StagingQueryRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查詢暫存表失敗: {e}")
+
+
+@app.post("/api/pg/tags/search")
+async def pg_tags_search(req: TagsSearchRequest, user: dict = Depends(get_current_user)):
+    """多條件查詢正式 tags 表"""
+    try:
+        conditions = [c if isinstance(c, dict) else c.dict() for c in req.conditions]
+        return pg_client.search_formal_tags(
+            conditions=conditions,
+            logic=req.logic,
+            page=req.page,
+            page_size=min(req.page_size, 200),
+        )
+    except Exception as e:
+        log.error(f"[tags/search] {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查詢失敗: {e}")
+
+
+@app.post("/api/pg/tags/export")
+async def pg_tags_export(req: TagsSearchRequest, user: dict = Depends(get_current_user)):
+    """將查詢結果匯出為 CSV"""
+    try:
+        conditions = [c if isinstance(c, dict) else c.dict() for c in req.conditions]
+        result = pg_client.search_formal_tags(
+            conditions=conditions,
+            logic=req.logic,
+            page=0,
+            page_size=10000,
+        )
+        rows = result.get("data", [])
+        if not rows:
+            raise HTTPException(status_code=404, detail="查無資料可匯出")
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+        content = "﻿" + output.getvalue()
+
+        filename = f"tags_export_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[tags/export] {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"匯出失敗: {e}")
 
 
 @app.post("/api/pg/staging/status")
