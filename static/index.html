@@ -505,26 +505,35 @@
                 <!-- 結果表格 -->
                 <div v-if="dbQuery.results.length" class="kis-card">
                     <div class="tbl-wrap">
-                        <table>
+                        <table style="min-width:1600px">
                             <thead>
                                 <tr>
-                                    <th>ID</th><th>Tag Name</th><th>Node</th><th>Site</th><th>BU</th>
-                                    <th>Floor</th><th>System</th><th>Driver</th><th>Table</th><th>Data Type</th><th>Address</th>
+                                    <th style="min-width:50px">ID</th>
+                                    <th style="min-width:220px">Tag Name</th>
+                                    <th style="min-width:120px">Node</th>
+                                    <th style="min-width:80px">Site</th>
+                                    <th style="min-width:80px">BU</th>
+                                    <th style="min-width:70px">Floor</th>
+                                    <th style="min-width:90px">System</th>
+                                    <th style="min-width:100px">Driver</th>
+                                    <th style="min-width:150px">Table</th>
+                                    <th style="min-width:90px">Data Type</th>
+                                    <th style="min-width:200px">Address</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-for="r in dbQuery.results" :key="r.tag_id">
                                     <td>{{ r.tag_id }}</td>
-                                    <td class="td-mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="r.tagname">{{ r.tagname }}</td>
-                                    <td>{{ r.node_name || '—' }}</td>
+                                    <td class="td-mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px" :title="r.tagname">{{ r.tagname }}</td>
+                                    <td style="white-space:nowrap">{{ r.node_name || '—' }}</td>
                                     <td>{{ r.site || '—' }}</td>
                                     <td>{{ r.bu || '—' }}</td>
                                     <td>{{ r.floor || '—' }}</td>
                                     <td>{{ r.system || '—' }}</td>
                                     <td><span class="pill pill-muted">{{ r.driver_type || '—' }}</span></td>
-                                    <td>{{ r.tablename || '—' }}</td>
+                                    <td style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px" :title="r.tablename">{{ r.tablename || '—' }}</td>
                                     <td>{{ r.data_type || '—' }}</td>
-                                    <td class="td-mono" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="r.address">{{ r.address || '—' }}</td>
+                                    <td class="td-mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" :title="r.address">{{ r.address || '—' }}</td>
                                 </tr>
                             </tbody>
                         </table>
