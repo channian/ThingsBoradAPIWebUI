@@ -449,7 +449,7 @@
                             Tags 正式表查詢
                         </div>
                         <div style="display:flex;gap:8px;align-items:center">
-                            <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px">
+                            <div style="display:flex;border:1px solid var(--line-2);border-radius:6px;overflow:hidden;font-size:12px">
                                 <button @click="dbQuery.logic='AND'" :class="['btn-logic', {active: dbQuery.logic==='AND'}]">AND</button>
                                 <button @click="dbQuery.logic='OR'"  :class="['btn-logic', {active: dbQuery.logic==='OR'}]">OR</button>
                             </div>
@@ -496,7 +496,7 @@
                         <span v-if="dbQuery.total === 0 && dbQuery.sqlPreview" style="font-size:13px;color:var(--ink-3)">查無資料</span>
                     </div>
 
-                    <div v-if="dbQuery.sqlPreview" style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-2);word-break:break-all;line-height:1.7">
+                    <div v-if="dbQuery.sqlPreview" style="margin-top:14px;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-2);word-break:break-all;line-height:1.7">
                         <span style="font-size:10px;font-weight:600;color:var(--ink-3);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">SQL Preview (read-only)</span>
                         {{ dbQuery.sqlPreview }}
                     </div>
