@@ -1,3 +1,4 @@
+/* KIS v3 build:20260630-dbQuery */
 const { createApp, reactive, ref, computed, watch, onMounted, nextTick } = Vue
 
 createApp({
