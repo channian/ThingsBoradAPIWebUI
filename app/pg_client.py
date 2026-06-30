@@ -153,6 +153,16 @@ class PGClient:
                         ALTER TABLE kepitsimple_user
                         ADD COLUMN perm_group VARCHAR(50) NOT NULL DEFAULT 'viewer';
                     END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'scada_tag_config'
+                        AND column_name = 'kw_channel'
+                    ) THEN
+                        ALTER TABLE scada_tag_config
+                        ADD COLUMN kw_channel VARCHAR(255),
+                        ADD COLUMN kw_device VARCHAR(255),
+                        ADD COLUMN kw_tag_groups VARCHAR(500);
+                    END IF;
                 END $$;
             """)
 
@@ -1058,26 +1068,53 @@ class PGClient:
         return devices, profiles, locations
 
     def derive_kw_fields(self, staging_rows: list) -> list:
-        """推導 Kepware 建點欄位（channel / device / tag_groups / address）"""
+        """推導 Kepware 建點欄位（channel / device / tag_groups / address）
+        若暫存列有 kw_channel/kw_device/kw_tag_groups 覆寫值，優先使用。"""
         devices, profiles, locations = self._load_derive_caches()
         results = []
         for row in staging_rows:
             base = _derive_base_fields(row, devices, profiles, locations)
             if not base:
                 continue
+            # 覆寫優先：使用者在 UI 手動設定的值優先於推導值
+            channel_name = row.get("kw_channel") or base["channel_name"]
+            device_name = row.get("kw_device") or base["device_name"]
+            kw_tg = row.get("kw_tag_groups")
+            tag_groups = kw_tg if kw_tg is not None else base["tag_groups"]
+            overridden = bool(
+                (row.get("kw_channel") and row["kw_channel"] != base["channel_name"])
+                or (row.get("kw_device") and row["kw_device"] != base["device_name"])
+                or (kw_tg is not None and kw_tg != base["tag_groups"])
+            )
             results.append({
                 "id": row.get("id"),
                 "tag_name": base["tag_name"],
                 "tb_type": base["tb_type"],
-                "channel_name": base["channel_name"],
-                "device_name": base["device_name"],
-                "tag_groups": base["tag_groups"],
+                "channel_name": channel_name,
+                "device_name": device_name,
+                "tag_groups": tag_groups,
                 "address": base["address"],
                 "description": row.get("description", ""),
                 "driver_type": base["driver_type"],
                 "profile_exists": base["profile_exists"],
+                "overridden": overridden,
             })
         return results
+
+    def update_kw_overrides(self, staging_id: int,
+                             channel: str, device: str, tag_groups: str) -> bool:
+        """儲存使用者手動覆寫的 channel/device/tag_groups 到暫存表"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE scada_tag_config
+                       SET kw_channel = %s, kw_device = %s, kw_tag_groups = %s
+                       WHERE id = %s""",
+                    (channel or None, device or None,
+                     tag_groups if tag_groups is not None else None,
+                     staging_id),
+                )
+                return cur.rowcount > 0
 
     def derive_pg_fields(self, staging_rows: list) -> list:
         """推導 PG 正式表欄位"""

@@ -261,28 +261,35 @@
                                 {{ kwDerive.executing ? '建點中…' : '執行建點' }}
                             </button>
                         </div>
-                        <div v-if="kwDerive.data.length" class="tbl-wrap">
-                            <table>
+                        <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
+                            <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
+                                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
+                                Channel / Device / Groups 欄位可直接編輯，失焦後自動儲存覆寫值
+                            </div>
+                            <table style="min-width:900px">
                                 <thead>
                                     <tr>
-                                        <th>狀態</th><th>Tag Name</th><th>Channel</th><th>Device</th>
-                                        <th>Groups</th><th>Address</th><th>Description</th>
+                                        <th>狀態</th><th>Tag Name</th>
+                                        <th>Channel <span style="font-size:10px;opacity:.6">✎</span></th>
+                                        <th>Device <span style="font-size:10px;opacity:.6">✎</span></th>
+                                        <th>Groups <span style="font-size:10px;opacity:.6">✎</span></th>
+                                        <th>Address</th><th>Description</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="r in kwDerive.data" :key="r.id">
+                                    <tr v-for="r in kwDerive.data" :key="r.id" :class="{ 'kw-overridden': r.overridden }">
                                         <td>
                                             <span v-if="r.validation" class="st-chip" :class="'st-' + rowStatus(r.validation)">
                                                 {{ { ok: '✓', add: '+G', warn: '▲' }[rowStatus(r.validation)] }}
                                             </span>
                                             <span v-else class="st-chip">—</span>
                                         </td>
-                                        <td class="td-mono">{{ r.tag_name }}</td>
-                                        <td>{{ r.channel_name }}</td>
-                                        <td>{{ r.device_name }}</td>
-                                        <td class="td-mono">{{ r.tag_groups }}</td>
-                                        <td class="td-mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.address }}</td>
-                                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ r.description }}</td>
+                                        <td class="td-mono" style="white-space:nowrap">{{ r.tag_name }}</td>
+                                        <td><input class="input input-kw" v-model="r.channel_name" @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
+                                        <td><input class="input input-kw" v-model="r.device_name"  @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
+                                        <td><input class="input input-kw td-mono" v-model="r.tag_groups" @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
+                                        <td class="td-mono" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address }}</td>
+                                        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.description }}</td>
                                     </tr>
                                 </tbody>
                             </table>

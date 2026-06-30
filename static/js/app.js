@@ -300,6 +300,22 @@ createApp({
             finally { kwDerive.loading = false }
         }
 
+        async function saveKwOverride(row) {
+            try {
+                const resp = await fetch('/api/pg/staging/kw-override', {
+                    method: 'POST', headers: _headers(),
+                    body: JSON.stringify({
+                        id: row.id,
+                        channel: row.channel_name || '',
+                        device: row.device_name || '',
+                        tag_groups: row.tag_groups || '',
+                    }),
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                row.overridden = true
+            } catch (e) { alert('儲存覆寫失敗: ' + e.message) }
+        }
+
         async function executeKw() {
             if (!kwDerive.data.length) return
             if (!confirm(`確定要建立 ${kwDerive.data.length} 筆 Tag 到 Kepware？`)) return
@@ -830,7 +846,7 @@ createApp({
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
             staging, loadStaging,
-            kwDerive, deriveKw, executeKw, rowStatus,
+            kwDerive, deriveKw, executeKw, saveKwOverride, rowStatus,
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,

@@ -289,6 +289,13 @@ class StagingQueryRequest(BaseModel):
     scale_status: Optional[str] = None
 
 
+class KwOverrideRequest(BaseModel):
+    id: int
+    channel: str = ""
+    device: str = ""
+    tag_groups: str = ""
+
+
 class TagCondition(BaseModel):
     field: str
     op: str = "contains"
@@ -1090,6 +1097,21 @@ async def pg_staging_query(req: StagingQueryRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查詢暫存表失敗: {e}")
+
+
+@app.post("/api/pg/staging/kw-override")
+async def pg_staging_kw_override(req: KwOverrideRequest,
+                                  user: dict = Depends(require_role("admin", "operator"))):
+    """儲存 Step 3 手動覆寫的 channel / device / tag_groups"""
+    try:
+        ok = pg_client.update_kw_overrides(req.id, req.channel, req.device, req.tag_groups)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"找不到暫存列 id={req.id}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/pg/tags/search")

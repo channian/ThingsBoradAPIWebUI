@@ -655,6 +655,19 @@ mark.hl { background: rgba(79, 172, 229, 0.25); color: var(--azure-deep); paddin
 .logo-pulse { animation: pulse 2.4s ease-in-out infinite; transform-origin: center; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+/* Step 3 editable derive fields */
+.input-kw {
+  padding: 3px 6px; font-size: 12px; height: 28px;
+  min-width: 80px; width: 100%; box-sizing: border-box;
+  border: 1px solid transparent; background: transparent;
+  border-radius: 4px; transition: border-color 0.15s, background 0.15s;
+}
+.input-kw:hover { border-color: var(--line-2); background: var(--soft); }
+.input-kw:focus { border-color: var(--azure-line); background: var(--panel);
+  outline: none; box-shadow: 0 0 0 2px var(--azure-soft); }
+tr.kw-overridden td { background: rgba(54,122,223,0.04); }
+tr.kw-overridden .input-kw { color: var(--azure); }
+
 /* AND/OR logic toggle buttons in query tab */
 .btn-logic {
   padding: 4px 10px; font-size: 11px; font-weight: 700; letter-spacing: .04em;
