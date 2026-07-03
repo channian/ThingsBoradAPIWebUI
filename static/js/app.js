@@ -60,8 +60,8 @@ createApp({
             gwList.value = []; selectedGwId.value = null
             structureSync.counts = null
             Object.assign(imp, { fileName: null, totalRows: 0, headers: [], preview: [], importing: false, result: null, uploadId: null })
-            Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '' })
-            Object.assign(kwDerive, { data: [], loading: false, executing: false, result: null })
+            Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false })
+            Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null })
             Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
             Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
@@ -262,7 +262,19 @@ createApp({
         const staging = reactive({
             data: [], total: 0, page: 0, totalPages: 0,
             filterTb: '', filterPg: '', filterScale: '',
+            clearing: false,
         })
+
+        async function clearStaging() {
+            if (!confirm('確定要清空整個暫存表？此操作無法復原！')) return
+            staging.clearing = true
+            try {
+                const resp = await fetch('/api/pg/staging/clear', { method: 'DELETE', headers: _headers() })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                await loadStaging()
+            } catch (e) { alert('清空失敗: ' + e.message) }
+            finally { staging.clearing = false }
+        }
 
         async function loadStaging() {
             try {
@@ -283,7 +295,7 @@ createApp({
         }
 
         // Step 3: Kepware Derive + Execute
-        const kwDerive = reactive({ data: [], loading: false, executing: false, result: null })
+        const kwDerive = reactive({ data: [], loading: false, executing: false, savingOverrides: false, result: null })
 
         async function deriveKw() {
             kwDerive.loading = true; kwDerive.result = null
@@ -300,20 +312,27 @@ createApp({
             finally { kwDerive.loading = false }
         }
 
-        async function saveKwOverride(row) {
-            try {
-                const resp = await fetch('/api/pg/staging/kw-override', {
-                    method: 'POST', headers: _headers(),
-                    body: JSON.stringify({
-                        id: row.id,
-                        channel: row.channel_name || '',
-                        device: row.device_name || '',
-                        tag_groups: row.tag_groups || '',
-                    }),
-                })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                row.overridden = true
-            } catch (e) { alert('儲存覆寫失敗: ' + e.message) }
+        async function saveAllKwOverrides() {
+            if (!kwDerive.data.length) return
+            kwDerive.savingOverrides = true
+            let saved = 0; let failed = 0
+            for (const row of kwDerive.data) {
+                try {
+                    const resp = await fetch('/api/pg/staging/kw-override', {
+                        method: 'POST', headers: _headers(),
+                        body: JSON.stringify({
+                            id: row.id,
+                            channel: row.channel_name || '',
+                            device: row.device_name || '',
+                            tag_groups: row.tag_groups || '',
+                        }),
+                    })
+                    if (!resp.ok) { failed++; continue }
+                    row.overridden = true; saved++
+                } catch (e) { failed++ }
+            }
+            kwDerive.savingOverrides = false
+            if (failed > 0) alert(`儲存完成：${saved} 筆成功，${failed} 筆失敗`)
         }
 
         async function executeKw() {
@@ -438,6 +457,7 @@ createApp({
         const delState = reactive({
             fileName: null, totalRows: 0, uploadId: null,
             dryRun: true, executing: false, result: null,
+            delay: 0.2, batchSize: 50, batchPause: 5,
         })
 
         function handleDeleteFile(e) {
@@ -474,6 +494,9 @@ createApp({
                         upload_id: delState.uploadId,
                         gateway_id: selectedGwId.value,
                         dry_run: delState.dryRun,
+                        delay: delState.delay,
+                        batch_size: delState.batchSize,
+                        batch_pause: delState.batchPause,
                     }),
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
@@ -845,8 +868,8 @@ createApp({
             structureSync, syncStructure,
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
-            staging, loadStaging,
-            kwDerive, deriveKw, executeKw, saveKwOverride, rowStatus,
+            staging, loadStaging, clearStaging,
+            kwDerive, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,

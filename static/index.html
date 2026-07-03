@@ -183,6 +183,10 @@
                                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:14px;height:14px"><path d="M3 8a5 5 0 018-3.5L13 6M13 3v3h-3M13 8a5 5 0 01-8 3.5L3 10M3 13v-3h3"/></svg>
                                     重新載入
                                 </button>
+                                <button v-if="auth.role === 'admin'" class="btn btn-outline btn-sm" style="color:var(--err)" @click="clearStaging" :disabled="staging.clearing">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px"><path d="M3 5h10M6 5V3.5C6 3 6.5 2.5 7 2.5h2c.5 0 1 .5 1 1V5M5 5l.5 8c0 .5.5 1 1 1h3c.5 0 1-.5 1-1L11 5"/></svg>
+                                    {{ staging.clearing ? '清空中…' : '清空暫存表' }}
+                                </button>
                             </div>
                         </div>
                         <div class="filter-bar">
@@ -257,6 +261,10 @@
                             <button class="btn btn-outline" @click="deriveKw" :disabled="kwDerive.loading || !selectedGwId">
                                 {{ kwDerive.loading ? '推導中…' : '推導欄位' }}
                             </button>
+                            <button class="btn btn-outline" @click="saveAllKwOverrides" :disabled="kwDerive.savingOverrides || !kwDerive.data.length">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:13px;height:13px"><path d="M3 8l3.5 3.5L13 4"/></svg>
+                                {{ kwDerive.savingOverrides ? '儲存中…' : '儲存覆寫' }}
+                            </button>
                             <button class="btn btn-primary" @click="executeKw" :disabled="kwDerive.executing || !kwDerive.data.length || !selectedGwId">
                                 {{ kwDerive.executing ? '建點中…' : '執行建點' }}
                             </button>
@@ -264,7 +272,7 @@
                         <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
                             <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
                                 <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
-                                Channel / Device / Groups 欄位可直接編輯，失焦後自動儲存覆寫值
+                                Channel / Device / Groups 欄位可直接編輯，調整完成後點「儲存覆寫」
                             </div>
                             <table style="min-width:900px">
                                 <thead>
@@ -285,9 +293,9 @@
                                             <span v-else class="st-chip">—</span>
                                         </td>
                                         <td class="td-mono" style="white-space:nowrap">{{ r.tag_name }}</td>
-                                        <td><input class="input input-kw" v-model="r.channel_name" @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
-                                        <td><input class="input input-kw" v-model="r.device_name"  @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
-                                        <td><input class="input input-kw td-mono" v-model="r.tag_groups" @blur="saveKwOverride(r)" @keyup.enter="$event.target.blur()"></td>
+                                        <td><input class="input input-kw" v-model="r.channel_name"></td>
+                                        <td><input class="input input-kw" v-model="r.device_name"></td>
+                                        <td><input class="input input-kw td-mono" v-model="r.tag_groups"></td>
                                         <td class="td-mono" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address }}</td>
                                         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.description }}</td>
                                     </tr>
@@ -423,6 +431,13 @@
                             <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
                         </select>
                     </div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                        <a href="/api/templates/delete" download class="btn btn-outline btn-sm" style="text-decoration:none">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:13px;height:13px"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 13h10"/></svg>
+                            下載 CSV 範例
+                        </a>
+                        <span style="font-size:12px;color:var(--ink-3)">CSV 需含 name, type 欄位</span>
+                    </div>
                     <div class="upload-zone" @dragover.prevent @drop.prevent="onDeleteDrop" @click="$refs.deleteFileInput.click()" style="margin-bottom:16px">
                         <input ref="deleteFileInput" type="file" accept=".csv" @change="handleDeleteFile" style="display:none">
                         <div v-if="!delState.fileName" style="text-align:center">
@@ -432,13 +447,31 @@
                             <span style="font-weight:600">{{ delState.fileName }}</span> · {{ delState.totalRows }} 筆
                         </div>
                     </div>
-                    <div v-if="delState.uploadId" style="display:flex;gap:8px;margin-bottom:16px">
-                        <label style="display:flex;align-items:center;gap:6px;font-size:13px">
-                            <input type="checkbox" v-model="delState.dryRun"> 預演模式（不實際刪除）
-                        </label>
-                        <button class="btn btn-danger" @click="executeDelete" :disabled="delState.executing || !selectedGwId">
-                            {{ delState.executing ? '刪除中…' : (delState.dryRun ? '預演刪除' : '確認刪除') }}
-                        </button>
+                    <div v-if="delState.uploadId">
+                        <!-- 限速設定 -->
+                        <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px;padding:10px 14px;background:var(--soft);border:1px solid var(--line);border-radius:8px;flex-wrap:wrap">
+                            <span style="font-size:12px;font-weight:600;color:var(--ink-3)">限速設定</span>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                每筆間隔 (s)
+                                <input type="number" class="input" v-model.number="delState.delay" min="0" max="10" step="0.1" style="width:70px;font-size:12px;padding:4px 8px">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                批次大小
+                                <input type="number" class="input" v-model.number="delState.batchSize" min="1" max="200" step="1" style="width:70px;font-size:12px;padding:4px 8px">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                批次暫停 (s)
+                                <input type="number" class="input" v-model.number="delState.batchPause" min="0" max="60" step="0.5" style="width:70px;font-size:12px;padding:4px 8px">
+                            </label>
+                        </div>
+                        <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+                                <input type="checkbox" v-model="delState.dryRun"> 預演模式（不實際刪除）
+                            </label>
+                            <button class="btn btn-danger" @click="executeDelete" :disabled="delState.executing || !selectedGwId">
+                                {{ delState.executing ? '刪除中…' : (delState.dryRun ? '預演刪除' : '確認刪除') }}
+                            </button>
+                        </div>
                     </div>
                     <div v-if="delState.result" style="padding:10px;border-radius:8px;background:var(--ok-soft);margin-top:8px">
                         {{ delState.dryRun ? '預演' : '刪除' }}完成：{{ delState.result.success }} 筆成功，{{ delState.result.fail }} 筆失敗
