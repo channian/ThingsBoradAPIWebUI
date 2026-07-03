@@ -60,11 +60,12 @@ createApp({
             gwList.value = []; selectedGwId.value = null
             structureSync.counts = null
             Object.assign(imp, { fileName: null, totalRows: 0, headers: [], preview: [], importing: false, result: null, uploadId: null })
-            Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false })
+            Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false, deleting: false, selectedIds: [] })
             Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null })
             Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
             Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
+            Object.assign(pgConn, { testing: false, status: '', statusText: '未連線' })
             Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
             Object.assign(dbQuery, { conditions: [{ field: 'tagname', op: 'contains', value: '' }], logic: 'AND', page: 0, totalPages: 0, total: 0, loading: false, exporting: false, results: [], sqlPreview: '' })
             Object.assign(ioMapping, { fileA: null, fileB: null, executing: false, mappingId: null, result: null, data: [], columns: [] })
@@ -262,7 +263,7 @@ createApp({
         const staging = reactive({
             data: [], total: 0, page: 0, totalPages: 0,
             filterTb: '', filterPg: '', filterScale: '',
-            clearing: false,
+            clearing: false, deleting: false, selectedIds: [],
         })
 
         async function clearStaging() {
@@ -276,7 +277,34 @@ createApp({
             finally { staging.clearing = false }
         }
 
+        function toggleStagingSelectAll(e) {
+            staging.selectedIds = e.target.checked ? staging.data.map(r => r.id) : []
+        }
+
+        function toggleStagingRow(id) {
+            const idx = staging.selectedIds.indexOf(id)
+            if (idx >= 0) staging.selectedIds.splice(idx, 1)
+            else staging.selectedIds.push(id)
+        }
+
+        async function deleteSelectedStaging() {
+            if (!staging.selectedIds.length) return
+            if (!confirm(`確定要刪除選取的 ${staging.selectedIds.length} 筆暫存資料？此操作無法復原！`)) return
+            staging.deleting = true
+            try {
+                const resp = await fetch('/api/pg/staging/delete', {
+                    method: 'POST', headers: _headers(),
+                    body: JSON.stringify({ ids: staging.selectedIds }),
+                })
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                staging.selectedIds = []
+                await loadStaging()
+            } catch (e) { alert('刪除失敗: ' + e.message) }
+            finally { staging.deleting = false }
+        }
+
         async function loadStaging() {
+            staging.selectedIds = []
             try {
                 const resp = await fetch('/api/pg/staging/query', {
                     method: 'POST', headers: _headers(),
@@ -297,6 +325,18 @@ createApp({
         // Step 3: Kepware Derive + Execute
         const kwDerive = reactive({ data: [], loading: false, executing: false, savingOverrides: false, result: null })
 
+        function _stampKwOrig(row) {
+            row._origChannel = row.channel_name || ''
+            row._origDevice = row.device_name || ''
+            row._origTagGroups = row.tag_groups || ''
+        }
+
+        function _kwRowChanged(row) {
+            return (row.channel_name || '') !== (row._origChannel ?? '')
+                || (row.device_name || '') !== (row._origDevice ?? '')
+                || (row.tag_groups || '') !== (row._origTagGroups ?? '')
+        }
+
         async function deriveKw() {
             kwDerive.loading = true; kwDerive.result = null
             try {
@@ -308,15 +348,19 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 kwDerive.data = data.data || []
+                kwDerive.data.forEach(_stampKwOrig)
             } catch (e) { alert('推導失敗: ' + e.message) }
             finally { kwDerive.loading = false }
         }
 
         async function saveAllKwOverrides() {
             if (!kwDerive.data.length) return
+            const changed = kwDerive.data.filter(_kwRowChanged)
+            if (!changed.length) { alert('沒有欄位變更，無需儲存'); return }
             kwDerive.savingOverrides = true
-            let saved = 0; let failed = 0
-            for (const row of kwDerive.data) {
+            let saved = 0
+            let errorMsg = ''
+            for (const row of changed) {
                 try {
                     const resp = await fetch('/api/pg/staging/kw-override', {
                         method: 'POST', headers: _headers(),
@@ -327,12 +371,21 @@ createApp({
                             tag_groups: row.tag_groups || '',
                         }),
                     })
-                    if (!resp.ok) { failed++; continue }
+                    if (!resp.ok) {
+                        const e = await resp.json().catch(() => ({}))
+                        errorMsg = e.detail || `HTTP ${resp.status}`
+                        break
+                    }
                     row.overridden = true; saved++
-                } catch (e) { failed++ }
+                    _stampKwOrig(row)
+                } catch (e) { errorMsg = e.message; break }
             }
             kwDerive.savingOverrides = false
-            if (failed > 0) alert(`儲存完成：${saved} 筆成功，${failed} 筆失敗`)
+            if (errorMsg) {
+                alert(`儲存失敗：${errorMsg}\n（已成功 ${saved} / ${changed.length} 筆，其餘未處理）`)
+            } else {
+                alert(`儲存完成：共 ${saved} 筆已更新`)
+            }
         }
 
         async function executeKw() {
@@ -855,6 +908,7 @@ createApp({
         // ── Init on login ──
         function _initAfterLogin() {
             loadGateways()
+            testPgConn()
             if (auth.role === 'admin') loadUsers()
         }
 
@@ -868,7 +922,7 @@ createApp({
             structureSync, syncStructure,
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
-            staging, loadStaging, clearStaging,
+            staging, loadStaging, clearStaging, toggleStagingSelectAll, toggleStagingRow, deleteSelectedStaging,
             kwDerive, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
