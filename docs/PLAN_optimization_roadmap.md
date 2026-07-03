@@ -219,9 +219,9 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 
 ## 五、進度追蹤
 
-- [ ] P0-1B 解除 event loop 阻塞（async→def 或直接做 A）
-- [ ] P0-2 端點認證補齊
-- [ ] P0-3 JWT 密鑰 / 登入鎖定 / query token
+- [x] P0-1B 解除 event loop 阻塞（kw/execute、pg/execute/scale 改同步 def）— commit `e84ce8f`
+- [x] P0-2 端點認證補齊（65 路由稽核，僅 / 與 login 公開）— commit `e84ce8f`
+- [x] P0-3 JWT 密鑰 / 登入鎖定 / query token 移除 — commit `e84ce8f`
 - [ ] P0-1A execute 遷移背景任務 + 進度輪詢
 - [ ] P1-1 page_size 截斷
 - [ ] P1-2 csv_uploads 清理
@@ -236,4 +236,26 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 
 ---
 
-*盤點基準：commit `9615529`，2026-07-03。*
+## 六、Phase 1 交付紀錄（commit `e84ce8f`，2026-07-03）
+
+**已完成**：P0-1B、P0-2、P0-3 三項（見上方勾選）。
+
+**沙箱已驗證**：Python/JS 語法檢查通過；伺服器乾淨啟動（Application startup complete，
+可服務 `/`、CSS、JS）；路由稽核 65 條僅 `/` 與 `/api/user/login` 公開。
+
+**⚠️ 需使用者在正式環境（`10.10.51.81:9087`）驗證的行為**（沙箱無法常駐伺服器做 HTTP 測試）：
+1. **重啟伺服器**後（改了 Python），未帶 token 呼叫任一受保護端點應回 **401**。
+2. 各分頁登入後功能全部正常（特別是：**歷史**分頁、**設定 > 參照表**讀取/刪除、
+   **Collector 測試**、**PG 測試**、**IO Map 下載結果**、**刪除分頁的「下載 CSV 範例」**——
+   這些先前沒帶 token，本次已補；若有一個壞掉代表 headers 沒補到）。
+3. **登入鎖定**：同帳號連續打錯密碼 5 次後，第 6 次應回 **429**（約 5 分鐘後自動解除）。
+4. **JWT 金鑰**：若環境未設 `JWT_SECRET_KEY`，啟動 log 會出現警告且重啟後需重新登入；
+   正式環境**務必設定** `JWT_SECRET_KEY`（否則每次重啟所有人被登出）。
+5. CSV 上傳、IO Mapping 上傳（multipart）仍正常（改用 `_authHeader()` 只帶 Authorization）。
+
+**下一步**：Phase 2 從 **P0-1A**（execute 遷移 task_manager + 前端輪詢/進度）接續，
+與 **P1-5**（Step 3/5 限速 UI）同批做最省事。
+
+---
+
+*盤點基準：commit `9615529`，2026-07-03。Phase 1 完成：commit `e84ce8f`。*
