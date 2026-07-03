@@ -17,6 +17,11 @@ createApp({
                 : { 'Content-Type': 'application/json' }
         }
 
+        // FormData（multipart）專用：只帶 Authorization，讓瀏覽器自行設定 multipart boundary
+        function _authHeader() {
+            return auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {}
+        }
+
         async function doLogin() {
             loginForm.busy = true; loginForm.error = ''
             try {
@@ -220,7 +225,7 @@ createApp({
             const form = new FormData()
             form.append('file', file)
             try {
-                const resp = await fetch('/api/csv/upload', { method: 'POST', body: form })
+                const resp = await fetch('/api/csv/upload', { method: 'POST', headers: _authHeader(), body: form })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 imp.uploadId = data.upload_id; imp.headers = data.headers
@@ -484,7 +489,7 @@ createApp({
         async function testCollector() {
             collectorState.testing = true; collectorState.status = null
             try {
-                const resp = await fetch('/api/collector/test')
+                const resp = await fetch('/api/collector/test', { headers: _headers() })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 collectorState.status = 'ok'; collectorState.message = 'Collector DB 連線正常'
             } catch (e) {
@@ -528,7 +533,7 @@ createApp({
             const form = new FormData()
             form.append('file', file)
             try {
-                const resp = await fetch('/api/csv/upload', { method: 'POST', body: form })
+                const resp = await fetch('/api/csv/upload', { method: 'POST', headers: _authHeader(), body: form })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 delState.uploadId = data.upload_id; delState.fileName = data.filename
@@ -584,6 +589,20 @@ createApp({
                 }
                 poll()
             } catch (e) { alert('刪除失敗: ' + e.message); delState.executing = false }
+        }
+
+        async function downloadDeleteTemplate() {
+            try {
+                const resp = await fetch('/api/templates/delete', { headers: _headers() })
+                if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`) }
+                const blob = await resp.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'template_delete.csv'
+                a.click()
+                URL.revokeObjectURL(url)
+            } catch (e) { alert('下載失敗: ' + e.message) }
         }
 
         // ── Query Tab (Tags 正式表搜尋) ──
@@ -698,9 +717,19 @@ createApp({
             finally { ioMapping.executing = false }
         }
 
-        function downloadIoMapping() {
+        async function downloadIoMapping() {
             if (!ioMapping.mappingId) return
-            window.open(`/api/io-mapping/download/${ioMapping.mappingId}`, '_blank')
+            try {
+                const resp = await fetch(`/api/io-mapping/download/${ioMapping.mappingId}`, { headers: _headers() })
+                if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`) }
+                const blob = await resp.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `IO_Mapping_Result_${ioMapping.mappingId}.csv`
+                a.click()
+                URL.revokeObjectURL(url)
+            } catch (e) { alert('下載失敗: ' + e.message) }
         }
 
         // ── History ──
@@ -708,7 +737,7 @@ createApp({
 
         async function loadHistory() {
             try {
-                const resp = await fetch('/api/history')
+                const resp = await fetch('/api/history', { headers: _headers() })
                 if (resp.ok) historyList.value = await resp.json()
             } catch (e) { console.error('載入歷史失敗:', e) }
         }
@@ -719,7 +748,7 @@ createApp({
         async function testPgConn() {
             pgConn.testing = true
             try {
-                const resp = await fetch('/api/pg/test')
+                const resp = await fetch('/api/pg/test', { headers: _headers() })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 pgConn.status = 'connected'; pgConn.statusText = '已連線'
             } catch (e) {
@@ -748,7 +777,7 @@ createApp({
         async function loadRefTable(key) {
             activeRefTable.value = key
             try {
-                const resp = await fetch(`/api/pg/ref/${key}`)
+                const resp = await fetch(`/api/pg/ref/${key}`, { headers: _headers() })
                 if (resp.ok) refData[key] = await resp.json()
             } catch (e) { console.error(`載入 ${key} 失敗:`, e) }
         }
@@ -757,7 +786,7 @@ createApp({
             if (!confirm('確定刪除此筆資料？')) return
             try {
                 await fetch('/api/pg/ref/delete', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: _headers(),
                     body: JSON.stringify({ table, id }),
                 })
                 if (activeRefTable.value) loadRefTable(activeRefTable.value)
@@ -927,7 +956,7 @@ createApp({
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,
-            delState, handleDeleteFile, onDeleteDrop, executeDelete,
+            delState, handleDeleteFile, onDeleteDrop, executeDelete, downloadDeleteTemplate,
             QUERY_FIELDS, QUERY_OPS, dbQuery, addCondition, removeCondition, searchTags, exportTags,
             ioMapping, executeIoMapping, downloadIoMapping,
             historyList, loadHistory,

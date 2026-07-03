@@ -28,6 +28,7 @@ from app.kw_gw_client import KepwareGatewayClient
 from app.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, require_role, VALID_ROLES,
+    check_login_allowed, record_login_failure, reset_login_failures,
 )
 
 # ── Gateway 密碼加解密 (Fernet) ──────────────────────────
@@ -463,14 +464,22 @@ class UserPasswordRequest(BaseModel):
 
 @app.post("/api/user/login")
 async def user_login(req: UserLoginRequest, request: Request):
-    """使用者登入取得 JWT Token"""
+    """使用者登入取得 JWT Token（含連續失敗鎖定，防暴力破解）"""
+    # 檢查此帳號是否因連續登入失敗而被暫時鎖定
+    check_login_allowed(req.username)
     user = pg_client.get_user_by_username(req.username)
     if not user:
+        record_login_failure(req.username)
+        _log_activity(request, {"sub": req.username}, "login_failed", "登入失敗：帳號不存在")
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
     if not user.get("is_active"):
         raise HTTPException(status_code=403, detail="帳號已停用")
     if not verify_password(req.password, user["password_hash"]):
+        record_login_failure(req.username)
+        _log_activity(request, {"sub": req.username}, "login_failed", "登入失敗：密碼錯誤")
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+    # 登入成功，清除失敗計數
+    reset_login_failures(req.username)
     token = create_token(user["username"], user["role"],
                          user.get("display_name", ""))
     _log_activity(request, {"sub": user["username"]}, "login", "使用者登入")
@@ -596,7 +605,8 @@ async def admin_cleanup_logs(request: Request,
 # ── API: CSV 上傳與預覽 ───────────────────────────────
 
 @app.post("/api/csv/upload")
-async def upload_csv(file: UploadFile = File(...)):
+async def upload_csv(file: UploadFile = File(...),
+                     user: dict = Depends(require_role("admin", "operator"))):
     """上傳 CSV 檔案，解析後暫存並回傳預覽"""
     content_bytes = await file.read()
 
@@ -685,18 +695,18 @@ async def upload_csv(file: UploadFile = File(...)):
 # ── API: 歷史紀錄 ─────────────────────────────────────
 
 @app.get("/api/history")
-async def get_history():
+async def get_history(user: dict = Depends(get_current_user)):
     return _load_history()
 
 
 @app.delete("/api/history")
-async def clear_history():
+async def clear_history(user: dict = Depends(require_admin)):
     _save_history([])
     return {"success": True}
 
 
 @app.get("/api/tasks/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
     """查詢背景任務狀態"""
     task = task_manager.get_task(task_id)
     if not task:
@@ -712,7 +722,7 @@ async def get_task_status(task_id: str):
 # ── API: CSV 範本下載 ─────────────────────────────────
 
 @app.get("/api/templates/{template_type}")
-async def download_template(template_type: str):
+async def download_template(template_type: str, user: dict = Depends(get_current_user)):
     """下載 CSV 範本"""
     output = io.StringIO()
     writer = csv.writer(output)
@@ -986,26 +996,28 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
 # ── API: 設定管理 ─────────────────────────────────────
 
 @app.get("/api/config")
-async def get_config():
+async def get_config(user: dict = Depends(require_admin)):
     """取得完整設定"""
     return config_manager.get_all()
 
 
 @app.get("/api/config/dropdown")
-async def get_dropdown_options():
+async def get_dropdown_options(user: dict = Depends(require_admin)):
     """取得所有下拉選項"""
     return config_manager.get_dropdown_options()
 
 
 @app.put("/api/config/dropdown")
-async def update_dropdown_field(req: DropdownUpdateRequest):
+async def update_dropdown_field(req: DropdownUpdateRequest,
+                                user: dict = Depends(require_admin)):
     """更新指定欄位的下拉選項列表"""
     config_manager.set_dropdown_field(req.field, req.values)
     return {"success": True, "field": req.field, "values": req.values}
 
 
 @app.post("/api/config/dropdown/add")
-async def add_dropdown_value(req: DropdownValueRequest):
+async def add_dropdown_value(req: DropdownValueRequest,
+                             user: dict = Depends(require_admin)):
     """新增一個下拉選項值"""
     added = config_manager.add_dropdown_value(req.field, req.value)
     if not added:
@@ -1014,7 +1026,8 @@ async def add_dropdown_value(req: DropdownValueRequest):
 
 
 @app.post("/api/config/dropdown/remove")
-async def remove_dropdown_value(req: DropdownValueRequest):
+async def remove_dropdown_value(req: DropdownValueRequest,
+                                user: dict = Depends(require_admin)):
     """移除一個下拉選項值"""
     removed = config_manager.remove_dropdown_value(req.field, req.value)
     if not removed:
@@ -1023,33 +1036,35 @@ async def remove_dropdown_value(req: DropdownValueRequest):
 
 
 @app.get("/api/config/defaults")
-async def get_defaults():
+async def get_defaults(user: dict = Depends(require_admin)):
     """取得預設值"""
     return config_manager.get_defaults()
 
 
 @app.put("/api/config/defaults")
-async def update_defaults(req: DefaultsUpdateRequest):
+async def update_defaults(req: DefaultsUpdateRequest,
+                          user: dict = Depends(require_admin)):
     """更新預設值"""
     config_manager.set_defaults(req.defaults)
     return {"success": True}
 
 
 @app.get("/api/config/mapping")
-async def get_mapping_rules():
+async def get_mapping_rules(user: dict = Depends(require_admin)):
     """取得所有映射規則"""
     return config_manager.get_mapping_rules()
 
 
 @app.put("/api/config/mapping")
-async def update_mapping_rule(req: MappingRuleUpdateRequest):
+async def update_mapping_rule(req: MappingRuleUpdateRequest,
+                              user: dict = Depends(require_admin)):
     """更新指定映射規則"""
     config_manager.set_mapping_rule(req.rule_name, req.mapping)
     return {"success": True, "rule_name": req.rule_name}
 
 
 @app.delete("/api/config/mapping/{rule_name}")
-async def delete_mapping_rule(rule_name: str):
+async def delete_mapping_rule(rule_name: str, user: dict = Depends(require_admin)):
     """刪除映射規則"""
     deleted = config_manager.delete_mapping_rule(rule_name)
     if not deleted:
@@ -1060,7 +1075,7 @@ async def delete_mapping_rule(rule_name: str):
 # ── API: PostgreSQL 連線 ─────────────────────────────
 
 @app.get("/api/pg/test")
-async def pg_test_connection():
+async def pg_test_connection(user: dict = Depends(get_current_user)):
     """測試 PG 連線"""
     try:
         result = pg_client.test_connection()
@@ -1087,7 +1102,8 @@ async def pg_staging_import(req: StagingImportRequest, request: Request,
 
 
 @app.post("/api/pg/staging/query")
-async def pg_staging_query(req: StagingQueryRequest):
+async def pg_staging_query(req: StagingQueryRequest,
+                           user: dict = Depends(get_current_user)):
     """分頁查詢暫存表"""
     try:
         return pg_client.get_staging_list(
@@ -1165,7 +1181,8 @@ async def pg_tags_export(req: TagsSearchRequest, user: dict = Depends(get_curren
 
 
 @app.post("/api/pg/staging/status")
-async def pg_staging_update_status(req: StagingStatusRequest):
+async def pg_staging_update_status(req: StagingStatusRequest,
+                                   user: dict = Depends(require_role("admin", "operator"))):
     """批次更新暫存表狀態"""
     try:
         count = pg_client.update_staging_status(req.ids, req.field, req.status)
@@ -1198,7 +1215,7 @@ async def pg_staging_clear(user: dict = Depends(require_admin)):
 # ── API: 參照表 CRUD ─────────────────────────────────
 
 @app.get("/api/pg/ref/locations")
-async def pg_get_locations():
+async def pg_get_locations(user: dict = Depends(get_current_user)):
     try:
         return pg_client.get_locations()
     except Exception as e:
@@ -1206,7 +1223,8 @@ async def pg_get_locations():
 
 
 @app.post("/api/pg/ref/locations")
-async def pg_add_location(req: RefLocationRequest):
+async def pg_add_location(req: RefLocationRequest,
+                          user: dict = Depends(require_role("admin", "operator"))):
     try:
         row_id = pg_client.upsert_location(req.bu, req.site, req.zone)
         return {"success": True, "id": row_id}
@@ -1215,7 +1233,7 @@ async def pg_add_location(req: RefLocationRequest):
 
 
 @app.get("/api/pg/ref/ownerships")
-async def pg_get_ownerships():
+async def pg_get_ownerships(user: dict = Depends(get_current_user)):
     try:
         return pg_client.get_ownerships()
     except Exception as e:
@@ -1223,7 +1241,8 @@ async def pg_get_ownerships():
 
 
 @app.post("/api/pg/ref/ownerships")
-async def pg_add_ownership(req: RefOwnershipRequest):
+async def pg_add_ownership(req: RefOwnershipRequest,
+                           user: dict = Depends(require_role("admin", "operator"))):
     try:
         row_id = pg_client.upsert_ownership(req.department, req.data_owner)
         return {"success": True, "id": row_id}
@@ -1232,7 +1251,7 @@ async def pg_add_ownership(req: RefOwnershipRequest):
 
 
 @app.get("/api/pg/ref/devices")
-async def pg_get_devices():
+async def pg_get_devices(user: dict = Depends(get_current_user)):
     try:
         return pg_client.get_devices()
     except Exception as e:
@@ -1240,7 +1259,8 @@ async def pg_get_devices():
 
 
 @app.post("/api/pg/ref/devices")
-async def pg_add_device(req: RefDeviceRequest):
+async def pg_add_device(req: RefDeviceRequest,
+                        user: dict = Depends(require_role("admin", "operator"))):
     try:
         row_id = pg_client.upsert_device(
             req.device_name, req.driver_type,
@@ -1253,7 +1273,7 @@ async def pg_add_device(req: RefDeviceRequest):
 
 
 @app.get("/api/pg/ref/systems")
-async def pg_get_systems():
+async def pg_get_systems(user: dict = Depends(get_current_user)):
     try:
         return pg_client.get_systems()
     except Exception as e:
@@ -1261,7 +1281,8 @@ async def pg_get_systems():
 
 
 @app.post("/api/pg/ref/systems")
-async def pg_add_system(req: RefSystemRequest):
+async def pg_add_system(req: RefSystemRequest,
+                        user: dict = Depends(require_role("admin", "operator"))):
     try:
         row_id = pg_client.upsert_system(req.system_code, req.system_name, req.description)
         return {"success": True, "id": row_id}
@@ -1270,7 +1291,7 @@ async def pg_add_system(req: RefSystemRequest):
 
 
 @app.get("/api/pg/ref/tb-profiles")
-async def pg_get_tb_profiles():
+async def pg_get_tb_profiles(user: dict = Depends(get_current_user)):
     try:
         return pg_client.get_tb_profiles()
     except Exception as e:
@@ -1278,7 +1299,8 @@ async def pg_get_tb_profiles():
 
 
 @app.post("/api/pg/ref/tb-profiles")
-async def pg_add_tb_profile(req: RefTbProfileRequest):
+async def pg_add_tb_profile(req: RefTbProfileRequest,
+                            user: dict = Depends(require_role("admin", "operator"))):
     try:
         row_id = pg_client.upsert_tb_profile(req.name, req.description)
         return {"success": True, "id": row_id}
@@ -1287,7 +1309,8 @@ async def pg_add_tb_profile(req: RefTbProfileRequest):
 
 
 @app.post("/api/pg/ref/delete")
-async def pg_delete_ref(req: RefDeleteRequest):
+async def pg_delete_ref(req: RefDeleteRequest,
+                        user: dict = Depends(require_role("admin", "operator"))):
     """刪除參照表資料"""
     try:
         ok = pg_client.delete_ref_row(req.table, req.id)
@@ -1354,9 +1377,12 @@ async def pg_derive_pg(req: DeriveRequest,
 # ── API: 執行建點 / 寫入 ──────────────────────────────
 
 @app.post("/api/kw/execute")
-async def kw_execute(req: ExecuteKwRequest, request: Request,
-                     user: dict = Depends(require_role("admin", "operator"))):
-    """執行 Kepware 建點：推導欄位 → 建立 tag group + tag → 更新 tb_status（含限速）"""
+def kw_execute(req: ExecuteKwRequest, request: Request,
+               user: dict = Depends(require_role("admin", "operator"))):
+    """執行 Kepware 建點：推導欄位 → 建立 tag group + tag → 更新 tb_status（含限速）
+
+    注意：本函式內含 time.sleep 限速，故意以同步 def 定義，
+    讓 FastAPI 丟到 threadpool 執行，避免阻塞 event loop 導致全站卡死。"""
     import time, random
     try:
         staging = pg_client.get_staging_list(page=0, page_size=9999, tb_status="pending")
@@ -1543,7 +1569,8 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
 # ── API: Kepware Gateway Scale ────────────────────────
 
 @app.post("/api/kw-gw/test")
-async def kw_gw_test(req: KwGwSettingsRequest):
+async def kw_gw_test(req: KwGwSettingsRequest,
+                     user: dict = Depends(require_role("admin", "operator"))):
     """測試 Kepware API Gateway 連線（支援 gateway_id 或手動輸入）"""
     try:
         gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
@@ -1577,9 +1604,12 @@ async def pg_derive_scale(req: DeriveScaleRequest,
 
 
 @app.post("/api/pg/execute/scale")
-async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
-                           user: dict = Depends(require_role("admin", "operator"))):
-    """執行 Scale 設定：推導欄位 → 呼叫 Kepware GW API → 更新 scale_status"""
+def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
+                     user: dict = Depends(require_role("admin", "operator"))):
+    """執行 Scale 設定：推導欄位 → 呼叫 Kepware GW API → 更新 scale_status
+
+    注意：本函式內含 time.sleep 限速，故意以同步 def 定義，
+    讓 FastAPI 丟到 threadpool 執行，避免阻塞 event loop 導致全站卡死。"""
     import time, random
     try:
         # 1. 取得 pending 的暫存資料並推導
@@ -1661,7 +1691,7 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
 # ── API: Collector DB + Reload ────────────────────────
 
 @app.get("/api/collector/test")
-async def collector_test_connection():
+async def collector_test_connection(user: dict = Depends(get_current_user)):
     """測試 Collector DB 連線"""
     try:
         result = pg_client.test_collector_connection()
@@ -1785,6 +1815,7 @@ _IO_MAPPING_CACHE_MAX = 50  # 最多保留 50 筆 mapping 結果，超過則淘�
 async def io_mapping_execute(
     a_file: UploadFile = File(...),
     b_file: UploadFile = File(...),
+    user: dict = Depends(require_role("admin", "operator")),
 ):
     """上傳 IO List (A) 與 iFIX 導出表 (B)，執行 mapping"""
     a_bytes = await a_file.read()
@@ -1853,7 +1884,7 @@ async def io_mapping_execute(
 
 
 @app.get("/api/io-mapping/download/{mapping_id}")
-async def io_mapping_download(mapping_id: str):
+async def io_mapping_download(mapping_id: str, user: dict = Depends(get_current_user)):
     """下載 mapping 結果 CSV"""
     results = _io_mapping_cache.get(mapping_id)
     if not results:

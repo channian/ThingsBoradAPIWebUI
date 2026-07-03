@@ -442,10 +442,10 @@
                         </select>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-                        <a href="/api/templates/delete" download class="btn btn-outline btn-sm" style="text-decoration:none">
+                        <button class="btn btn-outline btn-sm" @click="downloadDeleteTemplate">
                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:13px;height:13px"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 13h10"/></svg>
                             下載 CSV 範例
-                        </a>
+                        </button>
                         <span style="font-size:12px;color:var(--ink-3)">CSV 需含 name, type 欄位</span>
                     </div>
                     <div class="upload-zone" @dragover.prevent @drop.prevent="onDeleteDrop" @click="$refs.deleteFileInput.click()" style="margin-bottom:16px">

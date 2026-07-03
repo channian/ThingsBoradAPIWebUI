@@ -20,7 +20,17 @@ log = logging.getLogger("auth")
 
 # ── 設定 ──────────────────────────────────────────────
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "kepitsimple-default-secret-change-me")
+_env_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+if _env_secret:
+    SECRET_KEY = _env_secret
+else:
+    # 未設定 JWT_SECRET_KEY：產生臨時隨機金鑰。
+    # 重啟後金鑰會改變，所有既有 Token 會失效；正式環境務必設定 JWT_SECRET_KEY。
+    SECRET_KEY = secrets.token_hex(32)
+    log.warning(
+        "未設定環境變數 JWT_SECRET_KEY，已產生臨時隨機金鑰；"
+        "服務重啟後所有 Token 將失效，正式環境請務必設定 JWT_SECRET_KEY。"
+    )
 TOKEN_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
 VALID_ROLES = ("admin", "operator", "user")
@@ -86,10 +96,12 @@ def decode_token(token: str) -> dict:
 # ── FastAPI 依賴注入 ─────────────────────────────────
 
 def _extract_token(request: Request) -> Optional[str]:
+    # 僅接受 Authorization: Bearer <token> 標頭；
+    # 已移除 query string token 支援（會外洩到存取記錄，且前端下載已改用帶認證的 fetch）。
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:]
-    return request.query_params.get("token")
+    return None
 
 
 def get_current_user(request: Request) -> dict:
@@ -115,3 +127,47 @@ def require_role(*allowed_roles):
             )
         return user
     return _check
+
+
+# ── 登入失敗鎖定（記憶體內、防暴力破解）────────────────
+
+# 每個帳號的失敗紀錄：username -> (失敗次數, 視窗起始時間 epoch)
+_LOGIN_FAILURES: "dict[str, tuple[int, float]]" = {}
+
+LOGIN_MAX_ATTEMPTS = 5        # 視窗內達此次數即鎖定
+LOGIN_LOCKOUT_SECONDS = 300   # 鎖定/計數視窗長度（5 分鐘）
+
+
+def check_login_allowed(username: str) -> None:
+    """若該帳號因連續登入失敗而被鎖定，raise HTTPException(status_code=429)。鎖定期滿後自動解除。"""
+    rec = _LOGIN_FAILURES.get(username)
+    if not rec:
+        return
+    count, window_start = rec
+    elapsed = time.time() - window_start
+    if elapsed >= LOGIN_LOCKOUT_SECONDS:
+        # 視窗已過期，視為全新狀態
+        _LOGIN_FAILURES.pop(username, None)
+        return
+    if count >= LOGIN_MAX_ATTEMPTS:
+        remaining = int(LOGIN_LOCKOUT_SECONDS - elapsed) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"登入失敗次數過多，帳號已暫時鎖定，請於 {remaining} 秒後再試。",
+        )
+
+
+def record_login_failure(username: str) -> None:
+    """記錄一次登入失敗。累積達上限即進入鎖定。"""
+    now = time.time()
+    rec = _LOGIN_FAILURES.get(username)
+    if not rec or (now - rec[1]) >= LOGIN_LOCKOUT_SECONDS:
+        # 尚無紀錄或視窗已過期：開啟新的計數視窗
+        _LOGIN_FAILURES[username] = (1, now)
+    else:
+        _LOGIN_FAILURES[username] = (rec[0] + 1, rec[1])
+
+
+def reset_login_failures(username: str) -> None:
+    """登入成功時呼叫，清除該帳號的失敗計數。"""
+    _LOGIN_FAILURES.pop(username, None)
