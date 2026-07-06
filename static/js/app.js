@@ -66,9 +66,9 @@ createApp({
             structureSync.counts = null
             Object.assign(imp, { fileName: null, totalRows: 0, headers: [], preview: [], importing: false, result: null, uploadId: null })
             Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false, deleting: false, selectedIds: [] })
-            Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null })
+            Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null, progress: null })
             Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
-            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null })
+            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null, progress: null })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
             Object.assign(pgConn, { testing: false, status: '', statusText: '未連線' })
             Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
@@ -328,7 +328,10 @@ createApp({
         }
 
         // Step 3: Kepware Derive + Execute
-        const kwDerive = reactive({ data: [], loading: false, executing: false, savingOverrides: false, result: null })
+        const kwDerive = reactive({
+            data: [], loading: false, executing: false, savingOverrides: false, result: null,
+            delay: 0.2, batchSize: 50, batchPause: 5, progress: null,
+        })
 
         function _stampKwOrig(row) {
             row._origChannel = row.channel_name || ''
@@ -396,18 +399,49 @@ createApp({
         async function executeKw() {
             if (!kwDerive.data.length) return
             if (!confirm(`確定要建立 ${kwDerive.data.length} 筆 Tag 到 Kepware？`)) return
-            kwDerive.executing = true; kwDerive.result = null
+            if (!selectedGwId.value) return
+            kwDerive.executing = true; kwDerive.result = null; kwDerive.progress = null
             try {
-                const body = { delay: 0.2, batch_size: 50, batch_pause: 5 }
+                const body = { delay: kwDerive.delay, batch_size: kwDerive.batchSize, batch_pause: kwDerive.batchPause }
                 if (selectedGwId.value) body.gateway_id = selectedGwId.value
                 const resp = await fetch('/api/kw/execute', {
                     method: 'POST', headers: _headers(), body: JSON.stringify(body),
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                kwDerive.result = await resp.json()
-                await deriveKw()
-            } catch (e) { kwDerive.result = { success: 0, failed: 1, message: e.message } }
-            finally { kwDerive.executing = false }
+                const data = await resp.json()
+                const taskId = data.task_id
+                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
+                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
+                const poll = async () => {
+                    if (++attempts > 600) {
+                        alert('建點任務逾時，請至「歷史」分頁確認結果')
+                        kwDerive.executing = false; kwDerive.progress = null
+                        return
+                    }
+                    try {
+                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
+                        if (!sr.ok) {
+                            if (++errors >= 5) { alert('無法取得建點任務狀態，請至「歷史」分頁確認'); kwDerive.executing = false; kwDerive.progress = null; return }
+                            setTimeout(poll, 1000); return
+                        }
+                        errors = 0
+                        const st = await sr.json()
+                        kwDerive.progress = st.progress || null
+                        if (st.done) {
+                            kwDerive.result = st.summary
+                            kwDerive.executing = false
+                            kwDerive.progress = null
+                            await deriveKw()
+                        } else {
+                            setTimeout(poll, 1000)
+                        }
+                    } catch (e) {
+                        if (++errors >= 5) { alert('輪詢建點狀態失敗: ' + e.message); kwDerive.executing = false; kwDerive.progress = null; return }
+                        setTimeout(poll, 1000)
+                    }
+                }
+                poll()
+            } catch (e) { alert('建點失敗: ' + e.message); kwDerive.executing = false; kwDerive.progress = null }
         }
 
         function rowStatus(v) {
@@ -450,7 +484,10 @@ createApp({
         }
 
         // Step 5: Scale
-        const scaleDerive = reactive({ data: [], loading: false, executing: false, result: null })
+        const scaleDerive = reactive({
+            data: [], loading: false, executing: false, result: null,
+            delay: 0.2, batchSize: 50, batchPause: 5, progress: null,
+        })
 
         async function deriveScale() {
             scaleDerive.loading = true; scaleDerive.result = null
@@ -469,18 +506,49 @@ createApp({
         async function executeScale() {
             if (!scaleDerive.data.length) return
             if (!confirm(`確定要設定 ${scaleDerive.data.length} 筆 Tag 的 Scale？`)) return
-            scaleDerive.executing = true; scaleDerive.result = null
+            if (!selectedGwId.value) return
+            scaleDerive.executing = true; scaleDerive.result = null; scaleDerive.progress = null
             try {
-                const body = { delay: 0.2, batch_size: 50, batch_pause: 5 }
+                const body = { delay: scaleDerive.delay, batch_size: scaleDerive.batchSize, batch_pause: scaleDerive.batchPause }
                 if (selectedGwId.value) body.gateway_id = selectedGwId.value
                 const resp = await fetch('/api/pg/execute/scale', {
                     method: 'POST', headers: _headers(), body: JSON.stringify(body),
                 })
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                scaleDerive.result = await resp.json()
-                await deriveScale()
-            } catch (e) { scaleDerive.result = { success: 0, failed: 1, message: e.message } }
-            finally { scaleDerive.executing = false }
+                const data = await resp.json()
+                const taskId = data.task_id
+                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
+                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
+                const poll = async () => {
+                    if (++attempts > 600) {
+                        alert('Scale 設定任務逾時，請至「歷史」分頁確認結果')
+                        scaleDerive.executing = false; scaleDerive.progress = null
+                        return
+                    }
+                    try {
+                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
+                        if (!sr.ok) {
+                            if (++errors >= 5) { alert('無法取得 Scale 設定任務狀態，請至「歷史」分頁確認'); scaleDerive.executing = false; scaleDerive.progress = null; return }
+                            setTimeout(poll, 1000); return
+                        }
+                        errors = 0
+                        const st = await sr.json()
+                        scaleDerive.progress = st.progress || null
+                        if (st.done) {
+                            scaleDerive.result = st.summary
+                            scaleDerive.executing = false
+                            scaleDerive.progress = null
+                            await deriveScale()
+                        } else {
+                            setTimeout(poll, 1000)
+                        }
+                    } catch (e) {
+                        if (++errors >= 5) { alert('輪詢 Scale 設定狀態失敗: ' + e.message); scaleDerive.executing = false; scaleDerive.progress = null; return }
+                        setTimeout(poll, 1000)
+                    }
+                }
+                poll()
+            } catch (e) { alert('Scale 設定失敗: ' + e.message); scaleDerive.executing = false; scaleDerive.progress = null }
         }
 
         // Step 6: Collector

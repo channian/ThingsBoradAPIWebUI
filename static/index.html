@@ -279,6 +279,28 @@
                                 {{ kwDerive.executing ? '建點中…' : '執行建點' }}
                             </button>
                         </div>
+                        <div v-if="kwDerive.data.length">
+                            <!-- 限速設定 -->
+                            <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px;padding:10px 14px;background:var(--soft);border:1px solid var(--line);border-radius:8px;flex-wrap:wrap">
+                                <span style="font-size:12px;font-weight:600;color:var(--ink-3)">限速設定</span>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    每筆間隔 (s)
+                                    <input type="number" class="input" v-model.number="kwDerive.delay" min="0" max="10" step="0.1" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    批次大小
+                                    <input type="number" class="input" v-model.number="kwDerive.batchSize" min="1" max="200" step="1" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    批次暫停 (s)
+                                    <input type="number" class="input" v-model.number="kwDerive.batchPause" min="0" max="60" step="0.5" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                            </div>
+                        </div>
+                        <div v-if="kwDerive.executing && kwDerive.progress" class="progress" style="margin-bottom:12px">
+                            <div class="progress-fill" :style="{ width: (kwDerive.progress.total ? (kwDerive.progress.current / kwDerive.progress.total * 100) : 0) + '%' }"></div>
+                            <div class="progress-text">{{ kwDerive.progress.current }} / {{ kwDerive.progress.total }}（成功 {{ kwDerive.progress.success }}，失敗 {{ kwDerive.progress.fail }}）</div>
+                        </div>
                         <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
                             <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
                                 <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
@@ -313,7 +335,7 @@
                             </table>
                         </div>
                         <div v-if="kwDerive.result" style="margin-top:12px;padding:10px;border-radius:8px;background:var(--ok-soft)">
-                            建點完成：成功 {{ kwDerive.result.success }} 筆，失敗 {{ kwDerive.result.failed }} 筆
+                            建點完成：成功 {{ kwDerive.result.success }} 筆，失敗 {{ kwDerive.result.fail }} 筆
                         </div>
                     </div>
                 </div>
@@ -380,6 +402,28 @@
                                 {{ scaleDerive.executing ? '設定中…' : '執行 Scale' }}
                             </button>
                         </div>
+                        <div v-if="scaleDerive.data.length">
+                            <!-- 限速設定 -->
+                            <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px;padding:10px 14px;background:var(--soft);border:1px solid var(--line);border-radius:8px;flex-wrap:wrap">
+                                <span style="font-size:12px;font-weight:600;color:var(--ink-3)">限速設定</span>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    每筆間隔 (s)
+                                    <input type="number" class="input" v-model.number="scaleDerive.delay" min="0" max="10" step="0.1" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    批次大小
+                                    <input type="number" class="input" v-model.number="scaleDerive.batchSize" min="1" max="200" step="1" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)">
+                                    批次暫停 (s)
+                                    <input type="number" class="input" v-model.number="scaleDerive.batchPause" min="0" max="60" step="0.5" style="width:70px;font-size:12px;padding:4px 8px">
+                                </label>
+                            </div>
+                        </div>
+                        <div v-if="scaleDerive.executing && scaleDerive.progress" class="progress" style="margin-bottom:12px">
+                            <div class="progress-fill" :style="{ width: (scaleDerive.progress.total ? (scaleDerive.progress.current / scaleDerive.progress.total * 100) : 0) + '%' }"></div>
+                            <div class="progress-text">{{ scaleDerive.progress.current }} / {{ scaleDerive.progress.total }}（成功 {{ scaleDerive.progress.success }}，失敗 {{ scaleDerive.progress.fail }}）</div>
+                        </div>
                         <div v-if="scaleDerive.data.length" class="tbl-wrap">
                             <table>
                                 <thead><tr><th>Tag</th><th>Channel</th><th>Device</th><th>Scale</th><th>Raw Low</th><th>Raw High</th><th>Scaled Low</th><th>Scaled High</th></tr></thead>
@@ -397,7 +441,7 @@
                             </table>
                         </div>
                         <div v-if="scaleDerive.result" style="margin-top:12px;padding:10px;border-radius:8px;background:var(--ok-soft)">
-                            Scale 設定完成：成功 {{ scaleDerive.result.success }} 筆，失敗 {{ scaleDerive.result.failed }} 筆
+                            Scale 設定完成：成功 {{ scaleDerive.result.success }} 筆，失敗 {{ scaleDerive.result.fail }} 筆
                         </div>
                     </div>
                 </div>
