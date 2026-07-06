@@ -184,8 +184,11 @@ curl -X POST http://localhost:9000/api/user/change-password \
 
 ```bash
 curl -X POST http://localhost:9000/api/csv/upload \
+  -H "Authorization: Bearer $TOKEN" \
   -F "file=@kepware_tags.csv"
 ```
+
+> ⚠️ 需要 JWT（admin / operator）。
 
 ---
 
@@ -231,7 +234,7 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 
 #### POST /api/pg/staging/query
 
-分頁查詢暫存表（不需 JWT）。
+分頁查詢暫存表。**需要 JWT**（任何已登入角色）。
 
 **Request Body**
 
@@ -286,7 +289,7 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 
 #### POST /api/pg/staging/status
 
-批次更新暫存表狀態欄位。
+批次更新暫存表狀態欄位。**需要 JWT（admin / operator）**
 
 **Request Body**
 
@@ -886,7 +889,7 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ## 5. PG 參照表
 
-參照表提供 Kepware 匯入推導用的對照資料，無需 JWT。
+參照表提供 Kepware 匯入推導用的對照資料。**GET 需要 JWT（任何已登入角色）；POST 需要 JWT（admin / operator）。**
 
 ### GET /api/pg/ref/locations
 
@@ -897,6 +900,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 ```
 
 ### POST /api/pg/ref/locations
+
+**需要 JWT（admin / operator）**
 
 ```json
 { "bu": "CIM", "site": "K8", "zone": "A" }
@@ -913,6 +918,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 ```
 
 ### POST /api/pg/ref/ownerships
+
+**需要 JWT（admin / operator）**
 
 ```json
 { "department": "Facilities", "data_owner": "FM Team" }
@@ -938,6 +945,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ### POST /api/pg/ref/devices
 
+**需要 JWT（admin / operator）**
+
 ```json
 {
   "device_name": "CHS",
@@ -961,6 +970,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ### POST /api/pg/ref/systems
 
+**需要 JWT（admin / operator）**
+
 ```json
 { "system_code": "CHS", "system_name": "Chiller", "description": "冷凍主機系統" }
 ```
@@ -976,6 +987,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 ```
 
 ### POST /api/pg/ref/tb-profiles
+
+**需要 JWT（admin / operator）**
 
 ```json
 { "name": "K8CHS-CHS-2F-CHS", "description": "" }
@@ -1013,7 +1026,7 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ### POST /api/pg/ref/delete
 
-刪除任一參照表的指定資料列。
+刪除任一參照表的指定資料列。**需要 JWT（admin / operator）**
 
 ```json
 {
@@ -1028,7 +1041,7 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ### GET /api/pg/test
 
-測試 PostgreSQL 連線狀態。
+測試 PostgreSQL 連線狀態。**需要 JWT**（任何已登入角色）。
 
 **Response 200**
 
@@ -1047,7 +1060,8 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 ### POST /api/io-mapping/execute
 
 上傳 IO List（A 檔）與 iFIX 導出表（B 檔），執行 Tag Name join mapping。  
-**Content-Type**: `multipart/form-data`
+**Content-Type**: `multipart/form-data`  
+**需要 JWT（admin / operator）**
 
 **Request Form Data**
 
@@ -1089,6 +1103,7 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ```bash
 curl -X POST http://localhost:9000/api/io-mapping/execute \
+  -H "Authorization: Bearer $TOKEN" \
   -F "a_file=@io_list.csv" \
   -F "b_file=@ifix_export.csv"
 ```
@@ -1097,10 +1112,11 @@ curl -X POST http://localhost:9000/api/io-mapping/execute \
 
 ### GET /api/io-mapping/download/{mapping_id}
 
-下載 mapping 結果 CSV（UTF-8 BOM，Excel 相容）。
+下載 mapping 結果 CSV（UTF-8 BOM，Excel 相容）。**需要 JWT**（任何已登入角色）。
 
 ```bash
 curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
+  -H "Authorization: Bearer $TOKEN" \
   -o IO_Mapping_Result.csv
 ```
 
@@ -1289,7 +1305,8 @@ curl -N http://localhost:9000/api/tasks/a3f7b2c1d9e4f580/stream
 
 ## 8. 設定管理（Config）
 
-本節管理 `data/config.json`（TB 直接建點用的下拉選項、預設值、映射規則）。
+本節管理 `data/config.json`（TB 直接建點用的下拉選項、預設值、映射規則；
+v3 UI 已不使用此套設定，屬遺留端點）。**本節全部端點皆需要 JWT（admin only）。**
 
 ### GET /api/config
 
@@ -1381,13 +1398,20 @@ curl -N http://localhost:9000/api/tasks/a3f7b2c1d9e4f580/stream
 
 | 變數名稱 | 預設值 | 說明 |
 |---------|--------|------|
-| `JWT_SECRET_KEY` | `kepitsimple-default-secret-change-me` | JWT 簽名金鑰（正式環境務必修改） |
-| `JWT_EXPIRE_HOURS` | `24` | Token 有效時數 |
-| `LOG_CLEANUP_DAYS` | `7` | 日誌保留天數（每週一 3AM 自動清理） |
-| `ADMIN_USERNAME` | `admin` | 初始管理員帳號 |
-| `ADMIN_PASSWORD` | `admin` | 初始管理員密碼 |
-| `PG_HOST` | — | PostgreSQL 主機 |
-| `PG_PORT` | `5432` | PostgreSQL 端口 |
-| `PG_DB` | — | 資料庫名稱 |
+| `JWT_SECRET_KEY` | *(無公開預設值)* | JWT 簽名金鑰。**留空或未設定時，啟動會自動產生一組臨時隨機金鑰並記錄警告**——服務每次重啟都會換金鑰，導致所有既有 Token 失效（使用者需重新登入）。正式環境務必設定固定值。**注意**：`.env` 中若寫成 `JWT_SECRET_KEY=`（有此行但值為空），效果等同未設定，一樣會觸發臨時金鑰。 |
+| `JWT_EXPIRE_HOURS` | `24` | Token 有效時數。`.env` 留空同樣視為未設定，套用預設值 24（不會因空字串而噴錯）。 |
+| `KW_ENCRYPT_KEY` | `kepitsimple-default-encrypt-key`（不安全預設值，僅記錄警告，不會像 JWT 一樣自動產生隨機值） | 加密「已持久化在 DB 中的 Gateway 密碼」用的金鑰。**務必設定為隨機字串**；未設定時任何取得原始碼者皆可解密資料庫中已儲存的 Gateway 密碼。設定/變更此金鑰後，既有 Gateway 密碼需在設定頁重新輸入一次（金鑰不符時系統會回傳清楚的 400 提示，不是不明的 500）。 |
+| `LOG_CLEANUP_DAYS` | `7` | 日誌保留天數（每週一 3AM 自動清理）。`.env` 留空視為未設定，套用預設值。 |
+| `ADMIN_USERNAME` | `admin` | 初始管理員帳號（僅在資料庫尚無任何使用者時建立一次）。`.env` 留空視為未設定，套用預設值。 |
+| `ADMIN_PASSWORD` | `admin` | 初始管理員密碼。**`.env` 中若寫成 `ADMIN_PASSWORD=`（有此行但值為空），現已視為未設定並套用預設值 `admin`**（先前版本會直接以空字串當密碼，屬安全性問題，已修正）。 |
+| `PG_HOST` | `localhost` | PostgreSQL 主機 |
+| `PG_PORT` | `5432` | PostgreSQL 端口。`.env` 留空視為未設定，套用預設值（不會因空字串而噴錯）。 |
+| `PG_CONNECT_TIMEOUT` | `10` | PostgreSQL 連線逾時秒數。`.env` 留空同樣視為未設定。 |
+| `PG_DATABASE` | — | 資料庫名稱 |
 | `PG_USER` | — | 資料庫使用者 |
 | `PG_PASSWORD` | — | 資料庫密碼 |
+
+> **關於「.env 有此行但值留空」**：`os.getenv("X", default)` 只在環境變數**完全不存在**時才回傳 `default`；
+> 若 `.env` 寫了 `X=`（有這一行、但等號後面沒填值），`os.getenv` 會回傳**空字串**而非 `default`。
+> 上表中標註「留空視為未設定」的變數，程式碼已額外處理這個情境（空字串一律視為未設定、套用預設值）；
+> 未特別標註的變數（如 `PG_DATABASE`）目前仍會直接使用空字串。

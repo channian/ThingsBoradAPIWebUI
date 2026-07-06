@@ -36,8 +36,25 @@ from app.auth import (
 from cryptography.fernet import Fernet, InvalidToken
 import base64, hashlib
 
+_kw_key_warned = False
+
+
 def _get_fernet() -> Fernet:
-    raw_key = os.getenv("KW_ENCRYPT_KEY", "kepitsimple-default-encrypt-key")
+    global _kw_key_warned
+    raw_key = os.getenv("KW_ENCRYPT_KEY", "").strip()
+    if not raw_key:
+        raw_key = "kepitsimple-default-encrypt-key"
+        if not _kw_key_warned:
+            # 與 JWT_SECRET_KEY 同類風險，但此金鑰用於加密「已持久化在 DB 的 Gateway 密碼」，
+            # 不能像 JWT 一樣隨機產生臨時金鑰（否則每次重啟都會讓既有 Gateway 密碼全部解密失敗）。
+            # 故僅記錄警告、沿用內建預設值；正式環境應設定 KW_ENCRYPT_KEY 並在設定頁重新輸入一次
+            # 既有 Gateway 密碼（金鑰不符時系統已會回傳清楚的 400 提示，不會是不明的 500）。
+            logging.getLogger("main").warning(
+                "未設定環境變數 KW_ENCRYPT_KEY，使用程式碼內建的公開預設金鑰加密 Gateway 密碼；"
+                "任何取得原始碼者皆可解密資料庫中已儲存的 Gateway 密碼。"
+                "正式環境請務必設定 KW_ENCRYPT_KEY（設定後既有 Gateway 密碼需在設定頁重新輸入一次）。"
+            )
+            _kw_key_warned = True
     key = base64.urlsafe_b64encode(hashlib.sha256(raw_key.encode()).digest())
     return Fernet(key)
 
@@ -148,8 +165,10 @@ def _ensure_admin_user():
     """啟動時確保至少有一個 admin 帳號"""
     try:
         if pg_client.count_users() == 0:
-            admin_user = os.getenv("ADMIN_USERNAME", "admin")
-            admin_pass = os.getenv("ADMIN_PASSWORD", "admin")
+            # .env 中若寫成 ADMIN_PASSWORD=（空值），os.getenv 會回傳空字串而非套用預設值，
+            # 導致初始管理員以空密碼建立；以 or 補一層防呆確保套用預設
+            admin_user = (os.getenv("ADMIN_USERNAME") or "").strip() or "admin"
+            admin_pass = (os.getenv("ADMIN_PASSWORD") or "").strip() or "admin"
             pg_client.create_user(
                 username=admin_user,
                 password_hash=hash_password(admin_pass),
@@ -171,7 +190,7 @@ def _log_activity(request, user: dict, action: str, detail: str = ""):
         log.warning(f"[activity_log] 寫入失敗: {e}")
 
 
-LOG_CLEANUP_DAYS = int(os.getenv("LOG_CLEANUP_DAYS", "7"))
+LOG_CLEANUP_DAYS = int((os.getenv("LOG_CLEANUP_DAYS") or "").strip() or "7")
 _cleanup_stop = threading.Event()
 
 

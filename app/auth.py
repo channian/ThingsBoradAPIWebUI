@@ -31,7 +31,7 @@ else:
         "未設定環境變數 JWT_SECRET_KEY，已產生臨時隨機金鑰；"
         "服務重啟後所有 Token 將失效，正式環境請務必設定 JWT_SECRET_KEY。"
     )
-TOKEN_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
+TOKEN_EXPIRE_HOURS = int((os.getenv("JWT_EXPIRE_HOURS") or "").strip() or "24")
 
 VALID_ROLES = ("admin", "operator", "user")
 

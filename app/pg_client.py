@@ -20,12 +20,14 @@ class PGClient:
     def __init__(self):
         self.conn_params = {
             "host": os.getenv("PG_HOST", "localhost"),
-            "port": int(os.getenv("PG_PORT", 5432)),
+            # .env 中若寫成 PG_PORT=（空值）會讓 os.getenv 回傳空字串而非套用預設值，
+            # int("") 將直接 crash，故以 or 補一層空字串防呆
+            "port": int((os.getenv("PG_PORT") or "").strip() or "5432"),
             "database": os.getenv("PG_DATABASE", ""),
             "user": os.getenv("PG_USER", ""),
             "password": os.getenv("PG_PASSWORD", ""),
             # 避免 PG 不可達時請求 thread 卡到 OS TCP timeout（預設約數分鐘）
-            "connect_timeout": int(os.getenv("PG_CONNECT_TIMEOUT", "10")),
+            "connect_timeout": int((os.getenv("PG_CONNECT_TIMEOUT") or "").strip() or "10"),
         }
 
     @contextmanager
