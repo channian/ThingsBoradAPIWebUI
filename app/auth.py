@@ -14,7 +14,8 @@ import secrets
 import logging
 from typing import Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 log = logging.getLogger("auth")
 
@@ -95,20 +96,20 @@ def decode_token(token: str) -> dict:
 
 # ── FastAPI 依賴注入 ─────────────────────────────────
 
-def _extract_token(request: Request) -> Optional[str]:
-    # 僅接受 Authorization: Bearer <token> 標頭；
-    # 已移除 query string token 支援（會外洩到存取記錄，且前端下載已改用帶認證的 fetch）。
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[7:]
-    return None
+# 用 FastAPI 的 HTTPBearer 安全性類別（而非手動解析 Request header）取得 token，
+# 讓 FastAPI 自動把「需要 Bearer Token」註冊進 OpenAPI schema——
+# 這樣 /docs（Swagger UI）才會出現「Authorize」鎖頭按鈕，可貼上登入取得的 token 統一測試；
+# auto_error=False 讓我們自行拋出與原本一致的 401 訊息，而非套件預設的錯誤格式。
+# 已移除 query string ?token= 支援（會外洩到存取記錄，且前端下載已改用帶認證的 fetch）。
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_current_user(request: Request) -> dict:
-    token = _extract_token(request)
-    if not token:
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> dict:
+    if not credentials:
         raise HTTPException(status_code=401, detail="未登入")
-    return decode_token(token)
+    return decode_token(credentials.credentials)
 
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
