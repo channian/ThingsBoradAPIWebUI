@@ -222,11 +222,11 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 - [x] P0-1B 解除 event loop 阻塞（kw/execute、pg/execute/scale 改同步 def）— commit `e84ce8f`
 - [x] P0-2 端點認證補齊（65 路由稽核，僅 / 與 login 公開）— commit `e84ce8f`
 - [x] P0-3 JWT 密鑰 / 登入鎖定 / query token 移除 — commit `e84ce8f`
-- [x] P0-1A execute 遷移背景任務 + 進度輪詢（後端 commit `2814206`；前端進行中）
+- [x] P0-1A execute 遷移背景任務 + 進度輪詢 — 後端 commit `2814206`，前端 commit `9d444ae`
 - [x] P1-1 page_size 截斷 — commit `2814206`
 - [x] P1-2 csv_uploads 清理 — commit `cd6d5ad`
 - [ ] P1-4 _apiFetch 統一
-- [ ] P1-5 Step 3/5 限速 UI（進行中，與 P0-1A 前端同批）
+- [x] P1-5 Step 3/5 限速 UI — commit `9d444ae`
 - [ ] P2-1 pytest + 推導測試
 - [ ] P2-2 main.py 拆 router
 - [ ] P2-3 app.js 模組化（低優先，需評估）
