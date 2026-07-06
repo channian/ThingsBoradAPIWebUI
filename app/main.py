@@ -15,6 +15,15 @@ import uuid
 import datetime
 from typing import Optional
 
+# 載入 .env：必須在任何 app.* 模組被匯入之前執行。
+# app.auth 在模組頂層直接計算 SECRET_KEY = os.getenv("JWT_SECRET_KEY", ...)，
+# 若 load_dotenv() 太晚呼叫（例如放在檔案後段），.env 內容根本還沒進 os.environ，
+# 即使 .env 有正確設定 JWT_SECRET_KEY 也永遠讀到空值，導致每次啟動都誤判為未設定
+# 並產生臨時隨機金鑰（重啟後所有 Token 失效）。
+from dotenv import load_dotenv
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
@@ -115,8 +124,8 @@ app.add_middleware(
 
 
 # ── 路徑常數 ──────────────────────────────────────────
+# （BASE_DIR 已在檔案最上方載入 .env 時定義）
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
@@ -154,9 +163,6 @@ def _csv_store_get(upload_id: str):
     except Exception:
         return None
 
-# 載入 .env
-from dotenv import load_dotenv
-load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 pg_client = PGClient()
 
