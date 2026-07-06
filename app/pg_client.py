@@ -7,6 +7,7 @@ PostgreSQL 資料庫客戶端
 import os
 import logging
 from contextlib import contextmanager
+from typing import Optional
 
 import psycopg2
 import psycopg2.extras
@@ -263,12 +264,14 @@ class PGClient:
     def get_staging_list(
         self,
         page: int = 0,
-        page_size: int = 50,
+        page_size: Optional[int] = 50,
         tb_status: str = None,
         pg_status: str = None,
         scale_status: str = None,
     ) -> dict:
-        """分頁查詢暫存表"""
+        """分頁查詢暫存表。page_size=None 代表不分頁、取回全部符合條件的資料
+        （供 execute 類端點抓「所有 pending 資料」使用，避免用 page_size=9999
+        這種魔術數字在超過筆數時靜默截斷）。"""
         conditions = []
         params = []
 
@@ -283,7 +286,6 @@ class PGClient:
             params.append(scale_status)
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        offset = page * page_size
 
         with self._get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -292,11 +294,18 @@ class PGClient:
                 )
                 total = cur.fetchone()["cnt"]
 
-                cur.execute(
-                    f"""SELECT * FROM scada_tag_config {where}
-                    ORDER BY id ASC LIMIT %s OFFSET %s""",
-                    params + [page_size, offset],
-                )
+                if page_size is None:
+                    cur.execute(
+                        f"SELECT * FROM scada_tag_config {where} ORDER BY id ASC",
+                        params,
+                    )
+                else:
+                    offset = page * page_size
+                    cur.execute(
+                        f"""SELECT * FROM scada_tag_config {where}
+                        ORDER BY id ASC LIMIT %s OFFSET %s""",
+                        params + [page_size, offset],
+                    )
                 rows = cur.fetchall()
 
         return {
@@ -304,7 +313,9 @@ class PGClient:
             "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+            "total_pages": 1 if page_size is None else (
+                (total + page_size - 1) // page_size if total > 0 else 0
+            ),
         }
 
     def update_staging_status(self, ids: list, field: str, status: str):
