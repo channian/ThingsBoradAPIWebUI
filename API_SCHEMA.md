@@ -1410,6 +1410,9 @@ v3 UI 已不使用此套設定，屬遺留端點）。**本節全部端點皆需
 | `PG_DATABASE` | — | 資料庫名稱 |
 | `PG_USER` | — | 資料庫使用者 |
 | `PG_PASSWORD` | — | 資料庫密碼 |
+| `CSV_UPLOAD_MAX_BYTES` | `10485760`（10MB） | 單檔 CSV 上傳大小上限，超過回 400。`.env` 留空視為未設定，套用預設值。 |
+| `CSV_UPLOAD_MAX_ROWS` | `50000` | 單檔 CSV 資料筆數上限，超過回 400。`.env` 留空視為未設定，套用預設值。 |
+| `CSV_UPLOAD_CLEANUP_DAYS` | `30` | 暫存 CSV 上傳檔（`data/csv_uploads/`）保留天數，超過即於每週一凌晨 3 點清理排程中刪除。`.env` 留空視為未設定，套用預設值。 |
 
 > **關於「.env 有此行但值留空」**：`os.getenv("X", default)` 只在環境變數**完全不存在**時才回傳 `default`；
 > 若 `.env` 寫了 `X=`（有這一行、但等號後面沒填值），`os.getenv` 會回傳**空字串**而非 `default`。

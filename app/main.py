@@ -11,6 +11,7 @@ import logging
 import os
 import requests
 import threading
+import time
 import uuid
 import datetime
 from typing import Optional
@@ -144,6 +145,12 @@ task_manager = TaskManager()
 CSV_STORE_DIR = os.path.join(DATA_DIR, "csv_uploads")
 os.makedirs(CSV_STORE_DIR, exist_ok=True)
 
+# 單檔上傳大小/筆數上限，避免惡意或誤傳的超大檔案塞爆磁碟/記憶體
+CSV_UPLOAD_MAX_BYTES = int((os.getenv("CSV_UPLOAD_MAX_BYTES") or "").strip() or str(10 * 1024 * 1024))
+CSV_UPLOAD_MAX_ROWS = int((os.getenv("CSV_UPLOAD_MAX_ROWS") or "").strip() or "50000")
+# 暫存檔保留天數，超過即視為過期並於每週清理排程中一併刪除
+CSV_UPLOAD_CLEANUP_DAYS = int((os.getenv("CSV_UPLOAD_CLEANUP_DAYS") or "").strip() or "30")
+
 
 def _csv_store_put(upload_id: str, rows: list):
     """將 CSV 資料寫入暫存檔"""
@@ -200,8 +207,25 @@ LOG_CLEANUP_DAYS = int((os.getenv("LOG_CLEANUP_DAYS") or "").strip() or "7")
 _cleanup_stop = threading.Event()
 
 
-def _weekly_log_cleanup():
-    """每週清理過期日誌的背景執行緒"""
+def _cleanup_csv_uploads(days: int) -> int:
+    """刪除超過指定天數的暫存 CSV 上傳檔（依檔案 mtime 判斷），避免無限累積佔用磁碟"""
+    cutoff = time.time() - days * 86400
+    deleted = 0
+    for name in os.listdir(CSV_STORE_DIR):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(CSV_STORE_DIR, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                deleted += 1
+        except OSError as e:
+            log.warning(f"[cleanup] 刪除過期上傳檔失敗 {name}: {e}")
+    return deleted
+
+
+def _weekly_cleanup():
+    """每週清理過期日誌 + 過期 CSV 上傳暫存檔的背景執行緒"""
     while not _cleanup_stop.wait(timeout=3600):
         now = datetime.datetime.now()
         if now.weekday() == 0 and now.hour == 3:
@@ -210,14 +234,19 @@ def _weekly_log_cleanup():
                 log.info(f"[cleanup] 每週日誌清理完成，清除 {count} 筆")
             except Exception as e:
                 log.warning(f"[cleanup] 日誌清理失敗: {e}")
+            try:
+                count = _cleanup_csv_uploads(CSV_UPLOAD_CLEANUP_DAYS)
+                log.info(f"[cleanup] 每週 CSV 上傳暫存檔清理完成，清除 {count} 筆")
+            except Exception as e:
+                log.warning(f"[cleanup] CSV 上傳暫存檔清理失敗: {e}")
 
 
 @app.on_event("startup")
 async def on_startup():
     _ensure_admin_user()
-    t = threading.Thread(target=_weekly_log_cleanup, daemon=True)
+    t = threading.Thread(target=_weekly_cleanup, daemon=True)
     t.start()
-    log.info("[cleanup] 日誌清理排程已啟動（每週一凌晨 3 點）")
+    log.info("[cleanup] 每週清理排程已啟動（每週一凌晨 3 點，含日誌與 CSV 上傳暫存檔）")
 
 
 @app.on_event("shutdown")
@@ -635,6 +664,12 @@ async def upload_csv(file: UploadFile = File(...),
     """上傳 CSV 檔案，解析後暫存並回傳預覽"""
     content_bytes = await file.read()
 
+    if len(content_bytes) > CSV_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"檔案大小超過上限（{CSV_UPLOAD_MAX_BYTES // (1024*1024)}MB），請分批上傳",
+        )
+
     # 自動偵測編碼 (UTF-8-BOM > UTF-8 > Big5)
     rows = None
     headers = None
@@ -652,6 +687,12 @@ async def upload_csv(file: UploadFile = File(...),
 
     if rows is None or headers is None:
         raise HTTPException(status_code=400, detail="無法解析 CSV 檔案，請確認編碼格式")
+
+    if len(rows) > CSV_UPLOAD_MAX_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"資料筆數超過上限（{CSV_UPLOAD_MAX_ROWS} 筆），請分批上傳",
+        )
 
     # 清理標頭中的 BOM 與空白
     headers = [h.strip() for h in headers if h and h.strip()]
