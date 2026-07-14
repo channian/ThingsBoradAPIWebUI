@@ -330,7 +330,7 @@ createApp({
         // Step 3: Kepware Derive + Execute
         const kwDerive = reactive({
             data: [], loading: false, executing: false, savingOverrides: false, result: null,
-            delay: 0.2, batchSize: 50, batchPause: 5, progress: null,
+            delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
         })
 
         function _stampKwOrig(row) {
@@ -486,7 +486,7 @@ createApp({
         // Step 5: Scale
         const scaleDerive = reactive({
             data: [], loading: false, executing: false, result: null,
-            delay: 0.2, batchSize: 50, batchPause: 5, progress: null,
+            delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
         })
 
         async function deriveScale() {
@@ -583,7 +583,7 @@ createApp({
         const delState = reactive({
             fileName: null, totalRows: 0, uploadId: null,
             dryRun: true, executing: false, result: null,
-            delay: 0.2, batchSize: 50, batchPause: 5,
+            delay: 1.1, batchSize: 50, batchPause: 5,
         })
 
         function handleDeleteFile(e) {
@@ -645,7 +645,7 @@ createApp({
                         errors = 0
                         const st = await sr.json()
                         if (st.done) {
-                            delState.result = { success: st.summary?.success || 0, fail: st.summary?.fail || 0 }
+                            delState.result = { success: st.summary?.success || 0, fail: st.summary?.fail || 0, errors: st.summary?.errors || [] }
                             delState.executing = false
                         } else {
                             setTimeout(poll, 1000)

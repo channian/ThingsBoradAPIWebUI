@@ -294,6 +294,51 @@ def _append_history(task):
     log.info(f"歷史紀錄已儲存: {task.type} | {task.csv_filename}")
 
 
+# ── Kepware 429 限速退避 ─────────────────────────────
+
+def _retry_after_seconds(resp, default_wait: float) -> float:
+    """從 429 回應取得建議等待秒數：優先 Retry-After 標頭，其次 JSON body 的
+    retry_after 欄位，都沒有才用 default_wait。上限 120 秒避免任務停滯過久。"""
+    wait = None
+    try:
+        ra = (resp.headers.get("Retry-After") or "").strip()
+        if ra:
+            wait = float(ra)
+    except Exception:
+        wait = None
+    if wait is None:
+        try:
+            wait = float(resp.json().get("retry_after"))
+        except Exception:
+            wait = None
+    if wait is None:
+        wait = default_wait
+    return max(1.0, min(wait, 120.0))
+
+
+def _kw_call_with_429_retry(task, desc: str, fn, max_retries: int = 3, default_wait: float = 5.0):
+    """呼叫 Kepware API，遇 429 依伺服器建議時間等待後重試（最多 max_retries 次）。
+
+    Kepware API Gateway 的限速是滑動視窗制（預設 60 次/分鐘），視窗要等舊請求
+    過期才會釋放額度——固定等 5 秒重試幾乎必定再撞、且會造成後續連環失敗。
+    429 回應帶有 Retry-After 標頭指出額度何時釋出，故以它為準。
+    非 429 的錯誤原樣拋出，由呼叫端處理（409 已存在、404 不存在等）。"""
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except requests.HTTPError as e:
+            if (e.response is not None and e.response.status_code == 429
+                    and attempt < max_retries):
+                wait = _retry_after_seconds(e.response, default_wait)
+                attempt += 1
+                task.push_log("warning",
+                              f"{desc} 收到 429 限速，暫停 {wait:.0f} 秒後重試（第 {attempt}/{max_retries} 次）")
+                time.sleep(wait)
+                continue
+            raise
+
+
 # ── 靜態檔案 ───────────────────────────────────────────
 
 @app.get("/")
@@ -427,7 +472,10 @@ class ExecuteKwRequest(BaseModel):
     kw_gw_username: Optional[str] = None
     kw_gw_password: Optional[str] = None
     ids: Optional[list] = None
-    delay: float = 0.2
+    # 預設 1.1 秒/筆：Kepware API Gateway 限速為滑動視窗 60 次/分鐘（per 帳號+路徑），
+    # 建點/Scale/刪除都打 /api/config/tags 共用同一額度；1.1 秒 ≈ 每分鐘 48 筆，留有安全餘裕。
+    # 若 Gateway 端調高限速，可透過 UI 限速設定或請求參數調低此值加速。
+    delay: float = 1.1
     batch_size: int = 50
     batch_pause: float = 5.0
 
@@ -447,7 +495,10 @@ class ExecuteScaleRequest(BaseModel):
     kw_gw_username: Optional[str] = None
     kw_gw_password: Optional[str] = None
     ids: Optional[list] = None
-    delay: float = 0.2
+    # 預設 1.1 秒/筆：Kepware API Gateway 限速為滑動視窗 60 次/分鐘（per 帳號+路徑），
+    # 建點/Scale/刪除都打 /api/config/tags 共用同一額度；1.1 秒 ≈ 每分鐘 48 筆，留有安全餘裕。
+    # 若 Gateway 端調高限速，可透過 UI 限速設定或請求參數調低此值加速。
+    delay: float = 1.1
     batch_size: int = 50
     batch_pause: float = 5.0
 
@@ -459,7 +510,10 @@ class KwBatchDeleteRequest(BaseModel):
     kw_gw_username: Optional[str] = None
     kw_gw_password: Optional[str] = None
     dry_run: bool = True
-    delay: float = 0.2
+    # 預設 1.1 秒/筆：Kepware API Gateway 限速為滑動視窗 60 次/分鐘（per 帳號+路徑），
+    # 建點/Scale/刪除都打 /api/config/tags 共用同一額度；1.1 秒 ≈ 每分鐘 48 筆，留有安全餘裕。
+    # 若 Gateway 端調高限速，可透過 UI 限速設定或請求參數調低此值加速。
+    delay: float = 1.1
     batch_size: int = 50
     batch_pause: float = 5.0
 
@@ -1018,6 +1072,7 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
 
         total = len(derived)
         success = fail = 0
+        failed_items = []
         for idx, item in enumerate(derived, 1):
             tag = item["tag_name"]
             ch = item["channel_name"]
@@ -1029,7 +1084,9 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                 task.add_result(tag, "success", "預演")
             else:
                 try:
-                    client.delete_tag(ch, dev, tag, tag_group=grp)
+                    _kw_call_with_429_retry(
+                        task, f"刪除 {tag}",
+                        lambda ch=ch, dev=dev, tag=tag, grp=grp: client.delete_tag(ch, dev, tag, tag_group=grp))
                     task.push_log("success", f"[成功] 已刪除 Tag: {tag}")
                     success += 1
                     task.add_result(tag, "success", "")
@@ -1042,10 +1099,12 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                     else:
                         task.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
                         fail += 1
+                        failed_items.append({"name": tag, "reason": f"HTTP {status}"})
                         task.add_result(tag, "fail", f"HTTP {status}")
                 except Exception as e:
                     task.push_log("error", f"[異常] {tag}: {e}")
                     fail += 1
+                    failed_items.append({"name": tag, "reason": str(e)})
                     task.add_result(tag, "fail", str(e))
 
             task.push_progress(idx, total, success, fail, 0)
@@ -1053,7 +1112,8 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
             if success > 0 and success % params.get("batch_size", 50) == 0:
                 time.sleep(params.get("batch_pause", 5))
 
-        task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0})
+        task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0,
+                            "errors": failed_items})
 
     task_manager.run_in_background(task, _exec_kw_delete)
     return {"task_id": task.id}
@@ -1505,6 +1565,8 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
             return
 
         # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
+        # 注意：這段同樣受 Kepware 限速管制（/api/config/tag_groups 路徑），
+        # 必須與建 tag 迴圈一樣節流 + 429 退避，否則 group 一多就會開場連環 429
         unique_groups = {}
         for item in derived:
             ch, dev, grp = item["channel_name"], item["device_name"], item["tag_groups"]
@@ -1512,9 +1574,12 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
                 unique_groups[(ch, dev, grp)] = True
         for (ch, dev, grp) in unique_groups:
             try:
-                client.ensure_tag_groups(ch, dev, grp)
+                _kw_call_with_429_retry(
+                    task, f"Tag group {ch}/{dev}/{grp}",
+                    lambda ch=ch, dev=dev, grp=grp: client.ensure_tag_groups(ch, dev, grp))
             except Exception as e:
                 task.push_log("warning", f"Tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
+            time.sleep(delay + random.uniform(0.01, 0.05))
 
         success_ids = []
         failed = []
@@ -1522,14 +1587,16 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
         for idx, item in enumerate(derived, 1):
             tag = item["tag_name"]
             try:
-                client.create_tag(
-                    channel_name=item["channel_name"],
-                    device_name=item["device_name"],
-                    tag_name=tag,
-                    address=item.get("address") or None,
-                    description=item.get("description") or None,
-                    tag_group=item["tag_groups"] or None,
-                )
+                _kw_call_with_429_retry(
+                    task, f"Tag {tag}",
+                    lambda item=item: client.create_tag(
+                        channel_name=item["channel_name"],
+                        device_name=item["device_name"],
+                        tag_name=item["tag_name"],
+                        address=item.get("address") or None,
+                        description=item.get("description") or None,
+                        tag_group=item["tag_groups"] or None,
+                    ))
                 success_ids.append(item["id"])
                 success_count += 1
                 task.add_result(tag, "success", "")
@@ -1538,24 +1605,6 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
                     success_ids.append(item["id"])
                     success_count += 1
                     task.add_result(tag, "success", "已存在")
-                elif e.response is not None and e.response.status_code == 429:
-                    task.push_log("warning", f"收到 429 限速，暫停 {batch_pause} 秒")
-                    time.sleep(batch_pause)
-                    try:
-                        client.create_tag(
-                            channel_name=item["channel_name"],
-                            device_name=item["device_name"],
-                            tag_name=tag,
-                            address=item.get("address") or None,
-                            description=item.get("description") or None,
-                            tag_group=item["tag_groups"] or None,
-                        )
-                        success_ids.append(item["id"])
-                        success_count += 1
-                        task.add_result(tag, "success", "")
-                    except Exception as retry_e:
-                        failed.append({"name": tag, "reason": str(retry_e)})
-                        task.add_result(tag, "fail", str(retry_e))
                 else:
                     status = e.response.status_code if e.response is not None else "?"
                     text = e.response.text[:200] if e.response is not None else str(e)
@@ -1804,7 +1853,9 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
                 })
 
             try:
-                client.set_tag_scaling(config)
+                _kw_call_with_429_retry(
+                    task, f"Scale {tag_name}",
+                    lambda config=config: client.set_tag_scaling(config))
                 success_ids.append(item["id"])
                 success_count += 1
                 task.add_result(tag_name, "success", "")

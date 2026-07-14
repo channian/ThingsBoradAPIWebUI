@@ -334,8 +334,17 @@
                                 </tbody>
                             </table>
                         </div>
-                        <div v-if="kwDerive.result" style="margin-top:12px;padding:10px;border-radius:8px;background:var(--ok-soft)">
+                        <div v-if="kwDerive.result" style="margin-top:12px;padding:10px;border-radius:8px"
+                             :style="{ background: kwDerive.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
                             建點完成：成功 {{ kwDerive.result.success }} 筆，失敗 {{ kwDerive.result.fail }} 筆
+                            <div v-if="kwDerive.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
+                                <div v-for="(er, i) in kwDerive.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
+                                    {{ er.name || er.tag_name }}：{{ er.reason }}
+                                </div>
+                                <div v-if="kwDerive.result.errors.length > 10" style="color:var(--ink-3)">
+                                    …其餘 {{ kwDerive.result.errors.length - 10 }} 筆失敗未列出
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -440,8 +449,17 @@
                                 </tbody>
                             </table>
                         </div>
-                        <div v-if="scaleDerive.result" style="margin-top:12px;padding:10px;border-radius:8px;background:var(--ok-soft)">
+                        <div v-if="scaleDerive.result" style="margin-top:12px;padding:10px;border-radius:8px"
+                             :style="{ background: scaleDerive.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
                             Scale 設定完成：成功 {{ scaleDerive.result.success }} 筆，失敗 {{ scaleDerive.result.fail }} 筆
+                            <div v-if="scaleDerive.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
+                                <div v-for="(er, i) in scaleDerive.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
+                                    {{ er.name || er.tag_name }}：{{ er.reason }}
+                                </div>
+                                <div v-if="scaleDerive.result.errors.length > 10" style="color:var(--ink-3)">
+                                    …其餘 {{ scaleDerive.result.errors.length - 10 }} 筆失敗未列出
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -527,8 +545,17 @@
                             </button>
                         </div>
                     </div>
-                    <div v-if="delState.result" style="padding:10px;border-radius:8px;background:var(--ok-soft);margin-top:8px">
+                    <div v-if="delState.result" style="padding:10px;border-radius:8px;margin-top:8px"
+                         :style="{ background: delState.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
                         {{ delState.dryRun ? '預演' : '刪除' }}完成：{{ delState.result.success }} 筆成功，{{ delState.result.fail }} 筆失敗
+                        <div v-if="delState.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
+                            <div v-for="(er, i) in delState.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
+                                {{ er.name }}：{{ er.reason }}
+                            </div>
+                            <div v-if="delState.result.errors.length > 10" style="color:var(--ink-3)">
+                                …其餘 {{ delState.result.errors.length - 10 }} 筆失敗未列出
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
