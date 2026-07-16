@@ -1,4 +1,8 @@
-# Kepware ThingsBoard 點位管理系統 — API Schema 參考文件
+# Kep It Simple · Kepware 點位管理系統 — API Schema 參考文件
+
+> 純 Kepware 架構，**不再整合 ThingsBoard**（見 `CLAUDE.md`）。本文件已於
+> 2026-07 全面校正，移除已不存在的 TB 端點，並補上先前完全沒有文件記載的
+> `/api/kw/delete-batch`、`/api/kw/gateways`。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -9,13 +13,13 @@
 ## 目錄
 
 1. [認證與帳號](#1-認證與帳號)
-2. [Kepware 匯入流程（5 步驟）](#2-kepware-匯入流程5-步驟)
+2. [Kepware 匯入流程（6 步驟）](#2-kepware-匯入流程6-步驟)
 3. [帳號管理（admin only）](#3-帳號管理admin-only)
 4. [操作日誌（admin only）](#4-操作日誌admin-only)
 5. [PG 參照表](#5-pg-參照表)
 6. [IO Mapping](#6-io-mapping)
-7. [ThingsBoard 直接建點](#7-thingsboard-直接建點)
-8. [設定管理（Config）](#8-設定管理config)
+7. [Kepware Gateway 管理 + 批次刪除](#7-kepware-gateway-管理--批次刪除)
+8. [設定管理（Config，legacy）](#8-設定管理configlegacy)
 
 ---
 
@@ -126,10 +130,64 @@ curl -X POST http://localhost:9000/api/user/change-password \
 
 ---
 
-## 2. Kepware 匯入流程（5 步驟）
+## 2. Kepware 匯入流程（6 步驟）
 
 **權限要求**：所有執行類端點（import、execute）需要 `admin` 或 `operator` 角色。  
-**完整流程**：CSV Upload → 匯入暫存表 → 推導 TB → 執行 TB 建點 → 推導 PG → 執行 PG 寫入 → 推導 Scale → 執行 Scale 設定。
+**完整流程**：CSV Upload → 匯入暫存表 → Kepware 建點 → PG 正式匯入 → Kepware Scale 設定 → Collector Reload。
+
+> ⚠️ **本專案已於 Phase 4+ 完全脫離 ThingsBoard，改為純 Kepware 架構**（見 `CLAUDE.md`）。
+> 舊版文件曾記載 `/api/pg/derive/tb`、`/api/pg/execute/tb`、`/api/auth/login`（TB 登入）等端點，
+> 這些**在目前的 `main.py` 裡已不存在**，本節已全面校正為實際存在的端點；
+> 若您手上的整合程式是照舊版文件寫的，請對照下方重新確認。
+
+### 背景任務與輪詢（重要，共用契約）
+
+`POST /api/kw/execute`、`POST /api/pg/execute/scale`、`POST /api/kw/delete-batch`
+三個「真正呼叫 Kepware API」的端點，因為批次執行動輒數分鐘，**都是背景任務**：
+呼叫後立即回傳 `{"task_id": "..."}`，**HTTP 200 只代表任務已建立、開始排隊，
+不代表已經執行完成、更不代表 Kepware 已經套用變更**。
+
+必須接著輪詢 `GET /api/tasks/{task_id}` 直到 `done: true`，才能從 `summary` 得知真正結果：
+
+```bash
+curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "task_id": "abc12345",
+  "done": true,
+  "progress": { "current": 60, "total": 60, "success": 58, "fail": 2, "skip": 0 },
+  "summary": {
+    "total": 60, "success": 58, "fail": 2, "skip": 0,
+    "errors": [{ "name": "TAG099", "reason": "HTTP 429: ..." }],
+    "message": "成功建立 58 筆 Tag"
+  }
+}
+```
+
+`done: false` 時 `summary` 為 `null`；請務必檢查 `summary.fail`／`summary.errors`，
+**只看 HTTP 狀態碼或只看 `task_id` 回來就當作成功，是最容易誤判「已生效」的寫法**。
+
+**Python 輪詢範例**（三個背景任務端點通用）：
+
+```python
+import time, requests
+
+def run_and_wait(url, body, headers, poll_interval=1, timeout=600):
+    r = requests.post(url, headers=headers, json=body)
+    r.raise_for_status()
+    task_id = r.json()["task_id"]
+    waited = 0
+    while waited < timeout:
+        r = requests.get(f"{BASE}/api/tasks/{task_id}", headers=headers)
+        st = r.json()
+        if st["done"]:
+            return st["summary"]
+        time.sleep(poll_interval)
+        waited += poll_interval
+    raise TimeoutError(f"task {task_id} 逾時未完成")
+```
 
 ---
 
@@ -347,11 +405,13 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 
 ---
 
-### 步驟 2：推導 TB 欄位
+### 步驟 2：推導 Kepware 建點欄位
 
-#### POST /api/pg/derive/tb
+#### POST /api/kw/derive
 
-從暫存表推導 ThingsBoard 建點所需欄位（預覽，不寫入任何資料）。  
+從暫存表推導 Kepware 建點所需欄位（channel/device/tag_groups/address，預覽、不寫入）。
+若帶 `gateway_id`，會比對該 Gateway 的結構快取（`kepware_structure`，需先呼叫
+`POST /api/kw/gateways/{id}/sync` 同步過）並回傳每筆的 `validation` 狀態。  
 **需要 JWT（admin / operator）**
 
 **Request Body**
@@ -360,15 +420,15 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 {
   "ids": null,
   "tb_status": "pending",
-  "pg_status": "pending"
+  "gateway_id": 1
 }
 ```
 
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
-| ids | list? | null | 指定 id 清單；null = 全部符合條件的資料 |
-| tb_status | string? | "pending" | 篩選 tb_status（null 不篩選） |
-| pg_status | string? | "pending" | 篩選 pg_status（null 不篩選） |
+| ids | list? | null | 指定暫存表 id 清單；null = 全部符合條件的資料 |
+| tb_status | string? | "pending" | 篩選 Step 3 建點狀態（null 不篩選） |
+| gateway_id | int? | null | 指定則比對結構快取，回傳 `validation` |
 
 **Response 200**
 
@@ -378,51 +438,58 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
     {
       "id": 1,
       "tag_name": "K8_2F_CHS_TAG001",
-      "tb_name": "K8CHS-CHS-2F-TAG001",
       "tb_type": "K8CHS-CHS-2F-CHS",
-      "tb_label": "K8_2F_CHS TAG001",
-      "tb_description": "K8_2F_CHS_TAG001"
+      "channel_name": "K8CHS",
+      "device_name": "CHS",
+      "tag_groups": "2F.CHS",
+      "address": "",
+      "description": "K8_2F_CHS TAG001",
+      "driver_type": "OPC",
+      "profile_exists": true,
+      "overridden": false,
+      "validation": {
+        "channel_exists": true,
+        "device_exists": true,
+        "group_exists": false,
+        "group_auto_create": true
+      }
     }
   ],
   "total": 245
 }
 ```
 
-**推導邏輯說明**
-
-| 欄位 | 推導規則 |
-|------|---------|
-| tb_name | `{site}{system_code}-{system}-{floor}-{tag_suffix}`（去除 `_`） |
-| tb_type | CSV `device_profile` → 否則 `{nodename}-{system}-{floor}-{system}` |
-| floor | `tag_name.split("_")[1]`；若值為 `BF` 自動轉換為 `B1F` |
+| validation 欄位 | 說明 |
+|-----------------|------|
+| group_exists=false 且 group_auto_create=true | 對應網頁 UI 的 `+G` 標記，執行時會自動建立 |
+| channel_exists=false 或 device_exists=false | 對應網頁 UI 的 `▲` 標記，**不會自動建立**，需先在 Kepware 手動建好 |
 
 **curl 範例**
 
 ```bash
-curl -X POST http://localhost:9000/api/pg/derive/tb \
+curl -X POST http://localhost:9000/api/kw/derive \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"tb_status":"pending"}'
+  -d '{"tb_status":"pending","gateway_id":1}'
 ```
 
 ---
 
-### 步驟 3：執行 TB 建點
+### 步驟 3：執行 Kepware 建點（背景任務）
 
-#### POST /api/pg/execute/tb
+#### POST /api/kw/execute
 
-推導欄位後呼叫 ThingsBoard API 建立裝置，成功後更新 `tb_status = done`。  
+推導欄位後呼叫 Kepware API Gateway 建立 tag group + tag，成功後更新 `tb_status = done`。
+**回傳 `{"task_id": ...}`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**  
 **需要 JWT（admin / operator）**
 
 **Request Body**
 
 ```json
 {
-  "tb_url": "http://thingsboard.example.com",
-  "tb_username": "tenant@example.com",
-  "tb_password": "password",
+  "gateway_id": 1,
   "ids": null,
-  "delay": 0.2,
+  "delay": 1.1,
   "batch_size": 50,
   "batch_pause": 5.0
 }
@@ -430,41 +497,41 @@ curl -X POST http://localhost:9000/api/pg/derive/tb \
 
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
-| tb_url | string | ✓ | ThingsBoard URL |
-| tb_username | string | ✓ | TB 帳號 |
-| tb_password | string | ✓ | TB 密碼 |
-| ids | list? | null | 指定 id；null = 全部 pending |
-| delay | float | 0.2 | 每筆間隔秒數 |
-| batch_size | int | 50 | 批次大小（達到後暫停） |
-| batch_pause | float | 5.0 | 批次暫停秒數（429 限速也使用此值） |
+| gateway_id | int? | null | 使用 DB 中已設定的 Gateway（`kepware_gateway` 表，含加密密碼）；**建議用這個，與網頁 UI 行為一致** |
+| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 不指定 `gateway_id` 時，改用這三個手動帶入憑證（不會存進 DB）；**兩者擇一，優先用 gateway_id** |
+| ids | list? | null | 指定暫存表 id；null = 全部 `tb_status=pending` |
+| delay | float | **1.1** | 每筆間隔秒數。Kepware API Gateway 限速為滑動視窗 60 次/分鐘（per 帳號+路徑），1.1 秒 ≈ 每分鐘 48 筆留有餘裕；若 Gateway 端調高限速可調低加速 |
+| batch_size | int | 50 | 批次大小（達到後暫停 `batch_pause`） |
+| batch_pause | float | 5.0 | 批次暫停秒數；收到 429 時優先讀取 Kepware 回應的 `Retry-After` 決定實際等待秒數，讀不到才用此值，最多重試 3 次 |
 
-**Response 200**
+**Response 200（立即回傳，非最終結果）**
+
+```json
+{ "task_id": "abc12345" }
+```
+
+**輪詢 `GET /api/tasks/abc12345` 取得的 `summary`（`done:true` 之後）**
 
 ```json
 {
-  "success": 240,
-  "failed": 5,
+  "total": 245, "success": 240, "fail": 5, "skip": 0,
   "errors": [
-    { "name": "K8CHS-CHS-2F-TAG001", "reason": "HTTP 409: Device already exists" }
+    { "name": "K8_2F_CHS_TAG099", "reason": "HTTP 409: ..." }
   ],
-  "message": "成功建立 240 筆裝置"
+  "message": "成功建立 240 筆 Tag"
 }
 ```
 
 **curl 範例**
 
 ```bash
-curl -X POST http://localhost:9000/api/pg/execute/tb \
+TASK_ID=$(curl -s -X POST http://localhost:9000/api/kw/execute \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tb_url": "http://thingsboard.example.com",
-    "tb_username": "tenant@example.com",
-    "tb_password": "password",
-    "delay": 0.2,
-    "batch_size": 50,
-    "batch_pause": 5.0
-  }'
+  -d '{"gateway_id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+
+# 務必輪詢，不要只看上面這個 200
+curl http://localhost:9000/api/tasks/$TASK_ID -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -598,48 +665,66 @@ curl -X POST http://localhost:9000/api/pg/execute/tb \
 
 ---
 
-### 步驟 5（執行）：設定 Kepware Scale
+### 步驟 5（執行）：設定 Kepware Scale（背景任務）
 
 #### POST /api/pg/execute/scale
 
-推導欄位後呼叫 Kepware API Gateway 設定 Scale，成功後更新 `scale_status = done`。  
-**需要 JWT（admin / operator）**
+推導欄位後呼叫 Kepware API Gateway 設定 Scale，成功後更新 `scale_status = done`。
+**回傳 `{"task_id": ...}`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**
+> 這是最容易踩坑的端點：舊版文件曾記載此端點直接同步回傳 `{success, failed, ...}`，
+> 但實際上早已改為背景任務，只回傳 `task_id`。若您的程式檢查 `response["success"]`
+> 一類的欄位，會因為該 key 不存在而誤判、或直接吞掉 `KeyError`，
+> 造成「HTTP 200 但 Kepware 沒有實際套用變更」的假象。  
+> **需要 JWT（admin / operator）**
 
 **Request Body**
 
 ```json
 {
-  "kw_gw_url": "http://kepware-gw.example.com",
-  "kw_gw_username": "admin",
-  "kw_gw_password": "password",
+  "gateway_id": 1,
   "ids": null,
-  "delay": 0.2,
+  "delay": 1.1,
   "batch_size": 50,
   "batch_pause": 5.0
 }
 ```
 
-| 欄位 | 型別 | 說明 |
-|------|------|------|
-| kw_gw_url | string | Kepware API Gateway URL |
-| kw_gw_username | string | Gateway 帳號 |
-| kw_gw_password | string | Gateway 密碼 |
-| ids | list? | null = 全部 scale_status=pending |
-| delay | float | 每筆間隔秒數（預設 0.2） |
-| batch_size | int | 批次大小（預設 50） |
-| batch_pause | float | 批次暫停秒數（預設 5.0） |
+| 欄位 | 型別 | 預設 | 說明 |
+|------|------|------|------|
+| gateway_id | int? | null | 使用 DB 中已設定的 Gateway；**建議用這個，與網頁 UI 行為一致**——若改用手動 `kw_gw_url` 且填錯，會打到錯誤的 Kepware 實例而完全看不出來 |
+| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 不指定 `gateway_id` 時的手動憑證，兩者擇一 |
+| ids | list? | null | 指定暫存表 id；null = 全部 `scale_status=pending` |
+| delay | float | **1.1** | 同 `/api/kw/execute`，理由同上（60 次/分鐘限速） |
+| batch_size | int | 50 | 批次大小 |
+| batch_pause | float | 5.0 | 批次暫停秒數；429 時優先讀取 `Retry-After` |
 
-**Response 200**
+**Response 200（立即回傳，非最終結果——這裡不會有 success/failed！）**
+
+```json
+{ "task_id": "def67890" }
+```
+
+**輪詢 `GET /api/tasks/def67890` 取得的 `summary`（`done:true` 之後）**
 
 ```json
 {
-  "success": 198,
-  "failed": 2,
+  "total": 200, "success": 198, "fail": 2, "skip": 0,
   "errors": [
     { "tag_name": "K8_2F_CHS_TAG099", "reason": "Tag not found in Kepware" }
   ],
   "message": "成功設定 198 筆 Scale"
 }
+```
+
+**curl 範例**
+
+```bash
+TASK_ID=$(curl -s -X POST http://localhost:9000/api/pg/execute/scale \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"gateway_id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+
+curl http://localhost:9000/api/tasks/$TASK_ID -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -649,17 +734,33 @@ curl -X POST http://localhost:9000/api/pg/execute/tb \
 ```bash
 #!/bin/bash
 BASE="http://localhost:9000"
+GATEWAY_ID=1   # 對應設定頁 > Kepware Gateway 管理裡的 Gateway id
+
+# 輪詢背景任務的共用函式
+wait_task() {
+  local task_id="$1"
+  while true; do
+    local resp=$(curl -s "$BASE/api/tasks/$task_id" -H "Authorization: Bearer $TOKEN")
+    local done=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['done'])")
+    if [ "$done" = "True" ]; then
+      echo "$resp" | python3 -m json.tool
+      return
+    fi
+    sleep 1
+  done
+}
 
 # 1. 登入取得 Token
 TOKEN=$(curl -s -X POST $BASE/api/user/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}' \
+  -d '{"username":"admin","password":"changeme"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
 echo "Token: $TOKEN"
 
 # 2. 上傳 CSV
 UPLOAD_ID=$(curl -s -X POST $BASE/api/csv/upload \
+  -H "Authorization: Bearer $TOKEN" \
   -F "file=@kepware_tags.csv" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_id'])")
 
@@ -671,31 +772,27 @@ curl -s -X POST $BASE/api/pg/staging/import \
   -H "Content-Type: application/json" \
   -d "{\"upload_id\":\"$UPLOAD_ID\"}" | python3 -m json.tool
 
-# 4. 執行 TB 建點
-curl -s -X POST $BASE/api/pg/execute/tb \
+# 4. 執行 Kepware 建點（背景任務，需輪詢）
+TASK_ID=$(curl -s -X POST $BASE/api/kw/execute \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "tb_url":"http://thingsboard.example.com",
-    "tb_username":"tenant@example.com",
-    "tb_password":"password"
-  }' | python3 -m json.tool
+  -d "{\"gateway_id\":$GATEWAY_ID}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+wait_task "$TASK_ID"
 
-# 5. 執行 PG 寫入
+# 5. 執行 PG 寫入（同步）
 curl -s -X POST $BASE/api/pg/execute/pg \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}' | python3 -m json.tool
 
-# 6. 執行 Scale 設定
-curl -s -X POST $BASE/api/pg/execute/scale \
+# 6. 執行 Scale 設定（背景任務，需輪詢）
+TASK_ID=$(curl -s -X POST $BASE/api/pg/execute/scale \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "kw_gw_url":"http://kepware-gw.example.com",
-    "kw_gw_username":"admin",
-    "kw_gw_password":"password"
-  }' | python3 -m json.tool
+  -d "{\"gateway_id\":$GATEWAY_ID}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+wait_task "$TASK_ID"
 ```
 
 ---
@@ -996,34 +1093,6 @@ curl -s -X POST $BASE/api/pg/execute/scale \
 
 ---
 
-### POST /api/pg/ref/tb-profiles/sync
-
-從 ThingsBoard 一鍵同步所有 DeviceProfile 到 PG。
-
-**Request Body**
-
-```json
-{
-  "tb_url": "http://thingsboard.example.com",
-  "tb_username": "tenant@example.com",
-  "tb_password": "password"
-}
-```
-
-**Response 200**
-
-```json
-{
-  "success": true,
-  "synced": 45,
-  "total": 45,
-  "errors": [],
-  "message": "成功同步 45/45 個 DeviceProfile 到 PG"
-}
-```
-
----
-
 ### POST /api/pg/ref/delete
 
 刪除任一參照表的指定資料列。**需要 JWT（admin / operator）**
@@ -1122,188 +1191,122 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 
 ---
 
-## 7. ThingsBoard 直接建點
+## 7. Kepware Gateway 管理 + 批次刪除
 
-這套流程透過 SSE 串流即時推送進度（非 Kepware 匯入流程）。
+> Gateway 是 DB 管理的（`kepware_gateway` 表，密碼 Fernet 加密，見 `KW_ENCRYPT_KEY`），
+> 可以自由命名、指定多組、其中一組設為 `is_default`。**這裡才是取得 `gateway_id` 的地方**
+> ——第 2 節所有 execute 端點的 `gateway_id` 參數，都是指這裡的 id。
 
-### POST /api/auth/login
+### GET /api/kw/gateways
 
-測試 ThingsBoard 連線並取得 TB Token。
-
-```json
-{
-  "tb_url": "http://thingsboard.example.com",
-  "username": "tenant@example.com",
-  "password": "password"
-}
-```
+列出所有 Gateway（**密碼不會回傳**）。**需要 JWT**（任何已登入角色）。
 
 **Response 200**
 
 ```json
-{ "success": true, "token": "eyJ..." }
+[
+  { "id": 1, "name": "K8 廠區 GW", "url": "https://10.11.64.70:57412",
+    "username": "admin", "zone": "A", "verify_ssl": true, "is_default": true }
+]
 ```
 
 ---
 
-### POST /api/csv/upload → POST /api/tasks/execute
+### POST /api/kw/gateways
 
-上傳 CSV 後啟動批次建點或刪除任務。
+新增 Gateway。**admin only**
 
-**CSV 欄位（create）**: `name`, `type`（DeviceProfile）, `label`, `description`  
-**CSV 欄位（delete）**: `name`, `type`
+```json
+{
+  "name": "K8 廠區 GW",
+  "url": "https://10.11.64.70:57412",
+  "username": "admin",
+  "password": "password",
+  "verify_ssl": true,
+  "zone": "A",
+  "is_default": false
+}
+```
+
+---
+
+### PUT /api/kw/gateways/{gw_id} / DELETE /api/kw/gateways/{gw_id}
+
+更新／刪除 Gateway。**admin only**（`PUT` 的 `password` 欄位留空代表不更新密碼）
+
+---
+
+### POST /api/kw/gateways/{gw_id}/test
+
+測試 Gateway 連線（實際呼叫該 Gateway 的登入 API）。**需要 JWT**（任何已登入角色）。
+
+**Response 200**
+
+```json
+{ "success": true, "message": "連線成功" }
+```
+
+---
+
+### POST /api/kw/gateways/{gw_id}/sync
+
+同步該 Gateway 的 channel/device/tag_group 結構到 `kepware_structure` 快取表，
+供 `/api/kw/derive` 做結構驗證用。**需要 JWT（admin / operator）**
+
+**Response 200**
+
+```json
+{ "success": true, "channels": 5, "devices": 12, "groups": 34 }
+```
+
+---
+
+### POST /api/kw/delete-batch （背景任務）
+
+透過 Kepware API 批次刪除 Tag（從 CSV 的 `name`/`type` 欄位推導 channel/device/tag_group 路徑）。
+**回傳 `{"task_id": ...}`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**  
+**需要 JWT（admin / operator）**
+
+**CSV 欄位**: `name`（tag 名稱）, `type`（DeviceProfile，格式如 `K8CHS-CHS-2F-CHS`）
 
 **Request Body**
 
 ```json
 {
   "upload_id": "a1b2c3d4",
-  "operation": "create",
+  "gateway_id": 1,
   "dry_run": true,
-  "tb_url": "http://thingsboard.example.com",
-  "tb_username": "tenant@example.com",
-  "tb_password": "password",
-  "delay": 0.2,
+  "delay": 1.1,
   "batch_size": 50,
-  "batch_pause": 5,
-  "csv_filename": "devices.csv"
+  "batch_pause": 5.0
 }
 ```
 
-| operation | 說明 |
-|-----------|------|
-| create | 批次建立裝置 |
-| delete | 批次刪除裝置（依 name 查詢後刪除） |
+| 欄位 | 型別 | 預設 | 說明 |
+|------|------|------|------|
+| upload_id | string | ✓ | 先呼叫 `POST /api/csv/upload` 取得 |
+| gateway_id | int? | null | 同執行建點/Scale，建議用這個而非手動憑證 |
+| dry_run | bool | true | 預演模式，不實際呼叫刪除 API |
+| delay / batch_size / batch_pause | | 1.1 / 50 / 5.0 | 同執行建點/Scale |
 
-**Response 200**
+**Response 200（立即回傳，非最終結果）**
 
 ```json
 { "task_id": "a3f7b2c1d9e4f580" }
 ```
 
----
-
-### GET /api/tasks/{task_id}/stream
-
-SSE 串流接收任務進度（Server-Sent Events）。
-
-**Event 格式**
-
-```
-data: {"type":"log","level":"info","message":"[成功] K8CHS-001"}
-
-data: {"type":"progress","done":50,"total":200,"success":48,"fail":2,"skip":0}
-
-data: {"type":"complete","total":200,"success":195,"fail":5,"skip":0}
-```
-
-**curl 範例**
-
-```bash
-curl -N http://localhost:9000/api/tasks/a3f7b2c1d9e4f580/stream
-```
-
----
-
-### GET /api/tasks/{task_id}/status
-
-查詢任務狀態（輪詢用）。
+**輪詢 `GET /api/tasks/{task_id}` 取得的 `summary`**
 
 ```json
 {
-  "task_id": "a3f7b2c1d9e4f580",
-  "type": "create",
-  "done": true,
-  "progress": { "done": 200, "total": 200, "success": 195, "fail": 5, "skip": 0 },
-  "summary": { "total": 200, "success": 195, "fail": 5, "skip": 0 }
+  "total": 200, "success": 195, "fail": 5, "skip": 0,
+  "errors": [{ "name": "TAG001", "reason": "HTTP 404" }]
 }
 ```
 
 ---
 
-### GET /api/tasks/{task_id}/export
-
-下載任務結果 CSV（UTF-8 BOM，Excel 相容）。
-
-欄位：`name`, `status`, `detail`
-
----
-
-### POST /api/devices/query
-
-查詢 ThingsBoard 裝置（分頁）。
-
-```json
-{
-  "tb_url": "http://thingsboard.example.com",
-  "tb_token": "eyJ...",
-  "page": 0,
-  "page_size": 20,
-  "text_search": "K8CHS"
-}
-```
-
-**Response 200**: ThingsBoard `data[]` + `hasNext`, `totalElements`
-
----
-
-### POST /api/devices/export
-
-匯出 ThingsBoard 裝置清單 CSV（最多 2000 筆）。  
-欄位：`name`, `type`, `label`, `createdTime`
-
----
-
-### POST /api/device-profiles/check
-
-驗證 CSV 中的 type 名稱是否為合法的 DeviceProfile。
-
-```json
-{
-  "tb_url": "http://thingsboard.example.com",
-  "tb_token": "eyJ...",
-  "type_names": ["K8CHS-CHS-2F-CHS", "INVALID_PROFILE"]
-}
-```
-
-**Response 200**
-
-```json
-{
-  "existing_profiles": ["K8CHS-CHS-2F-CHS", "K8CHS-AHU-3F-AHU"],
-  "check_results": {
-    "K8CHS-CHS-2F-CHS": true,
-    "INVALID_PROFILE": false
-  },
-  "total_checked": 2,
-  "valid_count": 1,
-  "invalid_count": 1
-}
-```
-
----
-
-### POST /api/kw-gw/test
-
-測試 Kepware API Gateway 連線。
-
-```json
-{
-  "kw_gw_url": "http://kepware-gw.example.com",
-  "kw_gw_username": "admin",
-  "kw_gw_password": "password"
-}
-```
-
-**Response 200**
-
-```json
-{ "success": true, "message": "Kepware API Gateway 連線成功" }
-```
-
----
-
-## 8. 設定管理（Config）
+## 8. 設定管理（Config，legacy）
 
 本節管理 `data/config.json`（TB 直接建點用的下拉選項、預設值、映射規則；
 v3 UI 已不使用此套設定，屬遺留端點）。**本節全部端點皆需要 JWT（admin only）。**
