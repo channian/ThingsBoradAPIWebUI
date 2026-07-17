@@ -1705,7 +1705,9 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
         error_tagnames = {e["tagname"] for e in result.get("errors", [])}
         if collector_result:
             error_tagnames |= {e["tagname"] for e in collector_result.get("errors", [])}
-        success_ids = [r["id"] for r, d in zip(rows, derived) if d["tagname"] not in error_tagnames]
+        # 注意：derive_pg_fields 會跳過 tag_name 空白的列，此時 rows 與 derived 長度不一致，
+        # 用 zip(rows, derived) 會造成錯位配對，故改用 derived 每筆自帶的 id
+        success_ids = [d["id"] for d in derived if d["tagname"] not in error_tagnames]
         if success_ids:
             pg_client.update_staging_status(success_ids, "pg_status", "done")
             log.info(f"[executePG] 更新 {len(success_ids)} 筆狀態為 done")
@@ -1719,6 +1721,11 @@ async def pg_execute_pg(req: ExecutePgRequest, request: Request,
             resp["collector_inserted"] = collector_result["inserted"]
             resp["collector_errors"] = collector_result["errors"]
             resp["message"] += f"，Collector {collector_result['inserted']} 筆"
+            if collector_result["errors"]:
+                resp["message"] += (
+                    f"（Collector 失敗 {len(collector_result['errors'])} 筆，"
+                    "該批 pg_status 維持 pending，修正後可重新執行）"
+                )
         return resp
     except HTTPException:
         raise

@@ -163,9 +163,10 @@
                             </button>
                             <button class="btn btn-outline" @click="resetUpload">重新選擇</button>
                         </div>
-                        <div v-if="imp.result" style="margin-top:12px;padding:10px;border-radius:8px" :style="{ background: imp.result.errors?.length ? 'var(--err-soft)' : 'var(--ok-soft)' }">
+                        <div v-if="imp.result" style="margin-top:12px;padding:10px;border-radius:8px" :style="{ background: imp.result.errors?.length ? 'var(--err-soft)' : (imp.result.skipped > 0 ? 'var(--warn-soft)' : 'var(--ok-soft)') }">
                             匯入完成：新增 {{ imp.result.inserted }} 筆，略過 {{ imp.result.skipped }} 筆
                             <span v-if="imp.result.errors?.length" style="color:var(--err)">，錯誤 {{ imp.result.errors.length }} 筆</span>
+                            <div v-if="imp.result.message && imp.result.skipped > 0" style="margin-top:6px;font-size:12px;color:var(--ink-3)">{{ imp.result.message }}</div>
                         </div>
                     </div>
                 </div>
@@ -376,9 +377,31 @@
                                 </tbody>
                             </table>
                         </div>
-                        <div v-if="pgDerive.result" style="margin-top:12px;padding:10px;border-radius:8px;background:var(--ok-soft)">
+                        <div v-if="pgDerive.result" style="margin-top:12px;padding:10px;border-radius:8px"
+                             :style="{ background: (pgDerive.result.errors?.length || pgDerive.result.collector_errors?.length) ? 'var(--err-soft)' : 'var(--ok-soft)' }">
                             寫入完成：新增 {{ pgDerive.result.inserted }} 筆
                             <template v-if="pgDerive.result.collector_inserted !== undefined">，Collector {{ pgDerive.result.collector_inserted }} 筆</template>
+                            <span v-if="pgDerive.result.errors?.length" style="color:var(--err)">，正式表錯誤 {{ pgDerive.result.errors.length }} 筆</span>
+                            <span v-if="pgDerive.result.collector_errors?.length" style="color:var(--err)">，Collector 失敗 {{ pgDerive.result.collector_errors.length }} 筆</span>
+                            <div v-if="pgDerive.result.message" style="margin-top:6px;font-size:12px;color:var(--ink-3)">{{ pgDerive.result.message }}</div>
+                            <div v-if="pgDerive.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
+                                <div style="color:var(--ink-3)">正式表錯誤：</div>
+                                <div v-for="(er, i) in pgDerive.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
+                                    {{ er.tagname }}：{{ er.reason }}
+                                </div>
+                                <div v-if="pgDerive.result.errors.length > 10" style="color:var(--ink-3)">
+                                    …其餘 {{ pgDerive.result.errors.length - 10 }} 筆未列出
+                                </div>
+                            </div>
+                            <div v-if="pgDerive.result.collector_errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
+                                <div style="color:var(--ink-3)">Collector 錯誤：</div>
+                                <div v-for="(er, i) in pgDerive.result.collector_errors.slice(0, 10)" :key="i" style="color:var(--err)">
+                                    {{ er.tagname }}：{{ er.reason }}
+                                </div>
+                                <div v-if="pgDerive.result.collector_errors.length > 10" style="color:var(--ink-3)">
+                                    …其餘 {{ pgDerive.result.collector_errors.length - 10 }} 筆未列出
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -193,30 +193,30 @@ class PGClient:
         # 準備資料與清洗
         clean_data = []
         for row in rows:
-            tag_name = (row.get("tag_name") or row.get("Tag Name") or "").strip()
+            tag_name = (_row_get_ci(row, "tag_name", "Tag Name") or "").strip()
             if not tag_name:
                 skipped += 1
                 continue
-            
+
             try:
-                # 預處理資料格式
+                # 預處理資料格式（表頭比對不分大小寫，避免變體如 'I/O Address' 被靜默對成空字串）
                 data_tuple = (
-                    _get(row, "site", "Site"),
-                    _get(row, "system_code", "System"),
-                    _get(row, "scada_node_name", "SCADA Node Name"),
+                    (_row_get_ci(row, "site", "Site") or ""),
+                    (_row_get_ci(row, "system_code", "System") or ""),
+                    (_row_get_ci(row, "scada_node_name", "SCADA Node Name") or ""),
                     tag_name,
-                    _get(row, "io_device", "I/O DEVICE"),
-                    _get(row, "io_address", "I/O ADDRESS"),
-                    _parse_bool(row.get("scale_enabled") or row.get("SCALE Enabled") or ""),
-                    _parse_num(row.get("raw_low") or row.get("Raw Low")),
-                    _parse_num(row.get("raw_high") or row.get("Raw High")),
-                    _parse_num(row.get("scaled_low") or row.get("Scaled Low")),
-                    _parse_num(row.get("scaled_high") or row.get("Scaled High")),
-                    _get(row, "description", "Description"),
-                    _get(row, "project_name", "專案名稱"),
-                    _get(row, "data_owner", "DataOwner"),
-                    _get(row, "device_profile", "device_profile"),
-                    _get(row, "scan_group", "Scan Group"),
+                    (_row_get_ci(row, "io_device", "I/O DEVICE") or ""),
+                    (_row_get_ci(row, "io_address", "I/O ADDRESS") or ""),
+                    _parse_bool(_row_get_ci(row, "scale_enabled", "SCALE Enabled") or ""),
+                    _parse_num(_row_get_ci(row, "raw_low", "Raw Low")),
+                    _parse_num(_row_get_ci(row, "raw_high", "Raw High")),
+                    _parse_num(_row_get_ci(row, "scaled_low", "Scaled Low")),
+                    _parse_num(_row_get_ci(row, "scaled_high", "Scaled High")),
+                    (_row_get_ci(row, "description", "Description") or ""),
+                    (_row_get_ci(row, "project_name", "專案名稱") or ""),
+                    (_row_get_ci(row, "data_owner", "DataOwner") or ""),
+                    (_row_get_ci(row, "device_profile", "device_profile") or ""),
+                    (_row_get_ci(row, "scan_group", "Scan Group") or ""),
                 )
                 clean_data.append(data_tuple)
             except Exception as e:
@@ -254,11 +254,20 @@ class PGClient:
                         # 由於使用了 contextmanager，這裡 raise 會自動 rollback
                         raise 
 
+        if skipped > 0:
+            message = (
+                f"新增 {inserted} 筆；{skipped} 筆因 tag_name 已存在（或 tag_name 空白）而跳過"
+                "——既有資料內容不會被更新，如需修正請先刪除該批暫存資料後重新匯入"
+            )
+        else:
+            message = f"新增 {inserted} 筆"
+
         return {
             "inserted": inserted,
             "skipped": skipped,
             "errors": errors,
             "total": len(rows),
+            "message": message,
         }
 
     def get_staging_list(
@@ -1037,12 +1046,32 @@ class PGClient:
 
         with self._get_collector_conn() as conn:
             self._ensure_collector_tags_table(conn)
+
+            # Collector 的 tags 表可能由外部系統預先建立（例如 enable 為 smallint 而非 boolean），
+            # CREATE TABLE IF NOT EXISTS 對既有表不生效，故依實際欄位型別決定 enable 值的格式
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT data_type FROM information_schema.columns
+                    WHERE table_name = 'tags' AND column_name = 'enable'
+                """)
+                r = cur.fetchone()
+            enable_type = (r[0] if r else "boolean").lower()
+
+            def _conv_enable(v):
+                b = bool(v)
+                return b if enable_type == "boolean" else int(b)
+
             with conn.cursor() as cur:
                 for row in rows:
                     tagname = row.get("tagname", "")
                     if not tagname:
                         continue
+                    # 逐筆包 SAVEPOINT：PostgreSQL 同一 transaction 內一筆爆錯後，
+                    # 若不回滾到 SAVEPOINT，後續所有指令都會收到
+                    # "current transaction is aborted" 連環失敗，因此每筆獨立 SAVEPOINT，
+                    # 失敗只回滾該筆，不影響後續資料寫入
                     try:
+                        cur.execute("SAVEPOINT row_sp")
                         cur.execute("""
                             INSERT INTO tags
                             (tagname, tag_address, scan_group, description,
@@ -1060,11 +1089,13 @@ class PGClient:
                             row.get("tag_address", ""),
                             row.get("scan_group", ""),
                             row.get("description", ""),
-                            row.get("enable", True),
+                            _conv_enable(row.get("enable", True)),
                             row.get("target_table", ""),
                         ))
+                        cur.execute("RELEASE SAVEPOINT row_sp")
                         inserted += 1
                     except Exception as e:
+                        cur.execute("ROLLBACK TO SAVEPOINT row_sp")
                         log.error(f"[import_collector] 寫入失敗 tagname={tagname}: {e}")
                         errors.append({"tagname": tagname, "reason": str(e)})
 
@@ -1328,6 +1359,17 @@ def _get(row: dict, *keys) -> str:
         if val is not None:
             return str(val).strip()
     return ""
+
+
+def _row_get_ci(row: dict, *keys):
+    """不分大小寫比對多個欄位別名取值（表頭先 strip 再 lower 後比對）。
+    找到回傳 strip 後的字串，找不到回傳 None。
+    解決 CSV 表頭大小寫變體（如 'I/O Address' vs 'I/O ADDRESS'）被靜默對成空值的問題。"""
+    wanted = {k.strip().lower() for k in keys}
+    for rk, rv in row.items():
+        if rk and rk.strip().lower() in wanted:
+            return str(rv).strip() if rv is not None else ""
+    return None
 
 
 def _parse_bool(val) -> bool:
