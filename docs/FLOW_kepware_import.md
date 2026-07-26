@@ -1,8 +1,9 @@
 # Kepware 加點全流程規格（逐環節核對版）
 
 > **基準 commit `0c11094`**（2026-07-20 重新追過全部程式碼路徑後改寫，行號皆為當下實際位置）。
+> **狀態更新 commit `726fc48`**（2026-07-26）：待確認事項 #1/#2/#3/#11 已修正、#4/#9 已確認不成立，
+> 詳見文末分區；本文正文中對這些項目的描述已標註修正後行為，但**行號未重新校準**（修正後有位移）。
 > 用途：**逐環節核對資料如何流動、每個欄位從哪來、狀態何時改變**。
-> 文末「待確認事項」列出核對時發現的**不一致與已知缺口（均尚未修正）**。
 > 命名沿革（`tb_status`/`tb_type`/`tb_device_profile` 現在都是 Kepware 概念）見 `CLAUDE.md`；
 > API 呼叫格式見 `API_SCHEMA.md`。
 
@@ -99,7 +100,7 @@ upload_id
 >
 > ⚠️ **這些 ALTER 只在 `test_connection()` 內執行**（`pg_client.py:172`），而 `test_connection` 只有 `GET /api/pg/test` 會呼叫。
 > 網頁登入時前端會自動打這支（Phase 1 加的），所以網頁使用者不會遇到問題；但**純 API 呼叫端若從未打過 `/api/pg/test`，
-> 這些欄位永遠不會被建立**，後續覆寫功能會失敗。見待確認 #11。
+> 這些欄位永遠不會被建立**。**已於 commit 726fc48 修正**：改為啟動時亦執行一次（見待確認 #11）。
 
 **三個狀態欄**：值域 `{pending, done, skip}`，預設 `pending`（`update_staging_status` @ `pg_client.py:330`）。
 
@@ -208,7 +209,7 @@ group_auto_create = dev_exists and not grp_exists and bool(grp)
 |-----------|------|
 | `tagname` | `base.tag_name` |
 | `description` | 暫存表 `description` |
-| **`node_name`** | 暫存表 **`scada_node_name` 原值**（⚠️ **不是** `base.nodename` 去底線版，見待確認 #4） |
+| **`node_name`** | 暫存表 **`scada_node_name` 原值**（實際資料無底線，與推導值相同——見「已確認不成立」#4） |
 | `driver_type` | `base.driver_type` |
 | **`address`** | 暫存表 **`io_address` 原值**（**刻意**不帶 `ns=2;s=` 前綴，見下方「已確認為刻意設計」） |
 | `tabname` → 寫入欄位 `tablename` | `base.tabname` → 若空：IFIX `{zone}_{site_prefix}_{system}`、非 IFIX `{bu}_{site_prefix}_{system}`（對應值為空則整體為空字串） |
@@ -266,7 +267,7 @@ Collector 是**同主機、不同 database**。排除正式表已出錯的 tagna
 | 欄位 | 規則 |
 |------|------|
 | `full_tag_name` | `{base.tag_groups}.{tag_name}`；`tag_groups` 空則只有 `tag_name` |
-| `channel_name` / `device_name` | **`base` 推導值**（⚠️ **不吃 `kw_channel`/`kw_device` 覆寫**，見待確認 #1） |
+| `channel_name` / `device_name` | **`base` 推導值**（**已修正**：與 `derive_kw_fields` 一致讀取 `kw_channel`/`kw_device` 覆寫值） |
 | `data_type` | **固定 `8`**（Kepware Double） |
 | `scaling_type` | `scale_enabled` 為真 **且** `raw_low`/`raw_high`/`scaled_low`/`scaled_high` **四個都非 NULL** → `1`（Linear）；否則 `0`（無） |
 | Linear 才附帶 | `scaling_raw_low/high`、`scaling_scaled_low/high`（轉 float）、`scaling_clamp_low/high` **固定 `False`**、`scaling_scaled_data_type` **固定 `8`** |
@@ -305,20 +306,32 @@ Kepware API Gateway 端限速為**滑動視窗 60 次/分鐘**（per `IP + 帳�
 
 ---
 
-## 待確認事項（核對發現，**均尚未修正**）
+## 待確認事項
 
-| # | 問題 | 位置 | 影響 |
-|---|------|------|------|
-| **1** | **`derive_scale_fields` 不吃 `kw_channel`/`kw_device`/`kw_tag_groups` 覆寫**，而 `derive_kw_fields` 吃 | `pg_client.py:1213` vs `1114` | 若某 tag 靠 Step 3 手動覆寫才建到正確路徑，Step 5 會把 Scale 打到**未覆寫的推導路徑**（該路徑可能不存在此 tag）→ Scale 失敗或改到別處 |
-| **2** | `scale_enabled=true` 但四個範圍值缺任一 → **靜默降級** `scaling_type=0` 且**照樣計為成功** | `pg_client.py:1231` | 「本來就不要 Scale」與「想要但資料不全」兩種情況在結果中**完全無法區分**，無任何警告 |
-| **3** | `import_formal` 逐筆 try/except **沒有 SAVEPOINT** | `pg_client.py:840` | 與 Collector 已修的問題同型：一筆爆錯後同 transaction 後續全部 `current transaction is aborted` 連環失敗 |
-| **4** | 正式表 `node_name` 用 `scada_node_name` **原值**，非 `base.nodename`（去底線版） | `pg_client.py:1196` | **僅在 `scada_node_name` 含底線時才有分歧**：例 `K18_CHS` → 正式表存 `K18_CHS`、Kepware channel 為 `K18CHS`。若實際資料的 `scada_node_name` 都不含底線則無影響。<br>檢查：`SELECT scada_node_name, COUNT(*) FROM scada_tag_config WHERE scada_node_name LIKE '%\_%' GROUP BY 1;` |
-| **6** | `data_type` 三處各自寫死且不一致：建 tag `0`、Scale `8`、正式表字串 `"float"` | 多處 | 無法依實際點位型別調整 |
-| **7** | `scaling_clamp_low/high` 固定 `False`；從不送 `scaling_units` | `pg_client.py:1254` | 無法設定夾制行為與單位 |
-| **8** | 三個狀態欄無前後 gating | 全流程 | 可在未建點時直接跑 Step 4/5，程式不阻止也不警告 |
-| **9** | 暫存表 `ON CONFLICT DO NOTHING`（永不更新） | `pg_client.py:239` | 已加警示 message，但**行為未變**——修正資料必須先刪除再重匯。是否改為「更新模式並重置三狀態」**待決策** |
-| **10** | 無跨任務全域鎖 | `task_manager` | 同一 Gateway 併發任務會疊加消耗限速額度 |
-| **11** | **schema 遷移（`_ensure_ref_tables` + `_ensure_extra_columns`）只在 `test_connection()` 內執行**，而它只被 `GET /api/pg/test` 呼叫 | `pg_client.py:172` | 純 API 呼叫端若從未打過 `/api/pg/test`，`kw_channel`/`kw_device`/`kw_tag_groups`/`scale_status`/`scan_group` 等欄位與參照表**永遠不會被建立**。網頁登入會自動觸發故不受影響——這也是為何問題只在 API 端浮現 |
+### ✅ 已修正（commit `726fc48`，2026-07-26）
+
+| # | 問題 | 修法 |
+|---|------|------|
+| **1** | `derive_scale_fields` 不吃 `kw_channel`/`kw_device`/`kw_tag_groups` 覆寫，導致 Step 3 建在 A 路徑、Step 5 卻對 B 路徑設定 | 比照 `derive_kw_fields` 讀取覆寫值，`full_tag_name` 亦改用覆寫後的 `tag_groups` |
+| **2** | `scale_enabled=true` 但範圍值缺任一 → 靜默降級 `scaling_type=0` 且照樣計為成功 | 該筆帶 `scale_error` 說明缺哪些欄位；執行時直接記為失敗、不呼叫 Kepware、不進 `success_ids`（`scale_status` 維持 pending 可重跑）。前端 Step 5 預覽以三態 pill／淡紅底列／總計橫幅呈現。<br>**`scale_enabled` 為 falsy 走 `scaling_type=0` 是既有正確設計，維持不變** |
+| **3** | `import_formal` 逐筆 try/except 沒有 SAVEPOINT | 逐筆加 SAVEPOINT（作法與 `import_collector_tags` 一致） |
+| **11** | schema 遷移只在 `test_connection()` 內執行 | 新增冪等的 `PGClient.ensure_schema()`，並在 `on_startup` 中以 try/except 呼叫；`test_connection` 亦改為呼叫它 |
+
+### ✅ 已確認不成立
+
+| # | 項目 | 結論 |
+|---|------|------|
+| **4** | 正式表 `node_name` 用原值 vs 推導的去底線版 | **實際資料的 `scada_node_name` 不含底線**（2026-07-26 使用者以 SQL 確認查無結果），兩者永遠相同，無分歧。底線移除本身是為配合 Kepware channel 命名規則的刻意設計 |
+| **9** | 暫存表 `ON CONFLICT DO NOTHING`（永不更新） | **維持現狀**（2026-07-26 使用者決定）。Step 3 網頁已可手動編輯 Channel/Device/Groups 覆寫後寫入，不必重新上傳 CSV；且已加警示 message 讓跳過行為可見 |
+
+### ⏸ 尚未處理（另議）
+
+| # | 問題 | 位置 | 影響 / 為何緩議 |
+|---|------|------|----------------|
+| **6** | `data_type` 三處各自寫死且不一致：建 tag `0`、Scale `8`、正式表字串 `"float"` | 多處 | 無法依實際點位型別調整。要正確處理需先確定型別來源（CSV 有此欄？還是查 Kepware？），屬功能設計而非修 bug |
+| **7** | `scaling_clamp_low/high` 固定 `False`；從不送 `scaling_units` | `pg_client.py:1254` | 無法設定夾制行為與單位，同樣需要領域輸入 |
+| **8** | 三個狀態欄無前後 gating | 全流程 | 可在未建點時直接跑 Step 4/5，程式不阻止也不警告。屬「加保護」而非「修錯誤」 |
+| **10** | 無跨任務全域鎖 | `task_manager` | 同一 Gateway 併發任務會疊加消耗限速額度。加鎖會改變現有可用性（併發呼叫將被擋） |
 
 > 編號 #5 已移至下方「已確認為刻意設計」，編號保留不重排以維持既有引用。
 
