@@ -169,11 +169,18 @@ class PGClient:
                 END $$;
             """)
 
-    def test_connection(self) -> dict:
-        """測試 PG 連線並確保參照表存在"""
+    def ensure_schema(self):
+        """確保參照表與額外欄位存在（冪等）。啟動時與 test_connection 都會呼叫，
+        避免只靠 test_connection（僅被 GET /api/pg/test 觸發）才建表，
+        導致純 API 呼叫端從未跑過該端點時，欄位/表永遠不會被建立。"""
         with self._get_conn() as conn:
             self._ensure_ref_tables(conn)
             self._ensure_extra_columns(conn)
+
+    def test_connection(self) -> dict:
+        """測試 PG 連線並確保參照表存在"""
+        self.ensure_schema()
+        with self._get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT version()")
                 version = cur.fetchone()[0]
@@ -837,7 +844,12 @@ class PGClient:
                             log.warning(f"[import_formal] 第 {i} 筆 tagname 為空，跳過")
                             skipped += 1
                             continue
+                        # 逐筆包 SAVEPOINT：PostgreSQL 同一 transaction 內一筆爆錯後，
+                        # 若不回滾到 SAVEPOINT，後續所有指令都會收到
+                        # "current transaction is aborted" 連環失敗，因此每筆獨立 SAVEPOINT，
+                        # 失敗只回滾該筆，不影響後續資料寫入（作法與 import_collector_tags 一致）
                         try:
+                            cur.execute("SAVEPOINT row_sp")
                             cur.execute("""
                                 INSERT INTO tags
                                 (tagname, description, node_name, driver_type,
@@ -876,11 +888,13 @@ class PGClient:
                                 row.get("department", ""),
                                 row.get("data_type", "float"),
                             ))
+                            cur.execute("RELEASE SAVEPOINT row_sp")
                             inserted += 1
                             if tagname not in existing_tagnames:
                                 new_tagnames.append(tagname)
                             log.info(f"[import_formal] 寫入成功: {tagname}")
                         except Exception as e:
+                            cur.execute("ROLLBACK TO SAVEPOINT row_sp")
                             log.error(f"[import_formal] 寫入失敗 tagname={tagname}: {e}")
                             errors.append({"tagname": tagname, "reason": str(e)})
         except Exception as e:
@@ -1219,18 +1233,34 @@ class PGClient:
             if not base:
                 continue
 
-            full_tag_name = (f"{base['tag_groups']}.{base['tag_name']}"
-                             if base["tag_groups"] else base["tag_name"])
+            # 覆寫優先：與 derive_kw_fields 一致，確保 Step 3 建點路徑與 Step 5 Scale 路徑相同
+            channel_name = row.get("kw_channel") or base["channel_name"]
+            device_name = row.get("kw_device") or base["device_name"]
+            kw_tg = row.get("kw_tag_groups")
+            tag_groups = kw_tg if kw_tg is not None else base["tag_groups"]
+
+            full_tag_name = (f"{tag_groups}.{base['tag_name']}"
+                             if tag_groups else base["tag_name"])
 
             scale_enabled = row.get("scale_enabled")
+            scale_error = None
             if scale_enabled:
                 raw_low = row.get("raw_low")
                 raw_high = row.get("raw_high")
                 scaled_low = row.get("scaled_low")
                 scaled_high = row.get("scaled_high")
-                has_range = all(v is not None for v in (raw_low, raw_high, scaled_low, scaled_high))
-                scaling_type = 1 if has_range else 0
+                # 找出缺哪些範圍值，缺就標記錯誤而非靜默降級為「不設 Scale」，
+                # 避免使用者明明填了 scale_enabled=true 卻收不到任何錯誤或警告
+                missing = [n for n, v in (("raw_low", raw_low), ("raw_high", raw_high),
+                                          ("scaled_low", scaled_low), ("scaled_high", scaled_high))
+                           if v is None]
+                if missing:
+                    scaling_type = 0
+                    scale_error = f"scale_enabled 為 true 但缺少 {', '.join(missing)}"
+                else:
+                    scaling_type = 1
             else:
+                # scale_enabled 為 falsy（沒填/false）→ 不設 Scale 為正常既有設計，不視為錯誤
                 scaling_type = 0
                 raw_low = raw_high = scaled_low = scaled_high = None
 
@@ -1238,12 +1268,13 @@ class PGClient:
                 "id": row.get("id"),
                 "tag_name": base["tag_name"],
                 "tb_type": base["tb_type"],
-                "channel_name": base["channel_name"],
-                "device_name": base["device_name"],
+                "channel_name": channel_name,
+                "device_name": device_name,
                 "full_tag_name": full_tag_name,
                 "scale_enabled": bool(scale_enabled),
                 "scaling_type": scaling_type,
                 "data_type": 8,
+                "scale_error": scale_error,
             }
             if scaling_type == 1:
                 entry.update({

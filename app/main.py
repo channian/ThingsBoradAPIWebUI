@@ -243,6 +243,11 @@ def _weekly_cleanup():
 
 @app.on_event("startup")
 async def on_startup():
+    try:
+        pg_client.ensure_schema()
+        log.info("[startup] PG schema 檢查完成（參照表與額外欄位）")
+    except Exception as e:
+        log.warning(f"[startup] PG schema 檢查失敗（PG 可能尚未連線）: {e}")
     _ensure_admin_user()
     t = threading.Thread(target=_weekly_cleanup, daemon=True)
     t.start()
@@ -1840,6 +1845,17 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
         success_count = 0
         for idx, item in enumerate(derived, 1):
             tag_name = item["tag_name"]
+
+            # 資料不全（scale_enabled=true 但缺範圍值）：不呼叫 Kepware，直接標記失敗，
+            # 且不可進 success_ids，讓該筆 scale_status 維持 pending 供修正後重跑
+            scale_error = item.get("scale_error")
+            if scale_error:
+                task.push_log("error", f"{tag_name} 資料不全: {scale_error}")
+                failed.append({"tag_name": tag_name, "reason": scale_error})
+                task.add_result(tag_name, "fail", scale_error)
+                task.push_progress(idx, total, success_count, len(failed), 0)
+                continue
+
             config = {
                 "channel_name": item["channel_name"],
                 "device_name": item["device_name"],

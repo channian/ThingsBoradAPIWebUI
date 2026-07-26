@@ -456,14 +456,21 @@
                             <div class="progress-fill" :style="{ width: (scaleDerive.progress.total ? (scaleDerive.progress.current / scaleDerive.progress.total * 100) : 0) + '%' }"></div>
                             <div class="progress-text">{{ scaleDerive.progress.current }} / {{ scaleDerive.progress.total }}（成功 {{ scaleDerive.progress.success }}，失敗 {{ scaleDerive.progress.fail }}）</div>
                         </div>
+                        <div v-if="scaleDerive.data.some(r => r.scale_error)"
+                             style="margin-bottom:12px;padding:10px;border-radius:8px;background:var(--err-soft);color:var(--err);font-size:13px">
+                            ⚠️ 有 {{ scaleDerive.data.filter(r => r.scale_error).length }} 筆資料標示需要 Scale（scale_enabled=true）但範圍值不完整，執行時將記為失敗且不會送至 Kepware。請修正暫存表資料後重新推導。
+                        </div>
                         <div v-if="scaleDerive.data.length" class="tbl-wrap">
                             <table>
                                 <thead><tr><th>Tag</th><th>Channel</th><th>Device</th><th>Scale</th><th>Raw Low</th><th>Raw High</th><th>Scaled Low</th><th>Scaled High</th></tr></thead>
                                 <tbody>
-                                    <tr v-for="r in scaleDerive.data" :key="r.id">
-                                        <td class="td-mono">{{ r.tag_name }}</td>
+                                    <tr v-for="r in scaleDerive.data" :key="r.id" :style="{ background: r.scale_error ? 'var(--err-soft)' : '' }">
+                                        <td class="td-mono">
+                                            {{ r.tag_name }}
+                                            <div v-if="r.scale_error" style="font-size:11px;color:var(--err);margin-top:2px">{{ r.scale_error }}</div>
+                                        </td>
                                         <td>{{ r.channel_name }}</td><td>{{ r.device_name }}</td>
-                                        <td><span class="pill" :class="r.scale_enabled ? 'pill-ok' : 'pill-muted'">{{ r.scale_enabled ? 'Linear' : 'None' }}</span></td>
+                                        <td><span class="pill" :class="r.scale_error ? 'pill-err' : (r.scaling_type === 1 ? 'pill-ok' : 'pill-muted')">{{ r.scale_error ? '資料不全' : (r.scaling_type === 1 ? 'Linear' : 'None') }}</span></td>
                                         <td class="td-mono">{{ r.scaling_raw_low ?? '—' }}</td>
                                         <td class="td-mono">{{ r.scaling_raw_high ?? '—' }}</td>
                                         <td class="td-mono">{{ r.scaling_scaled_low ?? '—' }}</td>
