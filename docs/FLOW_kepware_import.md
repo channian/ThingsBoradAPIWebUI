@@ -210,7 +210,7 @@ group_auto_create = dev_exists and not grp_exists and bool(grp)
 | `description` | 暫存表 `description` |
 | **`node_name`** | 暫存表 **`scada_node_name` 原值**（⚠️ **不是** `base.nodename` 去底線版，見待確認 #4） |
 | `driver_type` | `base.driver_type` |
-| **`address`** | 暫存表 **`io_address` 原值**（⚠️ **不是** `base.address` 帶前綴版，見待確認 #5） |
+| **`address`** | 暫存表 **`io_address` 原值**（**刻意**不帶 `ns=2;s=` 前綴，見下方「已確認為刻意設計」） |
 | `tabname` → 寫入欄位 `tablename` | `base.tabname` → 若空：IFIX `{zone}_{site_prefix}_{system}`、非 IFIX `{bu}_{site_prefix}_{system}`（對應值為空則整體為空字串） |
 | `zone` / `bu` | `location_config` 比對結果 |
 | `site` | 暫存表 `site` 原值 |
@@ -312,14 +312,23 @@ Kepware API Gateway 端限速為**滑動視窗 60 次/分鐘**（per `IP + 帳�
 | **1** | **`derive_scale_fields` 不吃 `kw_channel`/`kw_device`/`kw_tag_groups` 覆寫**，而 `derive_kw_fields` 吃 | `pg_client.py:1213` vs `1114` | 若某 tag 靠 Step 3 手動覆寫才建到正確路徑，Step 5 會把 Scale 打到**未覆寫的推導路徑**（該路徑可能不存在此 tag）→ Scale 失敗或改到別處 |
 | **2** | `scale_enabled=true` 但四個範圍值缺任一 → **靜默降級** `scaling_type=0` 且**照樣計為成功** | `pg_client.py:1231` | 「本來就不要 Scale」與「想要但資料不全」兩種情況在結果中**完全無法區分**，無任何警告 |
 | **3** | `import_formal` 逐筆 try/except **沒有 SAVEPOINT** | `pg_client.py:840` | 與 Collector 已修的問題同型：一筆爆錯後同 transaction 後續全部 `current transaction is aborted` 連環失敗 |
-| **4** | 正式表 `node_name` 用 `scada_node_name` **原值**，非 `base.nodename`（去底線版） | `pg_client.py:1196` | 正式表 node_name 與 Kepware channel 推導所用 nodename 可能不一致（需確認是否刻意） |
-| **5** | 正式表 `address` 用**原始** `io_address`；Collector `tag_address` 用**帶 `ns=2;s=` 前綴**版 | `pg_client.py:1198` / `1209` | 兩邊存不同格式（需確認是否刻意設計） |
+| **4** | 正式表 `node_name` 用 `scada_node_name` **原值**，非 `base.nodename`（去底線版） | `pg_client.py:1196` | **僅在 `scada_node_name` 含底線時才有分歧**：例 `K18_CHS` → 正式表存 `K18_CHS`、Kepware channel 為 `K18CHS`。若實際資料的 `scada_node_name` 都不含底線則無影響。<br>檢查：`SELECT scada_node_name, COUNT(*) FROM scada_tag_config WHERE scada_node_name LIKE '%\_%' GROUP BY 1;` |
 | **6** | `data_type` 三處各自寫死且不一致：建 tag `0`、Scale `8`、正式表字串 `"float"` | 多處 | 無法依實際點位型別調整 |
 | **7** | `scaling_clamp_low/high` 固定 `False`；從不送 `scaling_units` | `pg_client.py:1254` | 無法設定夾制行為與單位 |
 | **8** | 三個狀態欄無前後 gating | 全流程 | 可在未建點時直接跑 Step 4/5，程式不阻止也不警告 |
 | **9** | 暫存表 `ON CONFLICT DO NOTHING`（永不更新） | `pg_client.py:239` | 已加警示 message，但**行為未變**——修正資料必須先刪除再重匯。是否改為「更新模式並重置三狀態」**待決策** |
 | **10** | 無跨任務全域鎖 | `task_manager` | 同一 Gateway 併發任務會疊加消耗限速額度 |
 | **11** | **schema 遷移（`_ensure_ref_tables` + `_ensure_extra_columns`）只在 `test_connection()` 內執行**，而它只被 `GET /api/pg/test` 呼叫 | `pg_client.py:172` | 純 API 呼叫端若從未打過 `/api/pg/test`，`kw_channel`/`kw_device`/`kw_tag_groups`/`scale_status`/`scan_group` 等欄位與參照表**永遠不會被建立**。網頁登入會自動觸發故不受影響——這也是為何問題只在 API 端浮現 |
+
+> 編號 #5 已移至下方「已確認為刻意設計」，編號保留不重排以維持既有引用。
+
+---
+
+## 已確認為刻意設計（非問題，勿再標記）
+
+| 項目 | 說明 |
+|------|------|
+| **`address` 前綴在三處刻意不同**<br>`pg_client.py:1198` / `1209` | 正式表 `tags.address` 存**原始** `io_address`（**不帶**前綴）；Kepware 建點與 Collector 的 `tag_address` 存**帶 `ns=2;s=` 前綴**的版本。<br>**原因（2026-07-20 使用者確認）**：Kepware 建點與 OPC UA job 輪詢都需要前綴才能正確定址，而正式表作為資料清單不需要（也不應該）帶協定前綴。此為刻意區分，非 bug。 |
 
 ---
 
