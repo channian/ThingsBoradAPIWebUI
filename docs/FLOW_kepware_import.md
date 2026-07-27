@@ -1,7 +1,7 @@
 # Kepware 加點全流程規格（逐環節核對版）
 
 > **基準 commit `0c11094`**（2026-07-20 重新追過全部程式碼路徑後改寫，行號皆為當下實際位置）。
-> **狀態更新**（2026-07-26）：待確認事項 #1/#2/#3/#11（commit `726fc48`）與 #8/#10（commit `262f648`）已修正、#4/#9/#7 已確認不成立或無需求，
+> **狀態更新**（2026-07-26）：待確認事項 #1/#2/#3/#11（`726fc48`）、#8/#10（`262f648`）、#6（`5392d00`）已修正、#4/#9/#7 已確認不成立或無需求——**清單已全數處理完畢**，
 > 詳見文末分區；本文正文中對這些項目的描述已標註修正後行為，但**行號未重新校準**（修正後有位移）。
 > 用途：**逐環節核對資料如何流動、每個欄位從哪來、狀態何時改變**。
 > 命名沿革（`tb_status`/`tb_type`/`tb_device_profile` 現在都是 Kepware 概念）見 `CLAUDE.md`；
@@ -331,12 +331,18 @@ Kepware API Gateway 端限速為**滑動視窗 60 次/分鐘**（per `IP + 帳�
 | **8** | 三個狀態欄無前後 gating，未建點就跑 Step 5 必然失敗卻無從得知 | `/api/pg/derive/scale` 回傳 `not_built_count`（`tb_status != done` 的筆數），前端 Step 5 顯示橘色提示橫幅。**刻意只提示不阻擋**——「Kepware 上已手動建好點位、只想補設定」是合法用法 |
 | **10** | 無跨任務鎖，同一 Gateway 併發任務疊加消耗限速額度 | 以 `gateway_id`（無則 URL）為 key 的記憶體鎖，三個寫入端點搶不到即回 **409** 並附上佔用中的 `task_id` 供輪詢。採拒絕而非排隊（瓶頸在限速，排隊不會更快）。三個背景函式整個主體包 `try/finally` 釋放，確保崩潰不會讓 Gateway 永久卡死；只有持有者能釋放 |
 
-### ⏸ 尚未處理
+### ✅ 已修正（第三批，commit `5392d00`，2026-07-26）
 
-| # | 問題 | 位置 | 現況 |
-|---|------|------|------|
-| **6** | Kepware 端 `data_type` 兩階段不一致：建 tag 時未傳 → 用預設 `0`；Scale 時送 `8`。導致**有跑 Step 5 的點最終為 `8`、沒跑的停在 `0`** | `kw_gw_client.py:190`（預設值）/ `pg_client.py:1276` | **待使用者確認**：若 `0` 為 Kepware「Default（依位址自動判斷）」，則全面硬寫 `8` 會破壞數位點的自動判斷。建議分流——`scale_enabled=true` 的點在建點時明確送型別、`false` 的維持 Default 且 Step 5 完全跳過（可省下大量限速額度，因目前這些點每筆仍會發一次無意義的 PUT）。<br>正式表的 `"float"` 屬資料庫描述欄位，與 Kepware enum 不同體系，非問題 |
-| **7** | `scaling_clamp_low/high` 固定 `False`；從不送 `scaling_units` | `pg_client.py:1254` | **已確認目前系統無此需求**（2026-07-26 使用者確認），非缺口。若日後需要再實作 |
+| # | 問題 | 修法 |
+|---|------|------|
+| **6** | Kepware `data_type` 兩階段不一致：建點時未傳 → 用預設 `0`；Scale 時寫死 `8`。導致「有跑 Step 5 的點為 `8`、沒跑的停在 `0`」 | 改為「**預設 Float(8) + 例外手動覆寫**」，複用既有覆寫機制：暫存表新增 `kw_data_type`（nullable，NULL=未覆寫）、`_resolve_kw_data_type()` 集中解析、`create_tag` 明確傳入、Step 3 UI 新增 Data Type 下拉。<br>**`data_type` 與 `scale_enabled` 無關**——不需要 Scale 的點一樣要有正確型別。<br>**`scaling_scaled_data_type` 維持固定 8**——那是縮放「輸出值」的型別，與 tag 本身型別是兩個概念。<br>使用者確認 enum：`1=Boolean, 2=Char, 3=Byte, 4=Short, 5=Word, 6=Long, 7=DWord, 8=Float, 9=Double, 10=String, 11=BCD, 12=LBCD, 13=Date, 14=LLong, 15=QWord` |
+| — | （效能）`scale_enabled=false` 的點在 Step 5 仍會呼叫一次 Kepware Scale API（送 `scaling_type=0`），浪費限速額度 | Step 5 直接跳過不呼叫，`scale_status` 標記為 `skip`，並確實回報 skip 數（先前 `push_complete` 寫死 0） |
+
+### ✅ 已確認無需求
+
+| # | 項目 | 結論 |
+|---|------|------|
+| **7** | `scaling_clamp_low/high` 固定 `False`；從不送 `scaling_units` | **目前系統無此需求**（2026-07-26 使用者確認）。若日後需要再實作 |
 
 > 編號 #5 已移至下方「已確認為刻意設計」，編號保留不重排以維持既有引用。
 
