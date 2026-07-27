@@ -166,6 +166,14 @@ class PGClient:
                         ADD COLUMN kw_device VARCHAR(255),
                         ADD COLUMN kw_tag_groups VARCHAR(500);
                     END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'scada_tag_config'
+                        AND column_name = 'kw_data_type'
+                    ) THEN
+                        ALTER TABLE scada_tag_config
+                        ADD COLUMN kw_data_type INTEGER;
+                    END IF;
                 END $$;
             """)
 
@@ -1143,6 +1151,7 @@ class PGClient:
                 (row.get("kw_channel") and row["kw_channel"] != base["channel_name"])
                 or (row.get("kw_device") and row["kw_device"] != base["device_name"])
                 or (kw_tg is not None and kw_tg != base["tag_groups"])
+                or (row.get("kw_data_type") is not None)
             )
             results.append({
                 "id": row.get("id"),
@@ -1155,21 +1164,32 @@ class PGClient:
                 "description": row.get("description", ""),
                 "driver_type": base["driver_type"],
                 "profile_exists": base["profile_exists"],
+                "data_type": _resolve_kw_data_type(row),
                 "overridden": overridden,
             })
         return results
 
     def update_kw_overrides(self, staging_id: int,
-                             channel: str, device: str, tag_groups: str) -> bool:
-        """儲存使用者手動覆寫的 channel/device/tag_groups 到暫存表"""
+                             channel: str, device: str, tag_groups: str,
+                             data_type=None) -> bool:
+        """儲存使用者手動覆寫的 channel/device/tag_groups/data_type 到暫存表。
+        data_type 為空字串或 None 都存成 NULL，代表清除覆寫、回到預設 Float(8)。"""
+        dt = None
+        if data_type not in (None, ""):
+            try:
+                dt = int(data_type)
+            except (TypeError, ValueError):
+                dt = None
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """UPDATE scada_tag_config
-                       SET kw_channel = %s, kw_device = %s, kw_tag_groups = %s
+                       SET kw_channel = %s, kw_device = %s, kw_tag_groups = %s,
+                           kw_data_type = %s
                        WHERE id = %s""",
                     (channel or None, device or None,
                      tag_groups if tag_groups is not None else None,
+                     dt,
                      staging_id),
                 )
                 return cur.rowcount > 0
@@ -1273,7 +1293,7 @@ class PGClient:
                 "full_tag_name": full_tag_name,
                 "scale_enabled": bool(scale_enabled),
                 "scaling_type": scaling_type,
-                "data_type": 8,
+                "data_type": _resolve_kw_data_type(row),
                 "scale_error": scale_error,
             }
             if scaling_type == 1:
@@ -1401,6 +1421,23 @@ def _row_get_ci(row: dict, *keys):
         if rk and rk.strip().lower() in wanted:
             return str(rv).strip() if rv is not None else ""
     return None
+
+
+# Kepware tag 資料型別 enum（依 Kepware API Gateway 文件）
+KW_DATA_TYPE_DEFAULT = 8      # Float：實務上 9 成點位皆為此型別，故作為預設值
+
+
+def _resolve_kw_data_type(row: dict) -> int:
+    """決定 Kepware tag 的 data_type：暫存表 kw_data_type 有值就用（使用者手動覆寫），
+    否則回傳預設的 Float(8)。與 scale_enabled 無關——不論是否需要 Scale，
+    tag 都需要正確的資料型別。"""
+    v = row.get("kw_data_type")
+    if v is None:
+        return KW_DATA_TYPE_DEFAULT
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return KW_DATA_TYPE_DEFAULT
 
 
 def _parse_bool(val) -> bool:

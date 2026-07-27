@@ -333,16 +333,27 @@ createApp({
             delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
         })
 
+        // Kepware tag 資料型別 enum（依 Kepware API Gateway 文件）；實務上 9 成為 Float
+        const KW_DATA_TYPES = [
+            { v: 1, label: 'Boolean' }, { v: 2, label: 'Char' }, { v: 3, label: 'Byte' },
+            { v: 4, label: 'Short' }, { v: 5, label: 'Word' }, { v: 6, label: 'Long' },
+            { v: 7, label: 'DWord' }, { v: 8, label: 'Float' }, { v: 9, label: 'Double' },
+            { v: 10, label: 'String' }, { v: 11, label: 'BCD' }, { v: 12, label: 'LBCD' },
+            { v: 13, label: 'Date' }, { v: 14, label: 'LLong' }, { v: 15, label: 'QWord' },
+        ]
+
         function _stampKwOrig(row) {
             row._origChannel = row.channel_name || ''
             row._origDevice = row.device_name || ''
             row._origTagGroups = row.tag_groups || ''
+            row._origDataType = row.data_type
         }
 
         function _kwRowChanged(row) {
             return (row.channel_name || '') !== (row._origChannel ?? '')
                 || (row.device_name || '') !== (row._origDevice ?? '')
                 || (row.tag_groups || '') !== (row._origTagGroups ?? '')
+                || row.data_type !== row._origDataType
         }
 
         async function deriveKw() {
@@ -377,6 +388,7 @@ createApp({
                             channel: row.channel_name || '',
                             device: row.device_name || '',
                             tag_groups: row.tag_groups || '',
+                            data_type: row.data_type,
                         }),
                     })
                     if (!resp.ok) {
@@ -1022,7 +1034,7 @@ createApp({
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
             staging, loadStaging, clearStaging, toggleStagingSelectAll, toggleStagingRow, deleteSelectedStaging,
-            kwDerive, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
+            kwDerive, KW_DATA_TYPES, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,

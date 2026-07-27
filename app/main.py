@@ -429,6 +429,7 @@ class KwOverrideRequest(BaseModel):
     channel: str = ""
     device: str = ""
     tag_groups: str = ""
+    data_type: Optional[int] = None
 
 
 class TagCondition(BaseModel):
@@ -1296,7 +1297,7 @@ async def pg_staging_kw_override(req: KwOverrideRequest,
                                   user: dict = Depends(require_role("admin", "operator"))):
     """儲存 Step 3 手動覆寫的 channel / device / tag_groups"""
     try:
-        ok = pg_client.update_kw_overrides(req.id, req.channel, req.device, req.tag_groups)
+        ok = pg_client.update_kw_overrides(req.id, req.channel, req.device, req.tag_groups, req.data_type)
         if not ok:
             raise HTTPException(status_code=404, detail=f"找不到暫存列 id={req.id}")
         return {"success": True}
@@ -1659,6 +1660,7 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
                             address=item.get("address") or None,
                             description=item.get("description") or None,
                             tag_group=item["tag_groups"] or None,
+                            data_type=item.get("data_type", 8),
                         ))
                     success_ids.append(item["id"])
                     success_count += 1
@@ -1919,7 +1921,9 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
 
             success_ids = []
             failed = []
+            skip_ids = []
             success_count = 0
+            skipped_count = 0
             for idx, item in enumerate(derived, 1):
                 tag_name = item["tag_name"]
 
@@ -1930,7 +1934,16 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
                     task.push_log("error", f"{tag_name} 資料不全: {scale_error}")
                     failed.append({"tag_name": tag_name, "reason": scale_error})
                     task.add_result(tag_name, "fail", scale_error)
-                    task.push_progress(idx, total, success_count, len(failed), 0)
+                    task.push_progress(idx, total, success_count, len(failed), skipped_count)
+                    continue
+
+                # scale_enabled=false 的點本來就不需要 Scale，不必呼叫 Kepware 浪費限速額度，
+                # 直接標記為 skip（暫存表 scale_status 支援此值）
+                if item.get("scaling_type") == 0 and not item.get("scale_error"):
+                    skip_ids.append(item["id"])
+                    skipped_count += 1
+                    task.add_result(tag_name, "skip", "未啟用 Scale")
+                    task.push_progress(idx, total, success_count, len(failed), skipped_count)
                     continue
 
                 config = {
@@ -1964,7 +1977,7 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
                     failed.append({"tag_name": tag_name, "reason": str(e)})
                     task.add_result(tag_name, "fail", str(e))
 
-                task.push_progress(idx, total, success_count, len(failed), 0)
+                task.push_progress(idx, total, success_count, len(failed), skipped_count)
                 time.sleep(delay + random.uniform(0.01, 0.05))
                 if success_count > 0 and success_count % batch_size == 0:
                     task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
@@ -1972,6 +1985,8 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
 
             if success_ids:
                 pg_client.update_staging_status(success_ids, "scale_status", "done")
+            if skip_ids:
+                pg_client.update_staging_status(skip_ids, "scale_status", "skip")
 
             try:
                 pg_client.add_activity_log(
@@ -1981,7 +1996,8 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
                 log.warning(f"[activity_log] 寫入失敗: {e}")
 
             task.push_complete({
-                "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
+                "total": total, "success": len(success_ids), "fail": len(failed),
+                "skip": skipped_count,
                 "errors": failed, "message": f"成功設定 {len(success_ids)} 筆 Scale",
             })
         finally:

@@ -305,15 +305,16 @@
                         <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
                             <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
                                 <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
-                                Channel / Device / Groups 欄位可直接編輯，調整完成後點「儲存覆寫」
+                                Channel / Device / Groups / Data Type 欄位可直接編輯，調整完成後點「儲存覆寫」（Data Type 預設為 Float）
                             </div>
-                            <table style="min-width:900px">
+                            <table style="min-width:1000px">
                                 <thead>
                                     <tr>
                                         <th>狀態</th><th>Tag Name</th>
                                         <th>Channel <span style="font-size:10px;opacity:.6">✎</span></th>
                                         <th>Device <span style="font-size:10px;opacity:.6">✎</span></th>
                                         <th>Groups <span style="font-size:10px;opacity:.6">✎</span></th>
+                                        <th>Data Type <span style="font-size:10px;opacity:.6">✎</span></th>
                                         <th>Address</th><th>Description</th>
                                     </tr>
                                 </thead>
@@ -329,6 +330,11 @@
                                         <td><input class="input input-kw" v-model="r.channel_name"></td>
                                         <td><input class="input input-kw" v-model="r.device_name"></td>
                                         <td><input class="input input-kw td-mono" v-model="r.tag_groups"></td>
+                                        <td>
+                                            <select class="select input-kw" v-model.number="r.data_type" style="font-size:12px;padding:2px 4px">
+                                                <option v-for="t in KW_DATA_TYPES" :key="t.v" :value="t.v">{{ t.label }}</option>
+                                            </select>
+                                        </td>
                                         <td class="td-mono" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address }}</td>
                                         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.description }}</td>
                                     </tr>
