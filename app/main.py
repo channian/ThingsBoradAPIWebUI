@@ -141,6 +141,36 @@ config_manager = ConfigManager(CONFIG_FILE)
 
 task_manager = TaskManager()
 
+# ── Gateway 併發鎖 ──────────────────────────────────────
+# Kepware GW 限速為每分鐘 60 次（per 帳號+路徑），建點/Scale/刪除共用同一額度桶。
+# 同一 Gateway 若併發執行多個背景任務，實際速率會疊加而撞限速，故同時只允許一個任務。
+# 採「拒絕」而非排隊：瓶頸在限速，排隊不會更快，直接回報讓呼叫端可決定何時重試。
+_gateway_locks: dict = {}          # gateway_key -> task_id
+_gateway_lock_mutex = threading.Lock()
+
+
+def _gateway_lock_key(gateway_id, gw_url) -> str:
+    """有 gateway_id 用它，否則用手動憑證的 URL 當 key"""
+    return f"gw:{gateway_id}" if gateway_id else f"url:{gw_url}"
+
+
+def _acquire_gateway_lock(key: str, task_id: str):
+    """嘗試取得鎖。成功回 None；失敗回目前佔用該 Gateway 的 task_id"""
+    with _gateway_lock_mutex:
+        current = _gateway_locks.get(key)
+        if current:
+            return current
+        _gateway_locks[key] = task_id
+        return None
+
+
+def _release_gateway_lock(key: str, task_id: str):
+    """釋放鎖（只有持有者能釋放，避免誤放他人的鎖）"""
+    with _gateway_lock_mutex:
+        if _gateway_locks.get(key) == task_id:
+            _gateway_locks.pop(key, None)
+
+
 # 暫存上傳的 CSV 資料 — 檔案式儲存，伺服器重啟不會遺失
 CSV_STORE_DIR = os.path.join(DATA_DIR, "csv_uploads")
 os.makedirs(CSV_STORE_DIR, exist_ok=True)
@@ -1037,88 +1067,103 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
     task.csv_filename = "(Kepware 批次刪除)"
     task.on_complete = _append_history
 
+    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
+    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
+    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
+    if busy_task_id:
+        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
+        raise HTTPException(
+            status_code=409,
+            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
+                   f"請輪詢該任務直到完成後再重試",
+        )
+    task.params["_gw_lock_key"] = gw_key
+
     def _exec_kw_delete(task):
-        import datetime as dt, time, random
-        from app.task_manager import _smart_get
-        task.started_at = dt.datetime.now().isoformat()
-        params = task.params
-        csv_rows = params["rows"]
-        dry_run = params.get("dry_run", True)
+        try:
+            import datetime as dt, time, random
+            from app.task_manager import _smart_get
+            task.started_at = dt.datetime.now().isoformat()
+            params = task.params
+            csv_rows = params["rows"]
+            dry_run = params.get("dry_run", True)
 
-        # 從 CSV 的 name/type 直接拆解 Kepware 路徑
-        derived = []
-        for row in csv_rows:
-            tag_name = _smart_get(row, "name")
-            tb_type = _smart_get(row, "type")
-            if not tag_name or not tb_type:
-                continue
-            tp = tb_type.split("-")
-            derived.append({
-                "tag_name": tag_name,
-                "channel_name": tp[0] if len(tp) > 0 else "",
-                "device_name": tp[1] if len(tp) > 1 else "",
-                "tag_groups": ".".join(tp[2:]) if len(tp) > 2 else "",
-            })
-        if not derived:
-            task.push_log("warning", "無可處理的 Tag 資料")
-            task.push_complete({"total": 0, "success": 0, "fail": 0, "skip": 0})
-            return
-
-        if not dry_run:
-            try:
-                client = KepwareGatewayClient(params["kw_gw_url"],
-                                              verify=params.get("kw_gw_verify", True))
-                client.login(params["kw_gw_username"], params["kw_gw_password"])
-                task.push_log("info", "Kepware Gateway 登入成功")
-            except Exception as e:
-                task.push_log("error", f"Kepware 登入失敗: {e}")
-                task.push_complete({"total": len(derived), "success": 0, "fail": 0, "skip": 0})
+            # 從 CSV 的 name/type 直接拆解 Kepware 路徑
+            derived = []
+            for row in csv_rows:
+                tag_name = _smart_get(row, "name")
+                tb_type = _smart_get(row, "type")
+                if not tag_name or not tb_type:
+                    continue
+                tp = tb_type.split("-")
+                derived.append({
+                    "tag_name": tag_name,
+                    "channel_name": tp[0] if len(tp) > 0 else "",
+                    "device_name": tp[1] if len(tp) > 1 else "",
+                    "tag_groups": ".".join(tp[2:]) if len(tp) > 2 else "",
+                })
+            if not derived:
+                task.push_log("warning", "無可處理的 Tag 資料")
+                task.push_complete({"total": 0, "success": 0, "fail": 0, "skip": 0})
                 return
 
-        total = len(derived)
-        success = fail = 0
-        failed_items = []
-        for idx, item in enumerate(derived, 1):
-            tag = item["tag_name"]
-            ch = item["channel_name"]
-            dev = item["device_name"]
-            grp = item["tag_groups"] or None
-            if dry_run:
-                task.push_log("info", f"[預演] 模擬刪除 Tag: {ch}/{dev}/{grp or ''}/{tag}")
-                success += 1
-                task.add_result(tag, "success", "預演")
-            else:
+            if not dry_run:
                 try:
-                    _kw_call_with_429_retry(
-                        task, f"刪除 {tag}",
-                        lambda ch=ch, dev=dev, tag=tag, grp=grp: client.delete_tag(ch, dev, tag, tag_group=grp))
-                    task.push_log("success", f"[成功] 已刪除 Tag: {tag}")
-                    success += 1
-                    task.add_result(tag, "success", "")
-                except requests.HTTPError as e:
-                    status = e.response.status_code if e.response is not None else "?"
-                    if status == 404:
-                        task.push_log("warning", f"[略過] Tag 不存在: {tag}")
-                        success += 1
-                        task.add_result(tag, "success", "不存在")
-                    else:
-                        task.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
-                        fail += 1
-                        failed_items.append({"name": tag, "reason": f"HTTP {status}"})
-                        task.add_result(tag, "fail", f"HTTP {status}")
+                    client = KepwareGatewayClient(params["kw_gw_url"],
+                                                  verify=params.get("kw_gw_verify", True))
+                    client.login(params["kw_gw_username"], params["kw_gw_password"])
+                    task.push_log("info", "Kepware Gateway 登入成功")
                 except Exception as e:
-                    task.push_log("error", f"[異常] {tag}: {e}")
-                    fail += 1
-                    failed_items.append({"name": tag, "reason": str(e)})
-                    task.add_result(tag, "fail", str(e))
+                    task.push_log("error", f"Kepware 登入失敗: {e}")
+                    task.push_complete({"total": len(derived), "success": 0, "fail": 0, "skip": 0})
+                    return
 
-            task.push_progress(idx, total, success, fail, 0)
-            time.sleep(params.get("delay", 0.2) + random.uniform(0.01, 0.05))
-            if success > 0 and success % params.get("batch_size", 50) == 0:
-                time.sleep(params.get("batch_pause", 5))
+            total = len(derived)
+            success = fail = 0
+            failed_items = []
+            for idx, item in enumerate(derived, 1):
+                tag = item["tag_name"]
+                ch = item["channel_name"]
+                dev = item["device_name"]
+                grp = item["tag_groups"] or None
+                if dry_run:
+                    task.push_log("info", f"[預演] 模擬刪除 Tag: {ch}/{dev}/{grp or ''}/{tag}")
+                    success += 1
+                    task.add_result(tag, "success", "預演")
+                else:
+                    try:
+                        _kw_call_with_429_retry(
+                            task, f"刪除 {tag}",
+                            lambda ch=ch, dev=dev, tag=tag, grp=grp: client.delete_tag(ch, dev, tag, tag_group=grp))
+                        task.push_log("success", f"[成功] 已刪除 Tag: {tag}")
+                        success += 1
+                        task.add_result(tag, "success", "")
+                    except requests.HTTPError as e:
+                        status = e.response.status_code if e.response is not None else "?"
+                        if status == 404:
+                            task.push_log("warning", f"[略過] Tag 不存在: {tag}")
+                            success += 1
+                            task.add_result(tag, "success", "不存在")
+                        else:
+                            task.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
+                            fail += 1
+                            failed_items.append({"name": tag, "reason": f"HTTP {status}"})
+                            task.add_result(tag, "fail", f"HTTP {status}")
+                    except Exception as e:
+                        task.push_log("error", f"[異常] {tag}: {e}")
+                        fail += 1
+                        failed_items.append({"name": tag, "reason": str(e)})
+                        task.add_result(tag, "fail", str(e))
 
-        task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0,
-                            "errors": failed_items})
+                task.push_progress(idx, total, success, fail, 0)
+                time.sleep(params.get("delay", 0.2) + random.uniform(0.01, 0.05))
+                if success > 0 and success % params.get("batch_size", 50) == 0:
+                    time.sleep(params.get("batch_pause", 5))
+
+            task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0,
+                                "errors": failed_items})
+        finally:
+            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
 
     task_manager.run_in_background(task, _exec_kw_delete)
     return {"task_id": task.id}
@@ -1548,97 +1593,112 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
     task.csv_filename = "(Kepware 建點)"
     task.on_complete = _append_history
 
+    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
+    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
+    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
+    if busy_task_id:
+        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
+        raise HTTPException(
+            status_code=409,
+            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
+                   f"請輪詢該任務直到完成後再重試",
+        )
+    task.params["_gw_lock_key"] = gw_key
+
     def _exec_kw_execute(task):
-        import datetime as dt, time, random
-        task.started_at = dt.datetime.now().isoformat()
-        params = task.params
-        derived = params["derived"]
-        delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
-        total = len(derived)
-
         try:
-            client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
-            client.login(params["gw_user"], params["gw_pass"])
-            task.push_log("info", "Kepware Gateway 登入成功")
-        except Exception as e:
-            task.push_log("error", f"Kepware 登入失敗: {e}")
-            task.push_complete({
-                "total": total, "success": 0, "fail": total, "skip": 0,
-                "errors": [{"name": "*", "reason": str(e)}],
-                "message": f"Kepware 登入失敗: {e}",
-            })
-            return
+            import datetime as dt, time, random
+            task.started_at = dt.datetime.now().isoformat()
+            params = task.params
+            derived = params["derived"]
+            delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+            total = len(derived)
 
-        # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
-        # 注意：這段同樣受 Kepware 限速管制（/api/config/tag_groups 路徑），
-        # 必須與建 tag 迴圈一樣節流 + 429 退避，否則 group 一多就會開場連環 429
-        unique_groups = {}
-        for item in derived:
-            ch, dev, grp = item["channel_name"], item["device_name"], item["tag_groups"]
-            if grp:
-                unique_groups[(ch, dev, grp)] = True
-        for (ch, dev, grp) in unique_groups:
             try:
-                _kw_call_with_429_retry(
-                    task, f"Tag group {ch}/{dev}/{grp}",
-                    lambda ch=ch, dev=dev, grp=grp: client.ensure_tag_groups(ch, dev, grp))
+                client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
+                client.login(params["gw_user"], params["gw_pass"])
+                task.push_log("info", "Kepware Gateway 登入成功")
             except Exception as e:
-                task.push_log("warning", f"Tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
-            time.sleep(delay + random.uniform(0.01, 0.05))
+                task.push_log("error", f"Kepware 登入失敗: {e}")
+                task.push_complete({
+                    "total": total, "success": 0, "fail": total, "skip": 0,
+                    "errors": [{"name": "*", "reason": str(e)}],
+                    "message": f"Kepware 登入失敗: {e}",
+                })
+                return
 
-        success_ids = []
-        failed = []
-        success_count = 0
-        for idx, item in enumerate(derived, 1):
-            tag = item["tag_name"]
-            try:
-                _kw_call_with_429_retry(
-                    task, f"Tag {tag}",
-                    lambda item=item: client.create_tag(
-                        channel_name=item["channel_name"],
-                        device_name=item["device_name"],
-                        tag_name=item["tag_name"],
-                        address=item.get("address") or None,
-                        description=item.get("description") or None,
-                        tag_group=item["tag_groups"] or None,
-                    ))
-                success_ids.append(item["id"])
-                success_count += 1
-                task.add_result(tag, "success", "")
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code == 409:
+            # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
+            # 注意：這段同樣受 Kepware 限速管制（/api/config/tag_groups 路徑），
+            # 必須與建 tag 迴圈一樣節流 + 429 退避，否則 group 一多就會開場連環 429
+            unique_groups = {}
+            for item in derived:
+                ch, dev, grp = item["channel_name"], item["device_name"], item["tag_groups"]
+                if grp:
+                    unique_groups[(ch, dev, grp)] = True
+            for (ch, dev, grp) in unique_groups:
+                try:
+                    _kw_call_with_429_retry(
+                        task, f"Tag group {ch}/{dev}/{grp}",
+                        lambda ch=ch, dev=dev, grp=grp: client.ensure_tag_groups(ch, dev, grp))
+                except Exception as e:
+                    task.push_log("warning", f"Tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
+                time.sleep(delay + random.uniform(0.01, 0.05))
+
+            success_ids = []
+            failed = []
+            success_count = 0
+            for idx, item in enumerate(derived, 1):
+                tag = item["tag_name"]
+                try:
+                    _kw_call_with_429_retry(
+                        task, f"Tag {tag}",
+                        lambda item=item: client.create_tag(
+                            channel_name=item["channel_name"],
+                            device_name=item["device_name"],
+                            tag_name=item["tag_name"],
+                            address=item.get("address") or None,
+                            description=item.get("description") or None,
+                            tag_group=item["tag_groups"] or None,
+                        ))
                     success_ids.append(item["id"])
                     success_count += 1
-                    task.add_result(tag, "success", "已存在")
-                else:
-                    status = e.response.status_code if e.response is not None else "?"
-                    text = e.response.text[:200] if e.response is not None else str(e)
-                    failed.append({"name": tag, "reason": f"HTTP {status}: {text}"})
-                    task.add_result(tag, "fail", f"HTTP {status}")
+                    task.add_result(tag, "success", "")
+                except requests.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 409:
+                        success_ids.append(item["id"])
+                        success_count += 1
+                        task.add_result(tag, "success", "已存在")
+                    else:
+                        status = e.response.status_code if e.response is not None else "?"
+                        text = e.response.text[:200] if e.response is not None else str(e)
+                        failed.append({"name": tag, "reason": f"HTTP {status}: {text}"})
+                        task.add_result(tag, "fail", f"HTTP {status}")
+                except Exception as e:
+                    failed.append({"name": tag, "reason": str(e)})
+                    task.add_result(tag, "fail", str(e))
+
+                task.push_progress(idx, total, success_count, len(failed), 0)
+                time.sleep(delay + random.uniform(0.01, 0.05))
+                if success_count > 0 and success_count % batch_size == 0:
+                    task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
+                    time.sleep(batch_pause)
+
+            if success_ids:
+                pg_client.update_staging_status(success_ids, "tb_status", "done")
+
+            try:
+                pg_client.add_activity_log(
+                    params["username"], "execute_tb",
+                    f"Kepware 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
             except Exception as e:
-                failed.append({"name": tag, "reason": str(e)})
-                task.add_result(tag, "fail", str(e))
+                log.warning(f"[activity_log] 寫入失敗: {e}")
 
-            task.push_progress(idx, total, success_count, len(failed), 0)
-            time.sleep(delay + random.uniform(0.01, 0.05))
-            if success_count > 0 and success_count % batch_size == 0:
-                task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
-                time.sleep(batch_pause)
-
-        if success_ids:
-            pg_client.update_staging_status(success_ids, "tb_status", "done")
-
-        try:
-            pg_client.add_activity_log(
-                params["username"], "execute_tb",
-                f"Kepware 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
-        except Exception as e:
-            log.warning(f"[activity_log] 寫入失敗: {e}")
-
-        task.push_complete({
-            "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
-            "errors": failed, "message": f"成功建立 {len(success_ids)} 筆 Tag",
-        })
+            task.push_complete({
+                "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
+                "errors": failed, "message": f"成功建立 {len(success_ids)} 筆 Tag",
+            })
+        finally:
+            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
 
     task_manager.run_in_background(task, _exec_kw_execute)
     return {"task_id": task.id}
@@ -1770,7 +1830,11 @@ async def pg_derive_scale(req: DeriveScaleRequest,
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
         results = pg_client.derive_scale_fields(rows)
-        return {"data": results, "total": len(results)}
+        # 尚未在 Kepware 建點（tb_status != done）的筆數：Scale 是 PUT（更新語意），
+        # 該 tag 若在 Kepware 不存在必然失敗；此處只提示、不阻擋
+        # （合法用法：Kepware 上已手動建好點位，只想補設定）。
+        not_built = sum(1 for r in rows if r.get("tb_status") != "done")
+        return {"data": results, "total": len(results), "not_built_count": not_built}
     except Exception as e:
         log.error(f"[deriveScale] 推導失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"推導失敗: {e}")
@@ -1819,94 +1883,109 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
     task.csv_filename = "(Kepware Scale 設定)"
     task.on_complete = _append_history
 
+    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
+    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
+    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
+    if busy_task_id:
+        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
+        raise HTTPException(
+            status_code=409,
+            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
+                   f"請輪詢該任務直到完成後再重試",
+        )
+    task.params["_gw_lock_key"] = gw_key
+
     def _exec_pg_execute_scale(task):
-        import datetime as dt, time, random
-        task.started_at = dt.datetime.now().isoformat()
-        params = task.params
-        derived = params["derived"]
-        delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
-        total = len(derived)
-
         try:
-            client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
-            client.login(params["gw_user"], params["gw_pass"])
-            task.push_log("info", "Kepware Gateway 登入成功")
-        except Exception as e:
-            task.push_log("error", f"Kepware 登入失敗: {e}")
-            task.push_complete({
-                "total": total, "success": 0, "fail": total, "skip": 0,
-                "errors": [{"tag_name": "*", "reason": str(e)}],
-                "message": f"Kepware 登入失敗: {e}",
-            })
-            return
-
-        success_ids = []
-        failed = []
-        success_count = 0
-        for idx, item in enumerate(derived, 1):
-            tag_name = item["tag_name"]
-
-            # 資料不全（scale_enabled=true 但缺範圍值）：不呼叫 Kepware，直接標記失敗，
-            # 且不可進 success_ids，讓該筆 scale_status 維持 pending 供修正後重跑
-            scale_error = item.get("scale_error")
-            if scale_error:
-                task.push_log("error", f"{tag_name} 資料不全: {scale_error}")
-                failed.append({"tag_name": tag_name, "reason": scale_error})
-                task.add_result(tag_name, "fail", scale_error)
-                task.push_progress(idx, total, success_count, len(failed), 0)
-                continue
-
-            config = {
-                "channel_name": item["channel_name"],
-                "device_name": item["device_name"],
-                "tag_name": item["full_tag_name"],
-                "data_type": item["data_type"],
-                "scaling_type": item["scaling_type"],
-            }
-            # Linear 才帶 scaling 參數
-            if item["scaling_type"] == 1:
-                config.update({
-                    "scaling_raw_low": item["scaling_raw_low"],
-                    "scaling_raw_high": item["scaling_raw_high"],
-                    "scaling_scaled_low": item["scaling_scaled_low"],
-                    "scaling_scaled_high": item["scaling_scaled_high"],
-                    "scaling_clamp_low": item.get("scaling_clamp_low", True),
-                    "scaling_clamp_high": item.get("scaling_clamp_high", True),
-                    "scaling_scaled_data_type": item.get("scaling_scaled_data_type", 8),
-                })
+            import datetime as dt, time, random
+            task.started_at = dt.datetime.now().isoformat()
+            params = task.params
+            derived = params["derived"]
+            delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+            total = len(derived)
 
             try:
-                _kw_call_with_429_retry(
-                    task, f"Scale {tag_name}",
-                    lambda config=config: client.set_tag_scaling(config))
-                success_ids.append(item["id"])
-                success_count += 1
-                task.add_result(tag_name, "success", "")
+                client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
+                client.login(params["gw_user"], params["gw_pass"])
+                task.push_log("info", "Kepware Gateway 登入成功")
             except Exception as e:
-                task.push_log("error", f"{tag_name} 失敗: {e}")
-                failed.append({"tag_name": tag_name, "reason": str(e)})
-                task.add_result(tag_name, "fail", str(e))
+                task.push_log("error", f"Kepware 登入失敗: {e}")
+                task.push_complete({
+                    "total": total, "success": 0, "fail": total, "skip": 0,
+                    "errors": [{"tag_name": "*", "reason": str(e)}],
+                    "message": f"Kepware 登入失敗: {e}",
+                })
+                return
 
-            task.push_progress(idx, total, success_count, len(failed), 0)
-            time.sleep(delay + random.uniform(0.01, 0.05))
-            if success_count > 0 and success_count % batch_size == 0:
-                task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
-                time.sleep(batch_pause)
+            success_ids = []
+            failed = []
+            success_count = 0
+            for idx, item in enumerate(derived, 1):
+                tag_name = item["tag_name"]
 
-        if success_ids:
-            pg_client.update_staging_status(success_ids, "scale_status", "done")
+                # 資料不全（scale_enabled=true 但缺範圍值）：不呼叫 Kepware，直接標記失敗，
+                # 且不可進 success_ids，讓該筆 scale_status 維持 pending 供修正後重跑
+                scale_error = item.get("scale_error")
+                if scale_error:
+                    task.push_log("error", f"{tag_name} 資料不全: {scale_error}")
+                    failed.append({"tag_name": tag_name, "reason": scale_error})
+                    task.add_result(tag_name, "fail", scale_error)
+                    task.push_progress(idx, total, success_count, len(failed), 0)
+                    continue
 
-        try:
-            pg_client.add_activity_log(
-                params["username"], "execute_scale",
-                f"Scale 設定成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
-        except Exception as e:
-            log.warning(f"[activity_log] 寫入失敗: {e}")
+                config = {
+                    "channel_name": item["channel_name"],
+                    "device_name": item["device_name"],
+                    "tag_name": item["full_tag_name"],
+                    "data_type": item["data_type"],
+                    "scaling_type": item["scaling_type"],
+                }
+                # Linear 才帶 scaling 參數
+                if item["scaling_type"] == 1:
+                    config.update({
+                        "scaling_raw_low": item["scaling_raw_low"],
+                        "scaling_raw_high": item["scaling_raw_high"],
+                        "scaling_scaled_low": item["scaling_scaled_low"],
+                        "scaling_scaled_high": item["scaling_scaled_high"],
+                        "scaling_clamp_low": item.get("scaling_clamp_low", True),
+                        "scaling_clamp_high": item.get("scaling_clamp_high", True),
+                        "scaling_scaled_data_type": item.get("scaling_scaled_data_type", 8),
+                    })
 
-        task.push_complete({
-            "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
-            "errors": failed, "message": f"成功設定 {len(success_ids)} 筆 Scale",
-        })
+                try:
+                    _kw_call_with_429_retry(
+                        task, f"Scale {tag_name}",
+                        lambda config=config: client.set_tag_scaling(config))
+                    success_ids.append(item["id"])
+                    success_count += 1
+                    task.add_result(tag_name, "success", "")
+                except Exception as e:
+                    task.push_log("error", f"{tag_name} 失敗: {e}")
+                    failed.append({"tag_name": tag_name, "reason": str(e)})
+                    task.add_result(tag_name, "fail", str(e))
+
+                task.push_progress(idx, total, success_count, len(failed), 0)
+                time.sleep(delay + random.uniform(0.01, 0.05))
+                if success_count > 0 and success_count % batch_size == 0:
+                    task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
+                    time.sleep(batch_pause)
+
+            if success_ids:
+                pg_client.update_staging_status(success_ids, "scale_status", "done")
+
+            try:
+                pg_client.add_activity_log(
+                    params["username"], "execute_scale",
+                    f"Scale 設定成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
+            except Exception as e:
+                log.warning(f"[activity_log] 寫入失敗: {e}")
+
+            task.push_complete({
+                "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
+                "errors": failed, "message": f"成功設定 {len(success_ids)} 筆 Scale",
+            })
+        finally:
+            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
 
     task_manager.run_in_background(task, _exec_pg_execute_scale)
     return {"task_id": task.id}

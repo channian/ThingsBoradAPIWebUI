@@ -68,7 +68,7 @@ createApp({
             Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false, deleting: false, selectedIds: [] })
             Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null, progress: null })
             Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
-            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null, progress: null })
+            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null, progress: null, notBuiltCount: 0 })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
             Object.assign(pgConn, { testing: false, status: '', statusText: '未連線' })
             Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
@@ -487,6 +487,7 @@ createApp({
         const scaleDerive = reactive({
             data: [], loading: false, executing: false, result: null,
             delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
+            notBuiltCount: 0,   // 本批中尚未在 Kepware 建點（tb_status != done）的筆數
         })
 
         async function deriveScale() {
@@ -499,6 +500,7 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 scaleDerive.data = data.data || []
+                scaleDerive.notBuiltCount = data.not_built_count || 0
             } catch (e) { alert('Scale 推導失敗: ' + e.message) }
             finally { scaleDerive.loading = false }
         }

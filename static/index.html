@@ -456,6 +456,11 @@
                             <div class="progress-fill" :style="{ width: (scaleDerive.progress.total ? (scaleDerive.progress.current / scaleDerive.progress.total * 100) : 0) + '%' }"></div>
                             <div class="progress-text">{{ scaleDerive.progress.current }} / {{ scaleDerive.progress.total }}（成功 {{ scaleDerive.progress.success }}，失敗 {{ scaleDerive.progress.fail }}）</div>
                         </div>
+                        <div v-if="scaleDerive.notBuiltCount > 0"
+                             style="margin-bottom:12px;padding:10px;border-radius:8px;background:var(--warn-soft);color:var(--ink-1);font-size:13px">
+                            ⚠️ 本批有 {{ scaleDerive.notBuiltCount }} 筆尚未在 Kepware 建點（建點狀態非 done）。Scale 為更新操作，
+                            若該 Tag 在 Kepware 不存在將會失敗。若這些點位是在 Kepware 手動建立的，可忽略此提示直接執行。
+                        </div>
                         <div v-if="scaleDerive.data.some(r => r.scale_error)"
                              style="margin-bottom:12px;padding:10px;border-radius:8px;background:var(--err-soft);color:var(--err);font-size:13px">
                             ⚠️ 有 {{ scaleDerive.data.filter(r => r.scale_error).length }} 筆資料標示需要 Scale（scale_enabled=true）但範圍值不完整，執行時將記為失敗且不會送至 Kepware。請修正暫存表資料後重新推導。
