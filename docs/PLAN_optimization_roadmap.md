@@ -232,7 +232,8 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 - [ ] P2-3 app.js 模組化（低優先，需評估）
 - [ ] P2-4 死代碼清理（需使用者確認範圍)
 - [ ] P2-5 一致性小項
-- [ ] P3 功能候選（逐項與使用者確認）
+- [x] P3-1 Step 3/5 執行進度條 — 已隨 P0-1A 前端完成（commit 9d444ae）
+- [ ] P3 其餘功能候選（查詢條件儲存、暫存表 inline 編輯、匯入報告下載、使用者停用切換、Gateway 狀態偵測）
 
 ---
 
@@ -259,3 +260,42 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 ---
 
 *盤點基準：commit `9615529`，2026-07-03。Phase 1 完成：commit `e84ce8f`。*
+
+---
+
+## 七、2026-09 狀態盤點
+
+- **時間軸**：本專案（分支 `claude/kepware-web-interface-l3WXm`）自 7/27（commit `4f3422c`）後至 9/25 無新作業，進度停在上方第五節所示狀態。
+- **舊分支說明**：遠端另有一條 `claude/kepware-tag-creation-l3WXm`，時間範圍約 2/8–5/7，與本分支**無共同祖先**——它是本專案改寫（ThingsBoard + Kepware hybrid → pure Kepware）**之前**的舊歷史，不代表目前程式碼的演進路徑，**不需要、也不應該合併**進本分支。
+- 該舊分支中曾做過前端 ES modules 拆分（`static/js/components/*`），可作為日後執行 **P2-3**（app.js 模組化）時的參考範例，但不可直接套用（架構已改為 pure Kepware，欄位/API 皆不同）。
+- **重新盤點原因**：9 月起 Kepware 部署擴展至第二個網段（新增第二台 Gateway）。先前所有驗收都在**單一 Gateway** 前提下進行，多 Gateway 情境從未驗證過。
+- **9 月盤點時發現**：7/27 的 88 項驗收測試原本只放在 session 暫存區，已隨容器回收遺失；9 月已從對話紀錄還原並轉為 repo 內的 `tests/`（pytest）。API_SCHEMA.md 落後 4 個 commit（缺 409 併發鎖、`kw-override` 端點等），已同步。
+
+## 八、多網段（第二台 Gateway）就緒度審查（2026-09-25）
+
+> 狀態：**審查結果，待使用者確認部署拓樸後決定修法**。以下皆經程式碼核對，標「已實測」者另以實際執行驗證。
+
+### 已具備、可正常運作的部分
+
+- Gateway 為 DB 管理，可新增多台；**併發鎖以 Gateway 為單位**，Kepware 限速額度也是每台 Gateway 獨立計算 → **兩網段的任務可以並行**，不會互相搶額度。
+- 結構同步快取（`kepware_structure`）以 `gateway_id` 區分，Step 3 推導可對所選 Gateway 驗證 ✓/+G/▲。
+
+### 發現的問題
+
+| # | 問題 | 影響 | 嚴重度 |
+|---|------|------|--------|
+| **G1** | **暫存資料不記錄所屬 Gateway**。Step 3/5 執行時會把「全部 pending」送往畫面上**目前選取**的 Gateway；Step 3、Step 5、刪除三處共用同一個 Gateway 選單，登入時自動選 `is_default` | 同一批暫存資料若混有兩個網段的點位，會全部送往同一台。channel 名稱不同時→大量失敗（吵但不致命）；**channel 名稱相同時→靜默建錯地方**。Step 5 也不知道 Step 3 當初用哪台 | 高 |
+| **G2** | **`.env` 的 `KW_GW_CA_BUNDLE`、`KW_GW_VERIFY_SSL` 對設定頁建立的 Gateway 完全無效**（已實測）。DB 的 `verify_ssl` 永遠是布林值，client 只在收到 `None` 時才讀環境變數 | 新網段 Gateway 若用自簽/內部 CA 憑證，唯一能連上的方式是在設定頁**關閉 SSL 驗證**；設定好的自訂 CA 形同虛設。`.env.example` 的說明（「全域預設，個別 Gateway 可在 DB 中覆蓋」）與實際不符 | 中 |
+| **G3** | Proxy 只有全域設定 `KW_GW_USE_PROXY` | 若兩個網段一個要走 Proxy、一個不用，無法各自設定 | 視拓樸 |
+| **G4** | Collector 為全域單一設定（`COLLECTOR_DB_DATABASE` / `COLLECTOR_RELOAD_URL` / `COLLECTOR_RELOAD_TOKEN`）；Collector `tags` 表**沒有欄位標示該點位在哪台 Kepware** | 若新網段有自己的 Collector，本系統無法寫入/Reload 第二台；若共用一台 Collector，需確認它如何得知每個點該去哪台 Kepware 讀（`scan_group` 是否承擔此角色？） | 視拓樸 |
+| **G5** | `kepware_gateway.zone` 欄位只存不用，未參與任何路由 | 看起來曾打算用 zone 對應 Gateway（`location_config` 也有 zone），但沒實作。可作為 G1 的解法素材 | 資訊 |
+| **G6** | 啟動 schema 遷移為**單一交易**：新資料庫若尚未預先建立 `scada_tag_config`，整批回滾——連使用者表都不會建立，啟動只留一行警告，**之後無法登入** | 僅影響「新網段另外部署一套 KIS、配新資料庫」的情況 | 視拓樸 |
+| **G7** | `POST /api/pg/staging/kw-override` 為整筆覆寫：只送部分欄位（例如只想改 `data_type`）會把 `tag_groups` 覆寫成 device 根層級、並清除其他覆寫 | 同事的 Agent 若直接呼叫會靜默改錯路徑。已在 API_SCHEMA.md 加警語，修法（改為部分更新）待議 | 中 |
+
+### 待使用者回答（決定 G3/G4/G6 是否成立、G1 的修法）
+
+1. 兩個網段由**同一套 KIS** 管理，還是新網段另外部署一套？
+2. Collector 是一台統一輪詢兩台 Kepware，還是每個網段各一台？
+3. 兩個網段的 channel 名稱（nodename）有沒有可能重複？
+4. 新網段的 Gateway 需要不同的 Proxy / SSL 憑證設定嗎？
+5. 一份 CSV 會不會同時包含兩個網段的點位？

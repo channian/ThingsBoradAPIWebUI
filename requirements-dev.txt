@@ -1,0 +1,6 @@
+# 開發/測試用依賴。安裝方式：.venv/bin/pip install -r requirements-dev.txt
+-r requirements.txt
+
+pytest
+# fastapi.testclient / starlette TestClient 底層需要 httpx 才能運作
+httpx
