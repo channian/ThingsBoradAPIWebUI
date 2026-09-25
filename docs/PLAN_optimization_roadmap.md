@@ -227,7 +227,7 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 - [x] P1-2 csv_uploads 清理 — commit `cd6d5ad`
 - [ ] P1-4 _apiFetch 統一
 - [x] P1-5 Step 3/5 限速 UI — commit `9d444ae`
-- [ ] P2-1 pytest + 推導測試
+- [x] P2-1 pytest + 推導測試 — 基礎 41 項 commit `0e362c1`；Step 3/5/刪除執行流程行為測試（假 Kepware client）隨本次提交，共 46 項。突變測試 24/24 抓到
 - [ ] P2-2 main.py 拆 router
 - [ ] P2-3 app.js 模組化（低優先，需評估）
 - [ ] P2-4 死代碼清理（需使用者確認範圍)
@@ -291,6 +291,8 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 | **G5** | `kepware_gateway.zone` 欄位只存不用，未參與任何路由 | 看起來曾打算用 zone 對應 Gateway（`location_config` 也有 zone），但沒實作。可作為 G1 的解法素材 | 資訊 |
 | **G6** | 啟動 schema 遷移為**單一交易**：新資料庫若尚未預先建立 `scada_tag_config`，整批回滾——連使用者表都不會建立，啟動只留一行警告，**之後無法登入** | 僅影響「新網段另外部署一套 KIS、配新資料庫」的情況 | 視拓樸 |
 | **G7** | `POST /api/pg/staging/kw-override` 為整筆覆寫：只送部分欄位（例如只想改 `data_type`）會把 `tag_groups` 覆寫成 device 根層級、並清除其他覆寫 | 同事的 Agent 若直接呼叫會靜默改錯路徑。已在 API_SCHEMA.md 加警語，修法（改為部分更新）待議 | 中 |
+| **G8** | **手動輸入 URL 的鎖 key 未正規化**：`http://x:57412` 與 `http://x:57412/` 算成兩把鎖；同一台 Gateway 以「選 gateway_id」和「手動填 URL」各送一次，也是兩把不同的鎖 | 這兩種情況下同一台 Gateway 可能被兩個任務同時打，合計超過 60 次/分限速而觸發 429（有自動退避，不致失敗，但會變慢）。網頁 UI 走 gateway_id 不受影響，主要影響直接呼叫 API 的 Agent | 低 |
+| **G9** | **任務顯示「完成」與釋放 Gateway 鎖之間有極短空窗**：背景函式先 `push_complete`（`done=True`，並執行 `on_complete` 寫歷史紀錄），之後才在 `finally` 釋放鎖 | Agent 看到 `done` 後**立刻**送下一批，可能拿到一次 409。API_SCHEMA.md 的 `run_and_wait` 範例遇 409 會等待重送，不受影響；網頁 UI 為人工操作也不受影響。9 月測試曾因此間歇失敗（15 次約 3 次），測試已改為等待鎖釋放；程式端修法（先釋放鎖再標記完成）屬行為變更，待議 | 低 |
 
 ### 待使用者回答（決定 G3/G4/G6 是否成立、G1 的修法）
 

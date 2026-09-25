@@ -4,18 +4,24 @@
 - _resolve_kw_data_type 解析規則（純邏輯，不需要 DB）。
 - derive_kw_fields / derive_scale_fields 對 data_type 的處理與一致性（需要 DB）。
 - update_kw_overrides 儲存與清除（需要 DB）。
-- Step 3 建點必須帶 data_type、Step 5 跳過未啟用 Scale 的點（AST／原始碼片段靜態檢查，
-  不需要 DB）。
-"""
-import re
+- Step 3 建點必須帶 data_type（AST 靜態檢查，不需要 DB）。
 
+原本這裡還有一個 `test_step5_skips_tags_with_scale_disabled`，純粹用 AST／字串
+比對 `_exec_pg_execute_scale` 的原始碼，檢查「有沒有出現」`skip_ids`／`continue`／
+`scale_status='skip'` 等字樣。這種檢查抓不到邏輯性退化：只要把判斷式本身改成
+`if False:`，上面那些字串仍然原封不動留在程式碼裡（只是變成永遠不會走到的死
+路徑），靜態比對照樣通過。已改用會真的把背景任務跑一次、檢查 Kepware 端實際
+收到哪些呼叫、DB 實際被改成什麼狀態的行為測試取代——見
+`tests/test_step5_execute_scale.py::test_step5_execute_scale_end_to_end`，
+故直接刪除這個測試而非保留（保留一個已被證實抓不到目標 bug 的測試沒有意義，
+只會讓人誤以為這條路徑有被涵蓋到）。
+"""
 import pytest
 
 import app.pg_client as pgc
 from tests.ast_utils import (
     call_has_keyword,
     find_all_calls_named,
-    get_function_source,
     get_main_ast,
 )
 
@@ -158,23 +164,4 @@ def test_create_tag_calls_always_pass_data_type():
     missing_at_lines = [c.lineno for c in calls if not call_has_keyword(c, "data_type")]
     assert not missing_at_lines, (
         f"以下行號的 create_tag 呼叫缺少 data_type 關鍵字參數: {missing_at_lines}"
-    )
-
-
-def test_step5_skips_tags_with_scale_disabled():
-    """Step 5（_exec_pg_execute_scale）應該跳過 scale_enabled=false 的點，
-    不浪費 Kepware 限速額度去呼叫它們：要有 skip_ids 收集清單、要有『不呼叫 Kepware
-    直接 continue』的分支、跳過的點要把 scale_status 標成 'skip'，且完成時的
-    push_complete 要回報『實際』跳過的筆數（skipped_count），而不是寫死 0。"""
-    tree = get_main_ast()
-    src = get_function_source(tree, "_exec_pg_execute_scale")
-    assert src, "找不到 _exec_pg_execute_scale 函式原始碼"
-
-    assert "skip_ids" in src, "應該有 skip_ids 收集清單"
-    assert "continue" in src and "skip" in src, "應該有跳過不呼叫 Kepware 的分支（continue）"
-    assert re.search(r'update_staging_status\(\s*skip_ids\s*,\s*"scale_status"\s*,\s*"skip"\s*\)', src), (
-        "跳過的點應該要更新 scale_status='skip'"
-    )
-    assert re.search(r'"skip":\s*skipped_count', src), (
-        "push_complete 應該回報實際 skip 數（skipped_count），而不是寫死 0"
     )

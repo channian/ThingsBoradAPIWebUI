@@ -20,7 +20,7 @@ import sys
 import pytest
 
 # ── 1. 決定測試用 PostgreSQL 連線資訊（可用環境變數覆蓋）───────────
-#    連線資訊統一用 KIS_TEST_PG_* 系列變數指定，預設對應題目所述的 kis_test 角色。
+#    連線資訊統一用 KIS_TEST_PG_* 系列變數指定，預設對應 CLAUDE.md 所述的 kis_test 角色。
 _KIS_TEST_PG_HOST = os.environ.get("KIS_TEST_PG_HOST", "localhost")
 _KIS_TEST_PG_PORT = os.environ.get("KIS_TEST_PG_PORT", "5432")
 _KIS_TEST_PG_USER = os.environ.get("KIS_TEST_PG_USER", "kis_test")

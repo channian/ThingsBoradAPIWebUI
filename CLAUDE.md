@@ -26,7 +26,7 @@ Windows shortcut: `start.bat` (auto-creates venv + installs deps).
 pip install -r requirements-dev.txt
 pytest                        # from repo root
 ```
-DB-backed tests need a PostgreSQL role with `CREATEDB`, configured via `KIS_TEST_PG_HOST` / `KIS_TEST_PG_PORT` / `KIS_TEST_PG_USER` / `KIS_TEST_PG_PASSWORD` (default `localhost:5432`, role/db `kis_test`/`kis_test_pw`). They only ever create/drop the `kis_pytest` and `kis_pytest_collector` databases, with a guard that refuses to touch any other database; if PostgreSQL is unreachable, DB tests auto-skip and pure-logic tests still run. There is no real Kepware to test against, so manual verification via the web UI is still recommended alongside pytest.
+DB-backed tests need a PostgreSQL role with `CREATEDB`, configured via `KIS_TEST_PG_HOST` / `KIS_TEST_PG_PORT` / `KIS_TEST_PG_USER` / `KIS_TEST_PG_PASSWORD` (default `localhost:5432`, role/db `kis_test`/`kis_test_pw`). They only ever create/drop the `kis_pytest` and `kis_pytest_collector` databases, with a guard that refuses to touch any other database; if PostgreSQL is unreachable, DB tests auto-skip and pure-logic tests still run. There is no real Kepware to test against: Step 3/5/batch-delete execution is tested end-to-end with a fake client (`tests/fake_kepware.py`, monkeypatched over `KepwareGatewayClient`), so manual verification via the web UI is still recommended alongside pytest. When asserting the Gateway lock is released after a task, use `wait_lock_released()` — the lock is freed in `finally` *after* `push_complete` sets `done=True`, so an immediate assert is flaky.
 
 ## Architecture
 
