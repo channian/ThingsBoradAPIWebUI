@@ -1,5 +1,59 @@
 const { createApp, reactive, ref, computed, watch, onMounted, nextTick } = Vue
 
+// 背景任務進度區元件（Step 3 / Step 5 / 批次刪除共用）。純呈現：所有狀態都在 setup() 的 task 物件裡，
+// 動作（取消、查看佇列…）以事件交回 setup()。模板在 index.html 的 #task-panel-tpl。
+const TaskPanel = {
+    props: {
+        task: { type: Object, required: true },   // _newTask() 產生的任務狀態
+        label: { type: String, default: '' },     // 結果標題用，例如「建點」「Scale 設定」「預演」
+        canCancel: { type: Boolean, default: false },
+    },
+    emits: ['cancel', 'queue', 'resume', 'history'],
+    setup(props) {
+        const stateText = (g) => {
+            if (g.state === 'queued') return g.position ? `排隊中（前面 ${g.position} 個）` : '排隊中'
+            if (g.state === 'running') return '執行中'
+            if (g.state === 'cancelled') return '已取消'
+            if (g.state === 'failed') return '失敗'
+            // done：任務被取消且這台還有沒處理完的筆數 → 視為已取消
+            if (props.task.cancelled && (g.success + g.fail + g.skip) < g.total) return '已取消'
+            return '完成'
+        }
+        const stateClass = (g) => {
+            const t = stateText(g)
+            if (g.state === 'queued') return 'pill-warn'
+            if (g.state === 'running') return 'pill-info'
+            if (g.state === 'failed') return 'pill-err'
+            if (t === '已取消') return 'pill-muted'
+            return 'pill-ok'
+        }
+        const pct = (n, total) => (total ? Math.min(100, n / total * 100) : 0)
+        // 排隊提示：任何一台還在排隊（送出後第一次輪詢前以送出回應的 queued 為準）
+        const queuedNow = computed(() => {
+            const t = props.task
+            if (t.done) return false
+            if (t.gateways.length) return t.gateways.some(g => g.state === 'queued')
+            return t.submitQueued
+        })
+        const excludedText = computed(() => {
+            const ex = props.task.excluded
+            if (!ex) return ''
+            const parts = []
+            if (ex.other_gateway) parts.push(`屬於其他 Gateway 的 ${ex.other_gateway} 筆`)
+            if (ex.blocked) parts.push(`無法判斷所屬 Gateway 的 ${ex.blocked} 筆`)
+            return parts.length ? `已排除（不送出、不計入）：${parts.join('、')}` : ''
+        })
+        const running = computed(() => !!props.task.id && !props.task.done && !props.task.lost && !props.task.stalled)
+        const visible = computed(() => {
+            const t = props.task
+            return !!(t.submitting || t.id || t.error)
+        })
+        const errorsShown = computed(() => (props.task.summary?.errors || []).slice(0, 10))
+        return { stateText, stateClass, pct, queuedNow, excludedText, running, visible, errorsShown }
+    },
+    template: '#task-panel-tpl',
+}
+
 createApp({
     setup() {
         // ── Auth ──
@@ -62,16 +116,21 @@ createApp({
 
         // 登出時清空所有記憶體狀態，避免換使用者後殘留前一人資料
         function _resetState() {
+            _taskEpoch++          // 讓進行中的任務輪詢迴圈停止，不把舊使用者的任務狀態寫進新工作階段
             gwList.value = []; selectedGwId.value = null
-            structureSync.counts = null
+            Object.assign(structureSync, { loading: false, results: [], done: 0, total: 0 })
+            closeQueuePanel()
+            Object.assign(queuePanel, { data: [], error: '', note: '' })
+            Object.assign(routeMap, { list: [], unmappedSites: [], unmappedZones: [], error: '', formError: '', saving: false })
+            routeDataVersion.value = 0
             Object.assign(imp, { fileName: null, totalRows: 0, headers: [], preview: [], importing: false, result: null, uploadId: null })
             Object.assign(staging, { data: [], total: 0, page: 0, totalPages: 0, filterTb: '', filterPg: '', filterScale: '', clearing: false, deleting: false, selectedIds: [] })
-            Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, result: null, progress: null })
+            Object.assign(kwDerive, { data: [], loading: false, executing: false, savingOverrides: false, task: _newTask(), derivedGw: undefined, derivedVer: 0 })
             Object.assign(pgDerive, { data: [], loading: false, executing: false, result: null })
-            Object.assign(scaleDerive, { data: [], loading: false, executing: false, result: null, progress: null, notBuiltCount: 0 })
+            Object.assign(scaleDerive, { data: [], loading: false, executing: false, task: _newTask(), notBuiltCount: 0, derivedGw: undefined, derivedVer: 0 })
             Object.assign(collectorState, { testing: false, reloading: false, status: null, message: '' })
             Object.assign(pgConn, { testing: false, status: '', statusText: '未連線' })
-            Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, result: null })
+            Object.assign(delState, { fileName: null, totalRows: 0, uploadId: null, dryRun: true, executing: false, task: _newTask(), resultDry: true })
             Object.assign(dbQuery, { conditions: [{ field: 'tagname', op: 'contains', value: '' }], logic: 'AND', page: 0, totalPages: 0, total: 0, loading: false, exporting: false, results: [], sqlPreview: '' })
             Object.assign(ioMapping, { fileA: null, fileB: null, executing: false, mappingId: null, result: null, data: [], columns: [] })
             historyList.value = []
@@ -98,8 +157,11 @@ createApp({
 
         // ── Gateway Management ──
         const gwList = ref([])
+        // 目前選擇的 Gateway（Step 3 / Step 5 / 批次刪除三個分頁共用）：null＝自動（每筆依 channel 與
+        // 棟別/園區對應表送往所屬的 Gateway）；有值＝只處理屬於這台的點，其他台的點略過。預設自動。
         const selectedGwId = ref(null)
         const selectedGw = computed(() => gwList.value.find(g => g.id === selectedGwId.value) || null)
+        const canOperate = computed(() => auth.role === 'admin' || auth.role === 'operator')
         const gwForm = reactive({
             show: false, editing: null,
             name: '', url: '', username: '', password: '',
@@ -112,8 +174,8 @@ createApp({
                 if (resp.status === 401) { doLogout(); return }
                 if (resp.ok) {
                     gwList.value = await resp.json()
-                    const def = gwList.value.find(g => g.is_default)
-                    if (def && !selectedGwId.value) selectedGwId.value = def.id
+                    // 預設是「自動」，不再自動選 is_default；已選的 Gateway 若被刪除了就退回自動
+                    if (selectedGwId.value && !gwList.value.some(g => g.id === selectedGwId.value)) selectedGwId.value = null
                 }
             } catch (e) { console.error('載入 Gateway 失敗:', e) }
         }
@@ -147,6 +209,7 @@ createApp({
                 gwForm.show = false
                 _resetGwForm()
                 await loadGateways()
+                routeDataVersion.value++      // Gateway 名稱／網址可能變了，已推導的預覽表提示過期
             } catch (e) { gwForm.error = e.message }
         }
 
@@ -165,6 +228,8 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 if (selectedGwId.value === id) selectedGwId.value = null
                 await loadGateways()
+                routeDataVersion.value++
+                loadRoutes()      // 指向被刪 Gateway 的對應會連帶刪除
             } catch (e) { alert('刪除失敗: ' + e.message) }
         }
 
@@ -177,10 +242,6 @@ createApp({
             } catch (e) { alert('連線失敗: ' + e.message) }
         }
 
-        function onGwChange() {
-            structureSync.counts = null
-        }
-
         function _resetGwForm() {
             gwForm.editing = null; gwForm.name = ''; gwForm.url = ''
             gwForm.username = ''; gwForm.password = ''; gwForm.zone = ''
@@ -188,20 +249,47 @@ createApp({
         }
 
         // ── Structure Sync ──
-        const structureSync = reactive({ loading: false, counts: null })
+        // results：最近一次同步每台 Gateway 的結果 [{id, name, ok, channels, devices, groups, error}]；
+        // 選定單台＝只同步那台，自動＝依序同步全部 Gateway（失敗不中斷其他台）
+        const structureSync = reactive({ loading: false, results: [], done: 0, total: 0 })
+
+        // 路由資料版本：結構同步或對應表變動後 +1，用來判斷已推導的預覽表是否過期（見 kwStale / scaleStale）
+        const routeDataVersion = ref(0)
+
+        // 把錯誤回應轉成可讀文字：FastAPI 的 detail 可能是字串（我們自己丟的 HTTPException）
+        // 或物件陣列（請求格式驗證 422），兩種都處理；讀不到就退回 HTTP 狀態碼
+        async function _respDetail(resp) {
+            try {
+                const e = await resp.json()
+                const d = e && e.detail
+                if (typeof d === 'string' && d) return d
+                if (Array.isArray(d) && d.length) return d.map(x => x.msg || JSON.stringify(x)).join('；')
+                if (d) return JSON.stringify(d)
+            } catch (_) { /* 非 JSON 回應 */ }
+            return `HTTP ${resp.status}`
+        }
+
+        async function _syncOneGateway(g) {
+            try {
+                const resp = await fetch(`/api/kw/gateways/${g.id}/sync`, { method: 'POST', headers: _headers() })
+                if (!resp.ok) throw new Error(await _respDetail(resp))
+                const d = await resp.json()
+                return { id: g.id, name: g.name, ok: true, channels: d.channels, devices: d.devices, groups: d.groups }
+            } catch (e) { return { id: g.id, name: g.name, ok: false, error: e.message } }
+        }
 
         async function syncStructure() {
-            if (!selectedGwId.value) return
-            structureSync.loading = true
-            try {
-                const resp = await fetch(`/api/kw/gateways/${selectedGwId.value}/sync`, {
-                    method: 'POST', headers: _headers(),
-                })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                const data = await resp.json()
-                structureSync.counts = { channels: data.channels, devices: data.devices, groups: data.groups }
-            } catch (e) { alert('結構同步失敗: ' + e.message) }
-            finally { structureSync.loading = false }
+            const targets = selectedGwId.value ? gwList.value.filter(g => g.id === selectedGwId.value) : gwList.value.slice()
+            if (!targets.length) { alert('尚未設定任何 Gateway，請先到「設定」新增'); return }
+            structureSync.loading = true; structureSync.results = []
+            structureSync.done = 0; structureSync.total = targets.length
+            for (const g of targets) {
+                if (!auth.token) break          // 中途登出（401）就不再繼續
+                structureSync.results.push(await _syncOneGateway(g))
+                structureSync.done++
+            }
+            structureSync.loading = false
+            routeDataVersion.value++            // 結構變了，已推導的路由／驗證可能過期
         }
 
         // ── Import Flow ──
@@ -327,11 +415,194 @@ createApp({
             } catch (e) { console.error('載入暫存資料失敗:', e) }
         }
 
+        // ── 背景任務（Step 3 建點 / Step 5 Scale / 批次刪除共用）──
+        // 三個執行端點送出後都只回 task_id（HTTP 200＝任務已建立，可能正在排隊），
+        // 要輪詢 GET /api/tasks/{id} 直到 done 才有結果。每個流程各有一個任務狀態物件（kwDerive.task 等）。
+        const TASK_POLL_MS = 1000          // 輪詢間隔
+        const TASK_POLL_MAX_FAIL = 10      // 連續失敗幾次才放棄（單次網路失敗不中斷）
+        let _taskEpoch = 0                 // 登出時 +1，讓舊的輪詢迴圈自行結束
+
+        const CANCEL_CONFIRM = '確定要取消嗎？排隊中的會立即退出；執行中的會在處理完目前這筆後停止，已完成的點位不會復原'
+
+        function _newTask() {
+            return {
+                id: null, submitting: false, done: false,
+                status: '',            // 伺服器回報：queued / running / done / cancelled
+                cancelled: false,      // 是否已收到取消要求
+                submitQueued: false, message: '', blocked: 0, excluded: null,   // 送出回應的內容
+                progress: null, gateways: [], summary: null,
+                cancelling: false, cancelError: '', error: '',
+                lost: false, stalled: false,   // 404 任務遺失／連續輪詢失敗
+            }
+        }
+
+        const _sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+        function _applyTaskStatus(ts, st) {
+            ts.status = st.status || ''
+            ts.cancelled = !!st.cancelled
+            ts.progress = st.progress || null
+            ts.gateways = st.gateways || []
+            if (st.done) { ts.done = true; ts.summary = st.summary || {} }
+        }
+
+        // 送出背景任務。成功回 true（ts 記下 task_id 與排隊／blocked／excluded 資訊）；
+        // 失敗（400 無可處理資料、422 超過批次上限、429 佇列已滿、404…）把後端 detail 放進 ts.error 並回 false
+        async function _startTask(ts, url, body, what) {
+            ts.submitting = true
+            try {
+                const resp = await fetch(url, { method: 'POST', headers: _headers(), body: JSON.stringify(body) })
+                if (!resp.ok) {
+                    ts.error = `${what}未送出（HTTP ${resp.status}）：${await _respDetail(resp)}`
+                    return false
+                }
+                const data = await resp.json()
+                ts.id = data.task_id
+                ts.submitQueued = !!data.queued
+                ts.message = data.message || ''
+                ts.blocked = data.blocked || 0
+                ts.excluded = data.excluded || null
+                return true
+            } catch (e) {
+                ts.error = `${what}未送出：${e.message}`
+                return false
+            } finally { ts.submitting = false }
+        }
+
+        // 輪詢到任務結束（沒有次數上限，排隊可能很久）。404＝伺服器重啟遺失任務；
+        // 單次錯誤容忍重試，連續失敗 TASK_POLL_MAX_FAIL 次才標記 stalled（畫面提供「繼續追蹤」）。
+        async function _trackTask(ts) {
+            const epoch = _taskEpoch
+            let fails = 0
+            ts.stalled = false
+            while (epoch === _taskEpoch && auth.token) {
+                try {
+                    const r = await fetch(`/api/tasks/${ts.id}`, { headers: _headers() })
+                    if (epoch !== _taskEpoch) return
+                    if (r.status === 404) { ts.lost = true; return }
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+                    const st = await r.json()
+                    fails = 0
+                    _applyTaskStatus(ts, st)
+                    if (st.done) return
+                } catch (e) {
+                    if (epoch !== _taskEpoch) return
+                    if (++fails >= TASK_POLL_MAX_FAIL) { ts.stalled = true; return }
+                }
+                await _sleep(TASK_POLL_MS)
+            }
+        }
+
+        // 一個執行流程：送出 → 追蹤到結束 → afterDone（重新推導）。executing 從送出一路到結束（含排隊中），
+        // 避免重複送出。owner 是 kwDerive / scaleDerive / delState。
+        async function _runGatewayTask(owner, url, body, what, afterDone) {
+            owner.executing = true
+            owner.task = _newTask()
+            const ts = owner.task                 // 取 reactive 代理，之後的寫入才會觸發畫面更新
+            const epoch = _taskEpoch
+            try {
+                if (await _startTask(ts, url, body, what)) await _trackTask(ts)
+            } finally {
+                if (epoch === _taskEpoch) owner.executing = false
+            }
+            if (epoch === _taskEpoch && ts.done && afterDone) await afterDone()
+        }
+
+        // 輪詢連續失敗後使用者按「繼續追蹤」
+        async function resumeTask(owner, afterDone) {
+            const ts = owner.task
+            if (!ts.id || ts.done) return
+            owner.executing = true
+            const epoch = _taskEpoch
+            try { await _trackTask(ts) }
+            finally { if (epoch === _taskEpoch) owner.executing = false }
+            if (epoch === _taskEpoch && ts.done && afterDone) await afterDone()
+        }
+
+        // 取消任務（進度區與作業佇列共用）。回 {ok, status, detail}；409＝已結束，視為正常。
+        async function _cancelById(taskId) {
+            try {
+                const resp = await fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST', headers: _headers() })
+                if (resp.ok) return { ok: true, status: 200, detail: '' }
+                return { ok: false, status: resp.status, detail: await _respDetail(resp) }
+            } catch (e) { return { ok: false, status: 0, detail: e.message } }
+        }
+
+        async function cancelTask(owner) {
+            const ts = owner.task
+            if (!ts.id || ts.done || ts.cancelling) return
+            if (!confirm(CANCEL_CONFIRM)) return
+            ts.cancelling = true; ts.cancelError = ''
+            const r = await _cancelById(ts.id)
+            if (r.ok) return                       // 保持「取消中…」，輪詢會看到取消生效並走到 done
+            ts.cancelling = false
+            if (r.status === 409) return           // 剛好已結束：輪詢下一輪就會拿到 done 與結果
+            ts.cancelError = r.status === 404 ? '任務已遺失，無法取消' : `取消失敗（${r.detail}）`
+        }
+
+        // ── Gateway 路由預覽（Step 3 / Step 5 推導表格共用）──
+        // 推導結果每列帶 route {gateway_id, gateway_name, status, reason}：
+        // single/ok/channel_only/map_only 可放行；conflict/conflict_channel/unrouted 無法判斷，不會送出
+        const ROUTE_BLOCKED = ['conflict', 'conflict_channel', 'unrouted']
+
+        function routeBlocked(r) { return !!r.route && ROUTE_BLOCKED.includes(r.route.status) }
+
+        // 單台模式下，路由到其他台的列會被略過（無法判斷的列另外算「不會送出」）
+        function rowSkipped(r) {
+            return !!selectedGwId.value && !!r.route && !routeBlocked(r) && r.route.gateway_id !== selectedGwId.value
+        }
+
+        function routeBadge(r) {
+            const rt = r.route
+            if (!rt) return null
+            if (rt.status === 'ok') return { text: '✓ 已對應', cls: 'pill-ok', title: rt.reason }
+            if (rt.status === 'channel_only' || rt.status === 'map_only') {
+                return { text: '⚠ 單一依據', cls: 'pill-warn', title: rt.reason }
+            }
+            if (ROUTE_BLOCKED.includes(rt.status)) return { text: '✗ 無法判斷', cls: 'pill-err', title: rt.reason }
+            return null                            // single：不特別標
+        }
+
+        // 摘要：各 Gateway 筆數、無法判斷筆數、單台模式下將略過的筆數、實際會送出的筆數
+        function _routeSummary(rows) {
+            const sel = selectedGwId.value
+            const per = new Map()
+            let blocked = 0, skipOther = 0, willSend = 0
+            for (const r of rows) {
+                const rt = r.route
+                if (!rt) { willSend++; continue }   // 沒有 route（舊後端）：交給後端判斷
+                if (ROUTE_BLOCKED.includes(rt.status)) { blocked++; continue }
+                const skip = !!sel && rt.gateway_id !== sel
+                let g = per.get(rt.gateway_id)
+                if (!g) { g = { id: rt.gateway_id, name: rt.gateway_name || `Gateway ${rt.gateway_id}`, count: 0, skip }; per.set(rt.gateway_id, g) }
+                g.count++
+                if (skip) skipOther++; else willSend++
+            }
+            return { gateways: [...per.values()], blocked, skipOther, willSend }
+        }
+
+        // 送出前確認文字的附註：說明有幾筆不會送出
+        function _sendNotes(s) {
+            const notes = []
+            if (s.blocked) notes.push(`${s.blocked} 筆無法判斷所屬 Gateway，不會送出`)
+            if (s.skipOther) notes.push(`${s.skipOther} 筆屬於其他 Gateway，將略過`)
+            return notes.length ? `\n（另有 ${notes.join('；')}）` : ''
+        }
+
+        function _gwModeText() {
+            return selectedGw.value ? `Gateway「${selectedGw.value.name}」（只處理屬於這台的點）` : '自動（每筆依 channel 與對應表送往所屬 Gateway）'
+        }
+
         // Step 3: Kepware Derive + Execute
+        // derivedGw / derivedVer：推導當時的 Gateway 選擇與路由資料版本，用來提示預覽表是否過期
         const kwDerive = reactive({
-            data: [], loading: false, executing: false, savingOverrides: false, result: null,
-            delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
+            data: [], loading: false, executing: false, savingOverrides: false,
+            delay: 1.1, batchSize: 50, batchPause: 5, task: _newTask(),
+            derivedGw: undefined, derivedVer: 0,
         })
+        const kwRoute = computed(() => _routeSummary(kwDerive.data))
+        const kwStale = computed(() => kwDerive.data.length > 0
+            && (kwDerive.derivedGw !== selectedGwId.value || kwDerive.derivedVer !== routeDataVersion.value))
 
         // Kepware tag 資料型別 enum（依 Kepware API Gateway 文件）；實務上 9 成為 Float
         const KW_DATA_TYPES = [
@@ -356,18 +627,23 @@ createApp({
                 || row.data_type !== row._origDataType
         }
 
-        async function deriveKw() {
-            kwDerive.loading = true; kwDerive.result = null
+        // keepTask=true：任務結束後自動重新推導時使用，保留進度區的結果摘要；手動按「推導欄位」則清掉舊結果
+        async function deriveKw(keepTask) {
+            kwDerive.loading = true
+            if (keepTask !== true && !kwDerive.executing) kwDerive.task = _newTask()
             try {
+                // 自動模式不帶 gateway_id（後端對每筆路由到的那台做結構驗證）；單台模式帶 gateway_id
                 const body = { tb_status: 'pending' }
                 if (selectedGwId.value) body.gateway_id = selectedGwId.value
                 const resp = await fetch('/api/kw/derive', {
                     method: 'POST', headers: _headers(), body: JSON.stringify(body),
                 })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                if (!resp.ok) throw new Error(await _respDetail(resp))
                 const data = await resp.json()
                 kwDerive.data = data.data || []
                 kwDerive.data.forEach(_stampKwOrig)
+                kwDerive.derivedGw = body.gateway_id || null
+                kwDerive.derivedVer = routeDataVersion.value
             } catch (e) { alert('推導失敗: ' + e.message) }
             finally { kwDerive.loading = false }
         }
@@ -404,56 +680,26 @@ createApp({
             if (errorMsg) {
                 alert(`儲存失敗：${errorMsg}\n（已成功 ${saved} / ${changed.length} 筆，其餘未處理）`)
             } else {
+                // 覆寫 channel 會改變該筆路由到哪台 Gateway：全部存妥後重新推導，預覽表的 Gateway／驗證欄才會跟著更新
+                await deriveKw(true)
                 alert(`儲存完成：共 ${saved} 筆已更新`)
             }
         }
 
         async function executeKw() {
-            if (!kwDerive.data.length) return
-            if (!confirm(`確定要建立 ${kwDerive.data.length} 筆 Tag 到 Kepware？`)) return
-            if (!selectedGwId.value) return
-            kwDerive.executing = true; kwDerive.result = null; kwDerive.progress = null
-            try {
-                const body = { delay: kwDerive.delay, batch_size: kwDerive.batchSize, batch_pause: kwDerive.batchPause }
-                if (selectedGwId.value) body.gateway_id = selectedGwId.value
-                const resp = await fetch('/api/kw/execute', {
-                    method: 'POST', headers: _headers(), body: JSON.stringify(body),
-                })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                const data = await resp.json()
-                const taskId = data.task_id
-                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
-                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
-                const poll = async () => {
-                    if (++attempts > 600) {
-                        alert('建點任務逾時，請至「歷史」分頁確認結果')
-                        kwDerive.executing = false; kwDerive.progress = null
-                        return
-                    }
-                    try {
-                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
-                        if (!sr.ok) {
-                            if (++errors >= 5) { alert('無法取得建點任務狀態，請至「歷史」分頁確認'); kwDerive.executing = false; kwDerive.progress = null; return }
-                            setTimeout(poll, 1000); return
-                        }
-                        errors = 0
-                        const st = await sr.json()
-                        kwDerive.progress = st.progress || null
-                        if (st.done) {
-                            kwDerive.result = st.summary
-                            kwDerive.executing = false
-                            kwDerive.progress = null
-                            await deriveKw()
-                        } else {
-                            setTimeout(poll, 1000)
-                        }
-                    } catch (e) {
-                        if (++errors >= 5) { alert('輪詢建點狀態失敗: ' + e.message); kwDerive.executing = false; kwDerive.progress = null; return }
-                        setTimeout(poll, 1000)
-                    }
-                }
-                poll()
-            } catch (e) { alert('建點失敗: ' + e.message); kwDerive.executing = false; kwDerive.progress = null }
+            if (!kwDerive.data.length || kwDerive.executing) return
+            const s = kwRoute.value
+            if (!s.willSend) {
+                alert('目前推導結果中沒有可送出的資料（全部無法判斷所屬 Gateway' + (selectedGwId.value ? '，或屬於其他 Gateway' : '') + '）。\n請確認各 Gateway 已同步結構，或到「設定 › Gateway 對應表」設定棟別/園區後重新推導。')
+                return
+            }
+            const unsaved = kwDerive.data.filter(_kwRowChanged).length
+            if (!confirm(`確定要建立 ${s.willSend} 筆 Tag 到 Kepware？\nGateway：${_gwModeText()}${_sendNotes(s)}`
+                + (unsaved ? `\n⚠ 有 ${unsaved} 筆欄位修改尚未儲存，執行時不會套用（請先按「儲存覆寫」）` : ''))) return
+            // 自動模式不帶 gateway_id；單台模式帶 gateway_id
+            const body = { delay: kwDerive.delay, batch_size: kwDerive.batchSize, batch_pause: kwDerive.batchPause }
+            if (selectedGwId.value) body.gateway_id = selectedGwId.value
+            await _runGatewayTask(kwDerive, '/api/kw/execute', body, '建點', () => deriveKw(true))
         }
 
         function rowStatus(v) {
@@ -497,72 +743,46 @@ createApp({
 
         // Step 5: Scale
         const scaleDerive = reactive({
-            data: [], loading: false, executing: false, result: null,
-            delay: 1.1, batchSize: 50, batchPause: 5, progress: null,
+            data: [], loading: false, executing: false,
+            delay: 1.1, batchSize: 50, batchPause: 5, task: _newTask(),
             notBuiltCount: 0,   // 本批中尚未在 Kepware 建點（tb_status != done）的筆數
+            derivedGw: undefined, derivedVer: 0,
         })
+        const scaleRoute = computed(() => _routeSummary(scaleDerive.data))
+        const scaleStale = computed(() => scaleDerive.data.length > 0
+            && (scaleDerive.derivedGw !== selectedGwId.value || scaleDerive.derivedVer !== routeDataVersion.value))
 
-        async function deriveScale() {
-            scaleDerive.loading = true; scaleDerive.result = null
+        // keepTask=true：任務結束後自動重新推導，保留進度區的結果摘要
+        async function deriveScale(keepTask) {
+            scaleDerive.loading = true
+            if (keepTask !== true && !scaleDerive.executing) scaleDerive.task = _newTask()
             try {
                 const resp = await fetch('/api/pg/derive/scale', {
                     method: 'POST', headers: _headers(),
                     body: JSON.stringify({ scale_status: 'pending' }),
                 })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
+                if (!resp.ok) throw new Error(await _respDetail(resp))
                 const data = await resp.json()
                 scaleDerive.data = data.data || []
                 scaleDerive.notBuiltCount = data.not_built_count || 0
+                scaleDerive.derivedGw = selectedGwId.value || null
+                scaleDerive.derivedVer = routeDataVersion.value
             } catch (e) { alert('Scale 推導失敗: ' + e.message) }
             finally { scaleDerive.loading = false }
         }
 
         async function executeScale() {
-            if (!scaleDerive.data.length) return
-            if (!confirm(`確定要設定 ${scaleDerive.data.length} 筆 Tag 的 Scale？`)) return
-            if (!selectedGwId.value) return
-            scaleDerive.executing = true; scaleDerive.result = null; scaleDerive.progress = null
-            try {
-                const body = { delay: scaleDerive.delay, batch_size: scaleDerive.batchSize, batch_pause: scaleDerive.batchPause }
-                if (selectedGwId.value) body.gateway_id = selectedGwId.value
-                const resp = await fetch('/api/pg/execute/scale', {
-                    method: 'POST', headers: _headers(), body: JSON.stringify(body),
-                })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                const data = await resp.json()
-                const taskId = data.task_id
-                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
-                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
-                const poll = async () => {
-                    if (++attempts > 600) {
-                        alert('Scale 設定任務逾時，請至「歷史」分頁確認結果')
-                        scaleDerive.executing = false; scaleDerive.progress = null
-                        return
-                    }
-                    try {
-                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
-                        if (!sr.ok) {
-                            if (++errors >= 5) { alert('無法取得 Scale 設定任務狀態，請至「歷史」分頁確認'); scaleDerive.executing = false; scaleDerive.progress = null; return }
-                            setTimeout(poll, 1000); return
-                        }
-                        errors = 0
-                        const st = await sr.json()
-                        scaleDerive.progress = st.progress || null
-                        if (st.done) {
-                            scaleDerive.result = st.summary
-                            scaleDerive.executing = false
-                            scaleDerive.progress = null
-                            await deriveScale()
-                        } else {
-                            setTimeout(poll, 1000)
-                        }
-                    } catch (e) {
-                        if (++errors >= 5) { alert('輪詢 Scale 設定狀態失敗: ' + e.message); scaleDerive.executing = false; scaleDerive.progress = null; return }
-                        setTimeout(poll, 1000)
-                    }
-                }
-                poll()
-            } catch (e) { alert('Scale 設定失敗: ' + e.message); scaleDerive.executing = false; scaleDerive.progress = null }
+            if (!scaleDerive.data.length || scaleDerive.executing) return
+            const s = scaleRoute.value
+            if (!s.willSend) {
+                alert('目前推導結果中沒有可送出的資料（全部無法判斷所屬 Gateway' + (selectedGwId.value ? '，或屬於其他 Gateway' : '') + '）。\n請確認各 Gateway 已同步結構，或到「設定 › Gateway 對應表」設定棟別/園區後重新推導。')
+                return
+            }
+            if (!confirm(`確定要設定 ${s.willSend} 筆 Tag 的 Scale？\nGateway：${_gwModeText()}${_sendNotes(s)}`)) return
+            // 自動模式不帶 gateway_id；單台模式帶 gateway_id
+            const body = { delay: scaleDerive.delay, batch_size: scaleDerive.batchSize, batch_pause: scaleDerive.batchPause }
+            if (selectedGwId.value) body.gateway_id = selectedGwId.value
+            await _runGatewayTask(scaleDerive, '/api/pg/execute/scale', body, 'Scale 設定', () => deriveScale(true))
         }
 
         // Step 6: Collector
@@ -596,7 +816,7 @@ createApp({
         // ── Delete Tab ──
         const delState = reactive({
             fileName: null, totalRows: 0, uploadId: null,
-            dryRun: true, executing: false, result: null,
+            dryRun: true, executing: false, task: _newTask(), resultDry: true,
             delay: 1.1, batchSize: 50, batchPause: 5,
         })
 
@@ -619,58 +839,25 @@ createApp({
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
                 const data = await resp.json()
                 delState.uploadId = data.upload_id; delState.fileName = data.filename
-                delState.totalRows = data.total_rows; delState.result = null
+                delState.totalRows = data.total_rows
+                if (!delState.executing) delState.task = _newTask()
             } catch (e) { alert('CSV 上傳失敗: ' + e.message) }
         }
 
         async function executeDelete() {
-            if (!delState.uploadId || !selectedGwId.value) return
-            if (!delState.dryRun && !confirm('確定要刪除？此操作無法復原！')) return
-            delState.executing = true; delState.result = null
-            try {
-                const resp = await fetch('/api/kw/delete-batch', {
-                    method: 'POST', headers: _headers(),
-                    body: JSON.stringify({
-                        upload_id: delState.uploadId,
-                        gateway_id: selectedGwId.value,
-                        dry_run: delState.dryRun,
-                        delay: delState.delay,
-                        batch_size: delState.batchSize,
-                        batch_pause: delState.batchPause,
-                    }),
-                })
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail) }
-                const data = await resp.json()
-                const taskId = data.task_id
-                let attempts = 0          // 最多輪詢 600 次（約 10 分鐘）後放棄
-                let errors = 0            // 連續錯誤達 5 次才中止，容忍暫時性失敗
-                const poll = async () => {
-                    if (++attempts > 600) {
-                        alert('刪除任務逾時，請至「歷史」分頁確認結果')
-                        delState.executing = false
-                        return
-                    }
-                    try {
-                        const sr = await fetch(`/api/tasks/${taskId}`, { headers: _headers() })
-                        if (!sr.ok) {
-                            if (++errors >= 5) { alert('無法取得刪除任務狀態，請至「歷史」分頁確認'); delState.executing = false; return }
-                            setTimeout(poll, 1000); return
-                        }
-                        errors = 0
-                        const st = await sr.json()
-                        if (st.done) {
-                            delState.result = { success: st.summary?.success || 0, fail: st.summary?.fail || 0, errors: st.summary?.errors || [] }
-                            delState.executing = false
-                        } else {
-                            setTimeout(poll, 1000)
-                        }
-                    } catch (e) {
-                        if (++errors >= 5) { alert('輪詢刪除狀態失敗: ' + e.message); delState.executing = false; return }
-                        setTimeout(poll, 1000)
-                    }
-                }
-                poll()
-            } catch (e) { alert('刪除失敗: ' + e.message); delState.executing = false }
+            if (!delState.uploadId || delState.executing) return
+            if (!delState.dryRun && !confirm(`確定要刪除？此操作無法復原！\nGateway：${_gwModeText()}`)) return
+            delState.resultDry = delState.dryRun      // 結果標題用送出當下的模式（之後勾選框改了也不影響）
+            // 自動模式不帶 gateway_id（依 CSV type 的第一段 channel 路由）；單台模式帶 gateway_id
+            const body = {
+                upload_id: delState.uploadId,
+                dry_run: delState.dryRun,
+                delay: delState.delay,
+                batch_size: delState.batchSize,
+                batch_pause: delState.batchPause,
+            }
+            if (selectedGwId.value) body.gateway_id = selectedGwId.value
+            await _runGatewayTask(delState, '/api/kw/delete-batch', body, delState.dryRun ? '預演' : '刪除', null)
         }
 
         async function downloadDeleteTemplate() {
@@ -875,6 +1062,113 @@ createApp({
             } catch (e) { alert('刪除失敗: ' + e.message) }
         }
 
+        // ── 作業佇列（各 Gateway 目前的佇列：第 0 個＝執行中，其後排隊中）──
+        const TASK_TYPE_LABELS = { kw_execute: 'Step 3 建點', pg_execute_scale: 'Step 5 Scale', kw_delete: '批次刪除' }
+        const queuePanel = reactive({ open: false, loading: false, data: [], error: '', note: '', updatedAt: '', cancelling: '' })
+        let _queueTimer = null
+
+        async function loadQueue(silent) {
+            if (silent !== true) queuePanel.loading = true
+            try {
+                const resp = await fetch('/api/kw/queue', { headers: _headers() })
+                if (!resp.ok) throw new Error(await _respDetail(resp))
+                queuePanel.data = await resp.json()
+                queuePanel.error = ''
+                queuePanel.updatedAt = new Date().toLocaleTimeString('zh-TW', { hour12: false })
+            } catch (e) { queuePanel.error = '讀取作業佇列失敗：' + e.message }
+            finally { queuePanel.loading = false }
+        }
+
+        // 開著的時候每 2 秒自動更新一次，關閉或登出就停
+        function openQueuePanel() {
+            queuePanel.open = true; queuePanel.note = ''
+            loadQueue()
+            clearInterval(_queueTimer)
+            _queueTimer = setInterval(() => loadQueue(true), 2000)
+        }
+
+        function closeQueuePanel() {
+            queuePanel.open = false
+            clearInterval(_queueTimer); _queueTimer = null
+        }
+
+        function queueStateText(t) { return t.position === 0 ? '執行中' : `排隊中（前面 ${t.position} 個）` }
+
+        async function cancelQueuedTask(taskId) {
+            if (queuePanel.cancelling) return
+            if (!confirm(CANCEL_CONFIRM)) return
+            queuePanel.cancelling = taskId; queuePanel.note = ''
+            const r = await _cancelById(taskId)
+            queuePanel.cancelling = ''
+            if (r.ok) queuePanel.note = `已送出取消要求（任務 ${taskId}）；排隊中的會立即退出，執行中的會在處理完目前這筆後停止`
+            else if (r.status === 409) queuePanel.note = `任務 ${taskId} 已結束`
+            else queuePanel.note = `取消失敗：${r.detail}`
+            await loadQueue(true)
+        }
+
+        // ── Settings: Gateway 對應表（棟別/園區 → Gateway）──
+        const routeMap = reactive({
+            list: [], unmappedSites: [], unmappedZones: [], loading: false, error: '',
+            saving: false, formError: '', form: { type: 'site', value: '', gatewayId: null },
+        })
+        const routeValueInput = ref(null)
+
+        async function loadRoutes() {
+            routeMap.loading = true
+            try {
+                const resp = await fetch('/api/kw/routes', { headers: _headers() })
+                if (!resp.ok) throw new Error(await _respDetail(resp))
+                const d = await resp.json()
+                routeMap.list = d.routes || []
+                routeMap.unmappedSites = d.unmapped_sites || []
+                routeMap.unmappedZones = d.unmapped_zones || []
+                routeMap.error = ''
+            } catch (e) { routeMap.error = '載入 Gateway 對應表失敗：' + e.message }
+            finally { routeMap.loading = false }
+        }
+
+        // 新增或更新（同類型＋值已存在就改指向新的 Gateway）；僅 admin
+        async function saveRoute() {
+            const f = routeMap.form
+            routeMap.formError = ''
+            const value = (f.value || '').trim()
+            if (!value) { routeMap.formError = '請輸入棟別或園區的值'; return }
+            if (!f.gatewayId) { routeMap.formError = '請選擇對應的 Gateway'; return }
+            routeMap.saving = true
+            try {
+                const resp = await fetch('/api/kw/routes', {
+                    method: 'POST', headers: _headers(),
+                    body: JSON.stringify({ match_type: f.type, match_value: value, gateway_id: f.gatewayId }),
+                })
+                if (!resp.ok) throw new Error(await _respDetail(resp))
+                f.value = ''
+                routeDataVersion.value++          // 對應表變了，已推導的路由可能過期
+                await loadRoutes()
+            } catch (e) { routeMap.formError = e.message }
+            finally { routeMap.saving = false }
+        }
+
+        async function deleteRoute(r) {
+            if (!confirm(`確定刪除這筆對應？\n${r.match_type === 'site' ? '棟別' : '園區'} ${r.match_value} → ${r.gateway_name}`)) return
+            routeMap.formError = ''
+            try {
+                const resp = await fetch(`/api/kw/routes/${r.id}`, { method: 'DELETE', headers: _headers() })
+                if (!resp.ok) throw new Error(await _respDetail(resp))
+                routeDataVersion.value++
+                await loadRoutes()
+            } catch (e) { routeMap.formError = '刪除失敗：' + e.message }
+        }
+
+        // 把「尚未對應」的棟別/園區（或既有的一筆）帶進新增表單
+        function pickRoute(type, value, gatewayId) {
+            const f = routeMap.form
+            f.type = type; f.value = value
+            if (gatewayId) f.gatewayId = gatewayId
+            else if (!f.gatewayId && gwList.value.length === 1) f.gatewayId = gwList.value[0].id
+            routeMap.formError = ''
+            nextTick(() => routeValueInput.value && routeValueInput.value.focus())
+        }
+
         // ── Settings: User Management ──
         const userList = ref([])
         const showUserCreate = ref(false)
@@ -1019,22 +1313,28 @@ createApp({
         // ── Init on login ──
         function _initAfterLogin() {
             loadGateways()
+            loadRoutes()
             testPgConn()
             if (auth.role === 'admin') loadUsers()
         }
+
+        // 切到設定頁時重新載入對應表，「尚未對應」清單才會反映剛改過的參照表
+        watch(activeTab, (tab) => { if (tab === 'settings' && auth.token) loadRoutes() })
 
         if (auth.token) _initAfterLogin()
 
         return {
             auth, loginForm, doLogin, doLogout, clock,
             tabs, activeTab,
-            gwList, selectedGwId, selectedGw, gwForm,
-            loadGateways, saveGw, editGw, deleteGw, testGw, onGwChange,
+            gwList, selectedGwId, selectedGw, gwForm, canOperate,
+            loadGateways, saveGw, editGw, deleteGw, testGw,
             structureSync, syncStructure,
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
             staging, loadStaging, clearStaging, toggleStagingSelectAll, toggleStagingRow, deleteSelectedStaging,
             kwDerive, KW_DATA_TYPES, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
+            kwRoute, kwStale, scaleRoute, scaleStale, routeBlocked, rowSkipped, routeBadge,
+            cancelTask, resumeTask,
             pgDerive, derivePg, executePg,
             scaleDerive, deriveScale, executeScale,
             collectorState, testCollector, reloadCollector,
@@ -1044,6 +1344,8 @@ createApp({
             historyList, loadHistory,
             pgConn, testPgConn,
             refTables, refData, activeRefTable, refTableCols, loadRefTable, deleteRefRow,
+            queuePanel, TASK_TYPE_LABELS, openQueuePanel, closeQueuePanel, loadQueue, queueStateText, cancelQueuedTask,
+            routeMap, routeValueInput, loadRoutes, saveRoute, deleteRoute, pickRoute,
             userList, showUserCreate, newUser, loadUsers, createUser, resetUserPw, deleteUser,
             actLogs, loadActivityLogs,
             showPwDialog, pwForm, changePassword,
@@ -1051,4 +1353,4 @@ createApp({
             formatTime, statusKind,
         }
     }
-}).mount('#app')
+}).component('task-panel', TaskPanel).mount('#app')

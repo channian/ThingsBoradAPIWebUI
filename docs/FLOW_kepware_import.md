@@ -152,7 +152,7 @@ overridden   = 上述任一與 base 推導值不同
 
 覆寫值由 Step 3 畫面編輯後按「儲存覆寫」寫入暫存表（`POST /api/pg/staging/kw-override` @ `main.py:1244`；前端只送出**有變更**的列）。
 
-帶 `gateway_id` 時每列附 `validation`（比對 `kepware_structure`）：
+每列附 `validation`（比對 `kepware_structure`）：帶 `gateway_id` 時對該台驗證；沒帶（自動模式）時每列對自己 `route.gateway_id` 那台驗證（無法判斷所屬 Gateway 的列不附，每台 Gateway 每個請求只讀一次）。計算方式：
 
 ```
 ch_exists  = ch in structure

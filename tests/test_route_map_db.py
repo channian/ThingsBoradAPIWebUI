@@ -550,11 +550,15 @@ def _check_two_gw_routes(by_tag, a, b):
 
 def test_derive_kw_route_all_statuses_with_two_gateways(two_gw_env, api_client, admin_headers):
     pg, a, b = two_gw_env
-    # 不帶 gateway_id：只有 route，沒有 validation
+    # 不帶 gateway_id（自動模式）：可路由者有 validation（對它自己路由到的那台驗證），
+    # 無法判斷者（route.gateway_id 為 None）沒有 validation 欄位——細節見 test_derive_validation_by_route.py
     by_tag = _derive_kw(api_client, admin_headers)
     _check_two_gw_routes(by_tag, a, b)
-    assert all("validation" not in x for x in by_tag.values())
-    assert set(by_tag["T_OK"]) == KW_ORIGINAL_KEYS | {"site", "zone", "route"}, "純增量：只多 site/zone/route"
+    for tag, x in by_tag.items():
+        assert ("validation" in x) == (x["route"]["gateway_id"] is not None), tag
+    assert set(by_tag["T_OK"]) == KW_ORIGINAL_KEYS | {"site", "zone", "route", "validation"}, \
+        "純增量：只多 site/zone/route（可路由者另多 validation）"
+    assert set(by_tag["T_CONFLICT"]) == KW_ORIGINAL_KEYS | {"site", "zone", "route"}
     assert (by_tag["T_OK"]["site"], by_tag["T_OK"]["zone"]) == ("S1", "Z1")
     assert (by_tag["T_NOLOC"]["site"], by_tag["T_NOLOC"]["zone"]) == ("SX", "")
 
@@ -630,7 +634,10 @@ def test_derive_route_lookups_do_not_scale_with_row_count(two_gw_env, api_client
         many, n_many = run(path, body)
         assert n_few == 2 and n_many >= 60
         assert len(many) == len(few), f"{path} 的 SQL 次數隨列數增加：{len(few)} → {len(many)}"
-        assert sum("kepware_structure" in q for q in many) == 1, path
+        # channel 索引 1 次；/api/kw/derive 自動模式另對「用到的每台 Gateway」各讀 1 次結構快取
+        # 做 validation（本例列都路由到 GW-A / GW-B 兩台 → 共 3 次），/api/pg/derive/scale 沒有 validation
+        expected_structure_reads = 3 if path == "/api/kw/derive" else 1
+        assert sum("kepware_structure" in q for q in many) == expected_structure_reads, path
         assert sum("gateway_route_map" in q for q in many) == 1, path
 
 

@@ -253,32 +253,52 @@
                                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" style="width:16px;height:16px"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12M5 9h2M5 11h4"/></svg>
                                 Kepware 建點推導
                             </div>
-                            <div style="display:flex;gap:8px;align-items:center">
-                                <label style="font-size:13px;color:var(--ink-3)">Gateway</label>
-                                <select class="select" v-model="selectedGwId" @change="onGwChange">
-                                    <option :value="null">-- 選擇 Gateway --</option>
+                            <div class="gw-picker">
+                                <label>Gateway</label>
+                                <select class="select" v-model="selectedGwId">
+                                    <option :value="null">自動（依 channel 與對應表判斷）</option>
                                     <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
                                 </select>
-                                <button class="btn btn-outline btn-sm" @click="syncStructure" :disabled="!selectedGwId || structureSync.loading">
+                                <button class="btn btn-outline btn-sm" @click="syncStructure" :disabled="!gwList.length || structureSync.loading">
                                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:14px;height:14px"><path d="M3 8a5 5 0 018-3.5L13 6M13 3v3h-3M13 8a5 5 0 01-8 3.5L3 10M3 13v-3h3"/></svg>
-                                    {{ structureSync.loading ? '同步中…' : '同步結構' }}
+                                    {{ structureSync.loading ? `同步中…（${structureSync.done}/${structureSync.total}）` : (selectedGwId ? '同步結構' : '同步全部 Gateway') }}
                                 </button>
-                                <span v-if="structureSync.counts" style="font-size:12px;color:var(--ink-3);font-family:var(--font-mono)">
-                                    {{ structureSync.counts.channels }}ch / {{ structureSync.counts.devices }}dev / {{ structureSync.counts.groups }}grp
-                                </span>
+                                <button class="btn btn-outline btn-sm" @click="openQueuePanel" title="查看各 Gateway 目前的作業佇列">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:14px;height:14px"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
+                                    作業佇列
+                                </button>
                             </div>
                         </div>
+                        <div class="gw-hint">
+                            <span :class="{ on: !selectedGwId }">自動＝每筆各送往所屬的 Gateway</span>；
+                            <span :class="{ on: !!selectedGwId }">選定單台＝只處理屬於這台的點，其他台的點會略過</span>。
+                        </div>
+                        <div v-if="structureSync.results.length" class="sync-results">
+                            <span style="font-size:12px;color:var(--ink-3)">結構同步：</span>
+                            <span v-for="r in structureSync.results" :key="r.id" class="vs-chip" :class="r.ok ? 'vs-ok' : 'vs-err'" :title="r.ok ? '' : r.error">
+                                <span class="d"></span>{{ r.name }}
+                                <template v-if="r.ok">✓ {{ r.channels }}ch / {{ r.devices }}dev / {{ r.groups }}grp</template>
+                                <span v-else style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✗ {{ r.error }}</span>
+                            </span>
+                            <span v-if="!structureSync.loading" style="font-size:12px;color:var(--ink-3)">
+                                成功 {{ structureSync.results.filter(r => r.ok).length }} 台<template v-if="structureSync.results.some(r => !r.ok)">，失敗 {{ structureSync.results.filter(r => !r.ok).length }} 台</template>
+                            </span>
+                        </div>
                         <div style="display:flex;gap:8px;margin-bottom:12px">
-                            <button class="btn btn-outline" @click="deriveKw" :disabled="kwDerive.loading || !selectedGwId">
+                            <button class="btn btn-outline" @click="deriveKw" :disabled="kwDerive.loading">
                                 {{ kwDerive.loading ? '推導中…' : '推導欄位' }}
                             </button>
                             <button class="btn btn-outline" @click="saveAllKwOverrides" :disabled="kwDerive.savingOverrides || !kwDerive.data.length">
                                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:13px;height:13px"><path d="M3 8l3.5 3.5L13 4"/></svg>
                                 {{ kwDerive.savingOverrides ? '儲存中…' : '儲存覆寫' }}
                             </button>
-                            <button class="btn btn-primary" @click="executeKw" :disabled="kwDerive.executing || !kwDerive.data.length || !selectedGwId">
-                                {{ kwDerive.executing ? '建點中…' : '執行建點' }}
+                            <button class="btn btn-primary" @click="executeKw" :disabled="kwDerive.executing || !kwDerive.data.length">
+                                {{ kwDerive.executing ? (kwDerive.task.status === 'queued' ? '排隊中…' : '建點中…') : '執行建點' }}
                             </button>
+                        </div>
+                        <div v-if="kwStale" class="banner warn" style="margin-bottom:12px">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;flex-shrink:0"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
+                            <span>Gateway 選擇、結構同步或對應表已變更，下方的 Gateway／驗證欄位可能已過期。<button class="link-btn" @click="deriveKw">重新推導</button>（未儲存的欄位修改會被覆蓋）</span>
                         </div>
                         <div v-if="kwDerive.data.length">
                             <!-- 限速設定 -->
@@ -298,19 +318,31 @@
                                 </label>
                             </div>
                         </div>
-                        <div v-if="kwDerive.executing && kwDerive.progress" class="progress" style="margin-bottom:12px">
-                            <div class="progress-fill" :style="{ width: (kwDerive.progress.total ? (kwDerive.progress.current / kwDerive.progress.total * 100) : 0) + '%' }"></div>
-                            <div class="progress-text">{{ kwDerive.progress.current }} / {{ kwDerive.progress.total }}（成功 {{ kwDerive.progress.success }}，失敗 {{ kwDerive.progress.fail }}）</div>
+                        <!-- 送出 / 排隊 / 進度 / 取消 / 結果 -->
+                        <task-panel :task="kwDerive.task" label="建點" :can-cancel="canOperate"
+                            @cancel="cancelTask(kwDerive)" @queue="openQueuePanel"
+                            @resume="resumeTask(kwDerive, () => deriveKw(true))"
+                            @history="activeTab = 'history'; loadHistory()"></task-panel>
+                        <!-- 路由摘要 -->
+                        <div v-if="kwDerive.data.length" class="vsum" style="margin-bottom:10px">
+                            <span v-for="g in kwRoute.gateways" :key="g.id" class="vs-chip" :class="g.skip ? 'vs-muted' : 'vs-add'">
+                                <span class="d"></span><span>{{ g.name }} <b>{{ g.count }}</b> 筆<template v-if="g.skip">（將略過）</template></span>
+                            </span>
+                            <span v-if="kwRoute.blocked" class="vs-chip vs-err"><span class="d"></span><span>無法判斷（不會送出）<b>{{ kwRoute.blocked }}</b> 筆</span></span>
+                            <span v-if="selectedGwId && kwRoute.skipOther" class="vs-chip vs-muted"><span class="d"></span><span>將略過（屬於其他 Gateway）<b>{{ kwRoute.skipOther }}</b> 筆</span></span>
+                        </div>
+                        <div v-if="kwDerive.data.length && kwRoute.blocked" class="route-guide">
+                            請確認各 Gateway 已同步結構，或到 <button class="link-btn" @click="activeTab = 'settings'">設定 › Gateway 對應表</button> 設定棟別/園區
                         </div>
                         <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
                             <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
                                 <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
-                                Channel / Device / Groups / Data Type 欄位可直接編輯，調整完成後點「儲存覆寫」（Data Type 預設為 Float）
+                                Channel / Device / Groups / Data Type 欄位可直接編輯，調整完成後點「儲存覆寫」（Data Type 預設為 Float）。狀態欄：✓ 路徑存在　+G 群組執行時自動建立　▲ channel 或 device 缺（不會自動建立）
                             </div>
-                            <table style="min-width:1000px">
+                            <table style="min-width:1200px">
                                 <thead>
                                     <tr>
-                                        <th>狀態</th><th>Tag Name</th>
+                                        <th>狀態</th><th>Tag Name</th><th>Gateway</th>
                                         <th>Channel <span style="font-size:10px;opacity:.6">✎</span></th>
                                         <th>Device <span style="font-size:10px;opacity:.6">✎</span></th>
                                         <th>Groups <span style="font-size:10px;opacity:.6">✎</span></th>
@@ -319,14 +351,22 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="r in kwDerive.data" :key="r.id" :class="{ 'kw-overridden': r.overridden }">
+                                    <tr v-for="r in kwDerive.data" :key="r.id"
+                                        :class="{ 'kw-overridden': r.overridden, 'row-err': routeBlocked(r), 'row-dim': rowSkipped(r) }">
                                         <td>
-                                            <span v-if="r.validation" class="st-chip" :class="'st-' + rowStatus(r.validation)">
+                                            <span v-if="r.validation" class="st-chip" :class="'st-' + rowStatus(r.validation)"
+                                                  :title="{ ok: '路徑存在', add: '群組執行時會自動建立', warn: 'channel 或 device 不存在（不會自動建立）' }[rowStatus(r.validation)]">
                                                 {{ { ok: '✓', add: '+G', warn: '▲' }[rowStatus(r.validation)] }}
                                             </span>
                                             <span v-else class="st-chip">—</span>
                                         </td>
                                         <td class="td-mono" style="white-space:nowrap">{{ r.tag_name }}</td>
+                                        <td class="gw-cell">
+                                            <span class="gw-name">{{ r.route?.gateway_name || '—' }}</span>
+                                            <span v-if="routeBadge(r)" class="pill" :class="routeBadge(r).cls" :title="routeBadge(r).title">{{ routeBadge(r).text }}</span>
+                                            <span v-if="rowSkipped(r)" class="pill pill-muted" title="單台模式：屬於其他 Gateway，不會送出">將略過</span>
+                                            <div v-if="routeBlocked(r)" class="route-reason">{{ r.route.reason }}</div>
+                                        </td>
                                         <td><input class="input input-kw" v-model="r.channel_name"></td>
                                         <td><input class="input input-kw" v-model="r.device_name"></td>
                                         <td><input class="input input-kw td-mono" v-model="r.tag_groups"></td>
@@ -340,18 +380,6 @@
                                     </tr>
                                 </tbody>
                             </table>
-                        </div>
-                        <div v-if="kwDerive.result" style="margin-top:12px;padding:10px;border-radius:8px"
-                             :style="{ background: kwDerive.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
-                            建點完成：成功 {{ kwDerive.result.success }} 筆，失敗 {{ kwDerive.result.fail }} 筆
-                            <div v-if="kwDerive.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
-                                <div v-for="(er, i) in kwDerive.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
-                                    {{ er.name || er.tag_name }}：{{ er.reason }}
-                                </div>
-                                <div v-if="kwDerive.result.errors.length > 10" style="color:var(--ink-3)">
-                                    …其餘 {{ kwDerive.result.errors.length - 10 }} 筆失敗未列出
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -420,25 +448,33 @@
                                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" style="width:16px;height:16px"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12"/></svg>
                                 Scale 設定
                             </div>
-                            <div style="display:flex;gap:8px;align-items:center">
-                                <label style="font-size:13px;color:var(--ink-3)">Gateway</label>
-                                <select class="select" v-model="selectedGwId" @change="onGwChange">
-                                    <option :value="null">-- 選擇 Gateway --</option>
+                            <div class="gw-picker">
+                                <label>Gateway</label>
+                                <select class="select" v-model="selectedGwId">
+                                    <option :value="null">自動（依 channel 與對應表判斷）</option>
                                     <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
                                 </select>
+                                <button class="btn btn-outline btn-sm" @click="openQueuePanel" title="查看各 Gateway 目前的作業佇列">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:14px;height:14px"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
+                                    作業佇列
+                                </button>
                             </div>
                         </div>
-                        <div v-if="!selectedGwId" class="banner warn" style="margin-bottom:12px">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;flex-shrink:0"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
-                            <span>請先選擇 Gateway 才能執行 Scale 設定。</span>
+                        <div class="gw-hint">
+                            <span :class="{ on: !selectedGwId }">自動＝每筆各送往所屬的 Gateway</span>；
+                            <span :class="{ on: !!selectedGwId }">選定單台＝只處理屬於這台的點，其他台的點會略過</span>。
                         </div>
                         <div style="display:flex;gap:8px;margin-bottom:12px">
                             <button class="btn btn-outline" @click="deriveScale" :disabled="scaleDerive.loading">
                                 {{ scaleDerive.loading ? '推導中…' : '推導 Scale' }}
                             </button>
-                            <button class="btn btn-primary" @click="executeScale" :disabled="scaleDerive.executing || !scaleDerive.data.length || !selectedGwId">
-                                {{ scaleDerive.executing ? '設定中…' : '執行 Scale' }}
+                            <button class="btn btn-primary" @click="executeScale" :disabled="scaleDerive.executing || !scaleDerive.data.length">
+                                {{ scaleDerive.executing ? (scaleDerive.task.status === 'queued' ? '排隊中…' : '設定中…') : '執行 Scale' }}
                             </button>
+                        </div>
+                        <div v-if="scaleStale" class="banner warn" style="margin-bottom:12px">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;flex-shrink:0"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
+                            <span>Gateway 選擇、結構同步或對應表已變更，下方的 Gateway 欄位可能已過期。<button class="link-btn" @click="deriveScale">重新推導</button></span>
                         </div>
                         <div v-if="scaleDerive.data.length">
                             <!-- 限速設定 -->
@@ -458,10 +494,11 @@
                                 </label>
                             </div>
                         </div>
-                        <div v-if="scaleDerive.executing && scaleDerive.progress" class="progress" style="margin-bottom:12px">
-                            <div class="progress-fill" :style="{ width: (scaleDerive.progress.total ? (scaleDerive.progress.current / scaleDerive.progress.total * 100) : 0) + '%' }"></div>
-                            <div class="progress-text">{{ scaleDerive.progress.current }} / {{ scaleDerive.progress.total }}（成功 {{ scaleDerive.progress.success }}，失敗 {{ scaleDerive.progress.fail }}）</div>
-                        </div>
+                        <!-- 送出 / 排隊 / 進度 / 取消 / 結果 -->
+                        <task-panel :task="scaleDerive.task" label="Scale 設定" :can-cancel="canOperate"
+                            @cancel="cancelTask(scaleDerive)" @queue="openQueuePanel"
+                            @resume="resumeTask(scaleDerive, () => deriveScale(true))"
+                            @history="activeTab = 'history'; loadHistory()"></task-panel>
                         <div v-if="scaleDerive.notBuiltCount > 0"
                              style="margin-bottom:12px;padding:10px;border-radius:8px;background:var(--warn-soft);color:var(--ink-1);font-size:13px">
                             ⚠️ 本批有 {{ scaleDerive.notBuiltCount }} 筆尚未在 Kepware 建點（建點狀態非 done）。Scale 為更新操作，
@@ -471,14 +508,33 @@
                              style="margin-bottom:12px;padding:10px;border-radius:8px;background:var(--err-soft);color:var(--err);font-size:13px">
                             ⚠️ 有 {{ scaleDerive.data.filter(r => r.scale_error).length }} 筆資料標示需要 Scale（scale_enabled=true）但範圍值不完整，執行時將記為失敗且不會送至 Kepware。請修正暫存表資料後重新推導。
                         </div>
+                        <!-- 路由摘要 -->
+                        <div v-if="scaleDerive.data.length" class="vsum" style="margin-bottom:10px">
+                            <span v-for="g in scaleRoute.gateways" :key="g.id" class="vs-chip" :class="g.skip ? 'vs-muted' : 'vs-add'">
+                                <span class="d"></span><span>{{ g.name }} <b>{{ g.count }}</b> 筆<template v-if="g.skip">（將略過）</template></span>
+                            </span>
+                            <span v-if="scaleRoute.blocked" class="vs-chip vs-err"><span class="d"></span><span>無法判斷（不會送出）<b>{{ scaleRoute.blocked }}</b> 筆</span></span>
+                            <span v-if="selectedGwId && scaleRoute.skipOther" class="vs-chip vs-muted"><span class="d"></span><span>將略過（屬於其他 Gateway）<b>{{ scaleRoute.skipOther }}</b> 筆</span></span>
+                        </div>
+                        <div v-if="scaleDerive.data.length && scaleRoute.blocked" class="route-guide">
+                            請確認各 Gateway 已同步結構，或到 <button class="link-btn" @click="activeTab = 'settings'">設定 › Gateway 對應表</button> 設定棟別/園區
+                        </div>
                         <div v-if="scaleDerive.data.length" class="tbl-wrap">
                             <table>
-                                <thead><tr><th>Tag</th><th>Channel</th><th>Device</th><th>Scale</th><th>Raw Low</th><th>Raw High</th><th>Scaled Low</th><th>Scaled High</th></tr></thead>
+                                <thead><tr><th>Tag</th><th>Gateway</th><th>Channel</th><th>Device</th><th>Scale</th><th>Raw Low</th><th>Raw High</th><th>Scaled Low</th><th>Scaled High</th></tr></thead>
                                 <tbody>
-                                    <tr v-for="r in scaleDerive.data" :key="r.id" :style="{ background: r.scale_error ? 'var(--err-soft)' : '' }">
+                                    <tr v-for="r in scaleDerive.data" :key="r.id"
+                                        :class="{ 'row-err': routeBlocked(r), 'row-dim': rowSkipped(r) }"
+                                        :style="{ background: r.scale_error && !routeBlocked(r) ? 'var(--err-soft)' : '' }">
                                         <td class="td-mono">
                                             {{ r.tag_name }}
                                             <div v-if="r.scale_error" style="font-size:11px;color:var(--err);margin-top:2px">{{ r.scale_error }}</div>
+                                        </td>
+                                        <td class="gw-cell">
+                                            <span class="gw-name">{{ r.route?.gateway_name || '—' }}</span>
+                                            <span v-if="routeBadge(r)" class="pill" :class="routeBadge(r).cls" :title="routeBadge(r).title">{{ routeBadge(r).text }}</span>
+                                            <span v-if="rowSkipped(r)" class="pill pill-muted" title="單台模式：屬於其他 Gateway，不會送出">將略過</span>
+                                            <div v-if="routeBlocked(r)" class="route-reason">{{ r.route.reason }}</div>
                                         </td>
                                         <td>{{ r.channel_name }}</td><td>{{ r.device_name }}</td>
                                         <td><span class="pill" :class="r.scale_error ? 'pill-err' : (r.scaling_type === 1 ? 'pill-ok' : 'pill-muted')">{{ r.scale_error ? '資料不全' : (r.scaling_type === 1 ? 'Linear' : 'None') }}</span></td>
@@ -489,18 +545,6 @@
                                     </tr>
                                 </tbody>
                             </table>
-                        </div>
-                        <div v-if="scaleDerive.result" style="margin-top:12px;padding:10px;border-radius:8px"
-                             :style="{ background: scaleDerive.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
-                            Scale 設定完成：成功 {{ scaleDerive.result.success }} 筆，失敗 {{ scaleDerive.result.fail }} 筆
-                            <div v-if="scaleDerive.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
-                                <div v-for="(er, i) in scaleDerive.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
-                                    {{ er.name || er.tag_name }}：{{ er.reason }}
-                                </div>
-                                <div v-if="scaleDerive.result.errors.length > 10" style="color:var(--ink-3)">
-                                    …其餘 {{ scaleDerive.result.errors.length - 10 }} 筆失敗未列出
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -537,12 +581,20 @@
                     <div class="banner" style="background:var(--err-soft);border-color:var(--err);color:var(--err);margin-bottom:16px">
                         ⚠️ 刪除操作無法復原，請確認後再執行。
                     </div>
-                    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
-                        <label style="font-size:13px">Gateway</label>
-                        <select class="select" v-model="selectedGwId" @change="onGwChange">
-                            <option :value="null">-- 選擇 --</option>
+                    <div class="gw-picker" style="margin-bottom:8px">
+                        <label>Gateway</label>
+                        <select class="select" v-model="selectedGwId">
+                            <option :value="null">自動（依 channel 與對應表判斷）</option>
                             <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
                         </select>
+                        <button class="btn btn-outline btn-sm" @click="openQueuePanel" title="查看各 Gateway 目前的作業佇列">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:14px;height:14px"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
+                            作業佇列
+                        </button>
+                    </div>
+                    <div class="gw-hint">
+                        <span :class="{ on: !selectedGwId }">自動＝每筆各送往所屬的 Gateway（依 CSV type 的 channel 判斷）</span>；
+                        <span :class="{ on: !!selectedGwId }">選定單台＝只處理屬於這台的點，其他台的點會略過</span>。
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
                         <button class="btn btn-outline btn-sm" @click="downloadDeleteTemplate">
@@ -581,23 +633,16 @@
                             <label style="display:flex;align-items:center;gap:6px;font-size:13px">
                                 <input type="checkbox" v-model="delState.dryRun"> 預演模式（不實際刪除）
                             </label>
-                            <button class="btn btn-danger" @click="executeDelete" :disabled="delState.executing || !selectedGwId">
-                                {{ delState.executing ? '刪除中…' : (delState.dryRun ? '預演刪除' : '確認刪除') }}
+                            <button class="btn btn-danger" @click="executeDelete" :disabled="delState.executing">
+                                {{ delState.executing ? (delState.task.status === 'queued' ? '排隊中…' : (delState.resultDry ? '預演中…' : '刪除中…')) : (delState.dryRun ? '預演刪除' : '確認刪除') }}
                             </button>
                         </div>
                     </div>
-                    <div v-if="delState.result" style="padding:10px;border-radius:8px;margin-top:8px"
-                         :style="{ background: delState.result.fail ? 'var(--err-soft)' : 'var(--ok-soft)' }">
-                        {{ delState.dryRun ? '預演' : '刪除' }}完成：{{ delState.result.success }} 筆成功，{{ delState.result.fail }} 筆失敗
-                        <div v-if="delState.result.errors?.length" style="margin-top:8px;font-size:12px;font-family:var(--font-mono)">
-                            <div v-for="(er, i) in delState.result.errors.slice(0, 10)" :key="i" style="color:var(--err)">
-                                {{ er.name }}：{{ er.reason }}
-                            </div>
-                            <div v-if="delState.result.errors.length > 10" style="color:var(--ink-3)">
-                                …其餘 {{ delState.result.errors.length - 10 }} 筆失敗未列出
-                            </div>
-                        </div>
-                    </div>
+                    <!-- 送出 / 排隊 / 進度 / 取消 / 結果 -->
+                    <task-panel :task="delState.task" :label="delState.resultDry ? '預演' : '刪除'" :can-cancel="canOperate"
+                        @cancel="cancelTask(delState)" @queue="openQueuePanel"
+                        @resume="resumeTask(delState, null)"
+                        @history="activeTab = 'history'; loadHistory()"></task-panel>
                 </div>
             </div>
 
@@ -898,6 +943,82 @@
                     </div>
                 </div>
 
+                <!-- Gateway 對應表（棟別/園區 → Gateway） -->
+                <div class="kis-card">
+                    <div class="kis-card-head">
+                        <div class="kis-card-title">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:16px;height:16px"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h2.5L11 4.5M7.5 8L11 11.5"/></svg>
+                            Gateway 對應表（棟別/園區 → Gateway）
+                        </div>
+                        <button class="btn btn-outline btn-sm" @click="loadRoutes" :disabled="routeMap.loading">{{ routeMap.loading ? '載入中…' : '重新載入' }}</button>
+                    </div>
+                    <div class="gw-hint" style="margin-top:0">
+                        對應表會與各 Gateway 的結構快取交叉檢查，兩者不一致的點位會被擋下、不送出；棟別優先於園區；只有 1 台 Gateway 時不需設定。
+                        <span v-if="gwList.length === 1">（目前只有 1 台 Gateway，不需設定。）</span>
+                    </div>
+                    <div v-if="routeMap.error" class="banner err" style="margin-bottom:12px">{{ routeMap.error }}</div>
+                    <div class="tbl-wrap">
+                        <table>
+                            <thead><tr><th>類型</th><th>值</th><th>對應 Gateway</th><th v-if="auth.role === 'admin'">操作</th></tr></thead>
+                            <tbody>
+                                <tr v-for="r in routeMap.list" :key="r.id">
+                                    <td><span class="pill" :class="r.match_type === 'site' ? 'pill-info' : 'pill-muted'">{{ r.match_type === 'site' ? '棟別 site' : '園區 zone' }}</span></td>
+                                    <td class="td-mono" style="font-weight:600">{{ r.match_value }}</td>
+                                    <td>{{ r.gateway_name }}</td>
+                                    <td v-if="auth.role === 'admin'" style="display:flex;gap:4px">
+                                        <button class="btn btn-outline btn-sm" @click="pickRoute(r.match_type, r.match_value, r.gateway_id)">編輯</button>
+                                        <button class="btn btn-outline btn-sm" style="color:var(--err)" @click="deleteRoute(r)">刪除</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="!routeMap.list.length">
+                                    <td :colspan="auth.role === 'admin' ? 4 : 3" style="text-align:center;color:var(--ink-4)">尚無對應</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 尚未對應：點一下帶入下方表單 -->
+                    <div class="route-unmapped">
+                        <div class="row">
+                            <span style="min-width:150px">尚未對應的棟別（{{ routeMap.unmappedSites.length }}）</span>
+                            <button v-for="v in routeMap.unmappedSites" :key="'s' + v" class="pill pill-warn chip-btn" :disabled="auth.role !== 'admin'" @click="pickRoute('site', v)" title="帶入新增表單">{{ v }}</button>
+                            <span v-if="!routeMap.unmappedSites.length" style="color:var(--ink-4)">（無）</span>
+                        </div>
+                        <div class="row">
+                            <span style="min-width:150px">尚未對應的園區（{{ routeMap.unmappedZones.length }}）</span>
+                            <button v-for="v in routeMap.unmappedZones" :key="'z' + v" class="pill pill-warn chip-btn" :disabled="auth.role !== 'admin'" @click="pickRoute('zone', v)" title="帶入新增表單">{{ v }}</button>
+                            <span v-if="!routeMap.unmappedZones.length" style="color:var(--ink-4)">（無）</span>
+                        </div>
+                    </div>
+                    <!-- 新增 / 修改（僅 admin） -->
+                    <div v-if="auth.role === 'admin'" class="route-form">
+                        <div class="lf-row">
+                            <label>類型</label>
+                            <select class="select" v-model="routeMap.form.type">
+                                <option value="site">棟別 site</option>
+                                <option value="zone">園區 zone</option>
+                            </select>
+                        </div>
+                        <div class="lf-row grow">
+                            <label>值</label>
+                            <input class="input" ref="routeValueInput" v-model="routeMap.form.value" :list="'route-values-' + routeMap.form.type"
+                                   :placeholder="routeMap.form.type === 'site' ? '例: K18' : '例: A'" @keyup.enter="saveRoute">
+                            <datalist id="route-values-site"><option v-for="v in routeMap.unmappedSites" :key="v" :value="v"></option></datalist>
+                            <datalist id="route-values-zone"><option v-for="v in routeMap.unmappedZones" :key="v" :value="v"></option></datalist>
+                        </div>
+                        <div class="lf-row">
+                            <label>對應 Gateway</label>
+                            <select class="select" v-model="routeMap.form.gatewayId">
+                                <option :value="null">-- 選擇 Gateway --</option>
+                                <option v-for="g in gwList" :key="g.id" :value="g.id">{{ g.name }}</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" @click="saveRoute" :disabled="routeMap.saving">{{ routeMap.saving ? '儲存中…' : '儲存對應' }}</button>
+                        <div style="flex-basis:100%;font-size:12px;color:var(--ink-3)">同類型＋值已存在時會更新為新選的 Gateway。</div>
+                    </div>
+                    <div v-if="routeMap.formError" class="banner err" style="margin-top:10px;margin-bottom:0">{{ routeMap.formError }}</div>
+                    <div v-if="auth.role !== 'admin'" class="gw-hint" style="margin:10px 0 0">僅管理員（admin）可新增、修改或刪除對應。</div>
+                </div>
+
                 <!-- PG Reference Tables -->
                 <div class="kis-card">
                     <div class="kis-card-head"><div class="kis-card-title">
@@ -982,6 +1103,50 @@
     </template>
 
     <!-- ============ Modals ============ -->
+    <!-- 作業佇列 -->
+    <div v-if="queuePanel.open" class="modal-overlay" @click.self="closeQueuePanel">
+        <div class="modal-box modal-wide">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <h3 style="margin:0">作業佇列</h3>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span v-if="queuePanel.updatedAt" style="font-size:11px;color:var(--ink-4);font-family:var(--font-mono)">更新於 {{ queuePanel.updatedAt }}（每 2 秒自動更新）</span>
+                    <button class="btn btn-outline btn-sm" @click="loadQueue()" :disabled="queuePanel.loading">重新整理</button>
+                </div>
+            </div>
+            <div class="task-note" style="margin:6px 0 12px">每台 Gateway 一次只執行一個任務，其餘依送出順序排隊；不同 Gateway 互相並行。取消會作用於整個任務（含它在其他 Gateway 的部分）。</div>
+            <div v-if="queuePanel.error" class="banner err" style="margin-bottom:12px">{{ queuePanel.error }}</div>
+            <div v-if="queuePanel.note" class="banner" style="margin-bottom:12px">{{ queuePanel.note }}</div>
+            <div v-if="!queuePanel.data.length && !queuePanel.error" class="empty-block" style="padding:28px 20px">
+                <div class="t">目前沒有進行中或排隊中的作業</div>
+            </div>
+            <div v-for="(q, qi) in queuePanel.data" :key="qi" class="queue-gw">
+                <div class="queue-gw-name">{{ q.gateway_name }}</div>
+                <div class="tbl-wrap">
+                    <table>
+                        <thead><tr><th>狀態</th><th>類型</th><th>送出者</th><th>筆數</th><th>任務 ID</th><th v-if="canOperate">操作</th></tr></thead>
+                        <tbody>
+                            <tr v-for="t in q.tasks" :key="t.task_id">
+                                <td><span class="pill" :class="t.position === 0 ? 'pill-info' : 'pill-warn'">{{ queueStateText(t) }}</span></td>
+                                <td>{{ TASK_TYPE_LABELS[t.type] || t.type || '—' }}</td>
+                                <td>{{ t.username || '—' }}</td>
+                                <td class="td-num">{{ t.total }}</td>
+                                <td class="td-mono">{{ t.task_id }}</td>
+                                <td v-if="canOperate">
+                                    <button class="btn btn-outline btn-sm" style="color:var(--err)" :disabled="queuePanel.cancelling === t.task_id" @click="cancelQueuedTask(t.task_id)">
+                                        {{ queuePanel.cancelling === t.task_id ? '取消中…' : '取消' }}
+                                    </button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="actions" style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+                <button class="btn btn-outline" @click="closeQueuePanel">關閉</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Gateway Form -->
     <div v-if="gwForm.show" class="modal-overlay" @click.self="gwForm.show = false">
         <div class="modal-box">
@@ -1135,6 +1300,97 @@
         </div>
     </template>
 </div>
+
+<!-- 背景任務進度區元件（Step 3 / Step 5 / 批次刪除共用）；邏輯在 app.js 的 TaskPanel -->
+<script type="text/x-template" id="task-panel-tpl">
+<div v-if="visible" class="task-panel">
+    <div v-if="task.submitting" class="task-note">送出中…</div>
+    <!-- 送出失敗（400 無可處理資料／422 超過批次上限／429 佇列已滿…）：顯示後端 detail -->
+    <div v-if="task.error" class="banner err">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4.5v4M8 10.5v.5"/></svg>
+        <span>{{ task.error }}</span>
+    </div>
+
+    <!-- 排隊中提示 -->
+    <div v-if="queuedNow" class="banner warn task-queued">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+        <div>
+            <div style="font-weight:600">{{ task.message || '任務已進入佇列，輪到時會自動開始' }}</div>
+            <div class="task-note">排隊中的任務使用送出當下的資料；若之後修改了手動覆寫，請先取消再重新送出。</div>
+        </div>
+    </div>
+
+    <!-- 送出時被擋下／排除的筆數 -->
+    <div v-if="task.id && (task.blocked || excludedText)" class="task-note" style="color:#A8650F">
+        <div v-if="task.blocked">⚠ {{ task.blocked }} 筆無法判斷所屬 Gateway，未送出（計入失敗，狀態維持 pending）</div>
+        <div v-if="excludedText">{{ excludedText }}</div>
+    </div>
+
+    <!-- 進行中：總進度 + 分台進度 + 取消 -->
+    <template v-if="running">
+        <div class="progress">
+            <div class="progress-fill" :style="{ width: pct(task.progress ? task.progress.current : 0, task.progress ? task.progress.total : 0) + '%' }"></div>
+            <div class="progress-text">
+                <template v-if="task.progress">{{ task.progress.current }} / {{ task.progress.total }}（成功 {{ task.progress.success }}，失敗 {{ task.progress.fail }}<template v-if="task.progress.skip">，略過 {{ task.progress.skip }}</template>）</template>
+                <template v-else>送出中…</template>
+            </div>
+        </div>
+        <div v-if="task.gateways.length" class="gw-prog">
+            <div v-for="(g, i) in task.gateways" :key="i" class="gw-prog-row">
+                <div class="gw-prog-name" :title="g.name">{{ g.name }}</div>
+                <div><span class="pill" :class="stateClass(g)">{{ stateText(g) }}</span></div>
+                <div class="progress progress-sm">
+                    <div class="progress-fill" :class="{ danger: g.state === 'failed' }" :style="{ width: pct(g.current, g.total) + '%' }"></div>
+                </div>
+                <div class="gw-prog-counts">{{ g.current }}/{{ g.total }} · 成功 {{ g.success }} · 失敗 {{ g.fail }} · 略過 {{ g.skip }}</div>
+            </div>
+        </div>
+        <div class="task-actions">
+            <button v-if="canCancel" class="btn btn-danger btn-sm" :disabled="task.cancelling || task.cancelled" @click="$emit('cancel')">
+                {{ (task.cancelling || task.cancelled) ? '取消中…' : '取消' }}
+            </button>
+            <button class="btn btn-outline btn-sm" @click="$emit('queue')">查看作業佇列</button>
+            <span v-if="task.cancelling || task.cancelled" class="task-note">已要求取消，正在等待目前這筆處理完成…</span>
+            <span class="task-id">任務 {{ task.id }}</span>
+        </div>
+        <div v-if="task.cancelError" class="task-note" style="color:var(--err)">{{ task.cancelError }}</div>
+    </template>
+
+    <!-- 任務遺失（404：伺服器重啟，記憶體中的任務已消失） -->
+    <div v-if="task.lost" class="banner warn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
+        <span>任務已遺失，請到『歷史』確認結果。 <button class="link-btn" @click="$emit('history')">前往歷史</button></span>
+    </div>
+
+    <!-- 連續輪詢失敗 -->
+    <div v-if="task.stalled" class="banner warn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1l7 13H1L8 1zM8 6v3M8 11v.5"/></svg>
+        <span>暫時無法取得任務狀態（連續失敗多次），任務可能仍在伺服器上執行。 <button class="link-btn" @click="$emit('resume')">繼續追蹤</button>　<button class="link-btn" @click="$emit('history')">前往歷史</button></span>
+    </div>
+
+    <!-- 完成摘要 -->
+    <div v-if="task.summary" class="task-result"
+         :style="{ background: task.summary.cancelled ? 'var(--warn-soft)' : (task.summary.fail ? 'var(--err-soft)' : 'var(--ok-soft)') }">
+        <div style="font-weight:600">
+            {{ label }}{{ task.summary.cancelled ? '已取消' : '完成' }}：成功 {{ task.summary.success }} 筆，失敗 {{ task.summary.fail }} 筆<template v-if="task.summary.skip">，略過 {{ task.summary.skip }} 筆</template>
+        </div>
+        <div v-if="task.summary.cancelled" style="margin-top:4px">已取消，{{ task.summary.cancelled_remaining || 0 }} 筆未處理（已完成的點位不會復原）</div>
+        <div v-if="task.summary.blocked" style="margin-top:4px;color:#A8650F">⚠ {{ task.summary.blocked }} 筆無法判斷所屬 Gateway，未送出（已計入失敗）</div>
+        <div v-if="task.summary.gateways && task.summary.gateways.length" class="gw-lines">
+            <div v-for="(g, i) in task.summary.gateways" :key="i">
+                {{ g.name }}：成功 {{ g.success }} / 失敗 {{ g.fail }} / 略過 {{ g.skip }}
+                <span style="color:var(--ink-4)">（{{ stateText(g) }}）</span>
+            </div>
+        </div>
+        <div v-if="task.summary.errors && task.summary.errors.length" class="errs">
+            <div v-for="(er, i) in errorsShown" :key="i" style="color:var(--err)">
+                <template v-if="er.gateway">[{{ er.gateway }}] </template>{{ er.name || er.tag_name }}：{{ er.reason }}
+            </div>
+            <div v-if="task.summary.errors.length > 10" style="color:var(--ink-3)">…其餘 {{ task.summary.errors.length - 10 }} 筆失敗未列出</div>
+        </div>
+    </div>
+</div>
+</script>
 
 <script src="/static/vue.global.prod.js"></script>
 <script src="/static/js/app.js"></script>

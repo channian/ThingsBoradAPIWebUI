@@ -2252,10 +2252,28 @@ async def pg_delete_ref(req: RefDeleteRequest,
 
 # ── API: Tag 推導 ────────────────────────────────────
 
+def _structure_validation(item: dict, structure: dict) -> dict:
+    """依某台 Gateway 的結構快取 { channel: { device: [group_paths] } } 檢查一筆 derive 結果的路徑：
+    channel / device 是否存在、tag group 是否存在（不存在但 device 在 → 執行時會自動建立）。"""
+    ch = item["channel_name"]
+    dev = item["device_name"]
+    grp = item["tag_groups"]
+    ch_exists = ch in structure
+    dev_exists = ch_exists and dev in structure.get(ch, {})
+    grp_exists = dev_exists and grp in structure.get(ch, {}).get(dev, [])
+    return {
+        "channel_exists": ch_exists,
+        "device_exists": dev_exists,
+        "group_exists": grp_exists if grp else True,
+        "group_auto_create": dev_exists and not grp_exists and bool(grp),
+    }
+
+
 @app.post("/api/kw/derive")
 async def kw_derive(req: DeriveRequest,
                     user: dict = Depends(require_role("admin", "operator"))):
-    """推導 Kepware 建點欄位（tag group + tag），若指定 gateway_id 則比對結構快取"""
+    """推導 Kepware 建點欄位（tag group + tag）並附 route；validation（比對結構快取）的對象：
+    帶 gateway_id → 該台（每筆都有）；沒帶（自動模式）→ 每筆各自路由到的那台（無法判斷者不給 validation）"""
     try:
         staging = pg_client.get_staging_list(
             page=0, page_size=None,
@@ -2271,22 +2289,22 @@ async def kw_derive(req: DeriveRequest,
         for item in results:
             item["route"] = _route_for(item, route_ctx)
 
-        # validation 仍針對請求指定的 gateway_id，與 route 無關
         if req.gateway_id:
+            # 指定 gateway_id：全部對該台的結構快取驗證，與 route 無關
             structure = pg_client.get_structure(req.gateway_id)
             for item in results:
-                ch = item["channel_name"]
-                dev = item["device_name"]
-                grp = item["tag_groups"]
-                ch_exists = ch in structure
-                dev_exists = ch_exists and dev in structure.get(ch, {})
-                grp_exists = dev_exists and grp in structure.get(ch, {}).get(dev, [])
-                item["validation"] = {
-                    "channel_exists": ch_exists,
-                    "device_exists": dev_exists,
-                    "group_exists": grp_exists if grp else True,
-                    "group_auto_create": dev_exists and not grp_exists and bool(grp),
-                }
+                item["validation"] = _structure_validation(item, structure)
+        else:
+            # 自動模式：每筆對「它路由到的那台」驗證（無法判斷者 route.gateway_id 為 None，不給 validation）。
+            # 每台 Gateway 的結構快取只讀一次（lazy 快取），不逐列查 DB。
+            structures: dict = {}
+            for item in results:
+                gid = item["route"]["gateway_id"]
+                if gid is None:
+                    continue
+                if gid not in structures:
+                    structures[gid] = pg_client.get_structure(gid)
+                item["validation"] = _structure_validation(item, structures[gid])
 
         return {"data": results, "total": len(results)}
     except Exception as e:

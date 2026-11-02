@@ -669,8 +669,9 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 #### POST /api/kw/derive
 
 從暫存表推導 Kepware 建點所需欄位（channel/device/tag_groups/address，預覽、不寫入）。
-若帶 `gateway_id`，會比對該 Gateway 的結構快取（`kepware_structure`，需先呼叫
-`POST /api/kw/gateways/{id}/sync` 同步過）並回傳每筆的 `validation` 狀態。  
+會比對 Gateway 的結構快取（`kepware_structure`，需先呼叫
+`POST /api/kw/gateways/{id}/sync` 同步過）並回傳每筆的 `validation` 狀態：**帶 `gateway_id`** → 每一筆都對該台驗證；
+**沒帶（自動模式）** → 每一筆對「它自己 `route.gateway_id` 所屬那台」驗證，無法判斷所屬 Gateway 的列（`route.gateway_id` 為 `null`）**沒有** `validation` 欄位。  
 **需要 JWT（admin / operator）**
 
 **Request Body**
@@ -687,7 +688,7 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 |------|------|------|------|
 | ids | list? | null | 指定暫存表 id 清單；null = 全部符合條件的資料 |
 | tb_status | string? | "pending" | 篩選 Step 3 建點狀態（null 不篩選） |
-| gateway_id | int? | null | 指定則比對結構快取，回傳 `validation` |
+| gateway_id | int? | null | 指定＝每筆都對這台的結構快取驗證；省略＝每筆對它路由到的那台驗證（每台 Gateway 的結構快取每個請求只讀一次） |
 
 **Response 200**
 
@@ -731,7 +732,7 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 |------|------|
 | data_type | Kepware tag 資料型別 enum（整數）。暫存列有手動覆寫（`kw_data_type` 非 NULL）就用覆寫值，否則預設 **8（Float）**——與是否需要 Scale 無關，任何 tag 都需要正確型別。enum 對照表見下方「步驟 3（可選）：手動覆寫」章節 |
 | site / zone | 該筆的棟別（暫存列 `site`，已 strip）與園區（以 `site` 比對 `location_config` 取得的 `zone`）；缺值為空字串。Gateway 自動路由的判斷依據 |
-| route | **Gateway 自動路由結果**（預覽），**不論請求是否帶 `gateway_id` 都會回傳**：`{gateway_id, gateway_name, status, reason}`。`status` 各值含意見第 7 節「Gateway 自動路由」；`reason` 為可直接顯示的繁體中文說明（衝突時已把 Gateway id 換成名稱）。與下方 `validation` 無關——`validation` 仍只針對請求指定的那台 `gateway_id`；`route` 則是系統依 channel 與對應表判定「這筆該送哪台」 |
+| route | **Gateway 自動路由結果**（預覽），**不論請求是否帶 `gateway_id` 都會回傳**：`{gateway_id, gateway_name, status, reason}`。`status` 各值含意見第 7 節「Gateway 自動路由」；`reason` 為可直接顯示的繁體中文說明（衝突時已把 Gateway id 換成名稱）。`route` 是系統依 channel 與對應表判定「這筆該送哪台」；`validation`（見下表）在自動模式就是對這台驗證，在帶 `gateway_id` 時則固定對請求指定的那台 |
 | overridden | 是否曾手動覆寫過（供 UI 標示）。條件：`channel`/`device` 覆寫值存在且與推導值不同、或 `tag_groups` 覆寫值（可為空字串）與推導值不同、或 `data_type` 有覆寫（`kw_data_type` 非 NULL，即使覆寫值恰好等於預設 8 也算） |
 
 | validation 欄位 | 說明 |
