@@ -37,6 +37,10 @@ class Task:
         self.ended_at: Optional[str] = None
         self.csv_filename: str = ""
         self.on_complete = None
+        # 多 Gateway 作業的各 Gateway 即時狀態（由 app/gateway_jobs.py 維護）：
+        # 每筆 {gateway_id, name, key, state, total, current, success, fail, skip}，
+        # state 為 queued / running / done / cancelled / failed。單純的背景任務維持空 list。
+        self.gateways: list = []
 
     def push_log(self, level: str, message: str):
         entry = {"level": level, "message": message}
@@ -65,6 +69,21 @@ class Task:
         self.results.append({
             "name": name, "status": status, "detail": detail
         })
+
+    def status(self) -> str:
+        """任務整體狀態字串：done / cancelled / running / queued。
+
+        - 已完成：summary.cancelled 為真 → "cancelled"，否則 "done"。
+        - 未完成：gateways 為空（單純背景任務）或任一台正在跑 → "running"；
+          gateways 非空且全部都還在排隊 → "queued"；
+          其他（例如部分 Gateway 已結束、其餘仍排隊）→ "running"。
+        """
+        if self.done:
+            return "cancelled" if (self.summary or {}).get("cancelled") else "done"
+        states = [g.get("state") for g in list(self.gateways)]
+        if states and all(s == "queued" for s in states):
+            return "queued"
+        return "running"
 
 
 # ── 任務管理器 ─────────────────────────────────────────
