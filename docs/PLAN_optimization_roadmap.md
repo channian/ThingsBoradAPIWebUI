@@ -363,3 +363,20 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 - **取代 409**：同一台忙碌改為 FIFO 排隊（`queued: true`），不同台並行；單一 `task_id`；新增 `POST /api/tasks/{id}/cancel`、`GET /api/kw/queue`；批次超限 422、佇列已滿 429。
 - 順帶解決 **G8**（手動 URL 鎖 key 未正規化：現以正規化網址排隊）與 **G9**（done 與釋放鎖的空窗：現為先釋放佇列、最後一個 part 才 `push_complete`）。
 - 已知限制：佇列在記憶體（重啟遺失）；排隊中的任務用送出當下的推導快照（排隊期間改覆寫請取消重送）。前端尚未接（下一批）。
+
+### 狀態總覽（2026-11-02 晚）
+
+| 項目 | 狀態 |
+|------|------|
+| G1 暫存資料不知屬於哪台 Gateway | ✅ 已解決：channel × 棟別/園區對應表交叉檢查自動路由（commit `bc294a8`、`08740ec`、`7c4d171`） |
+| G7 kw-override 整筆覆寫 | ✅ 已解決：改為部分更新（`bc294a8`） |
+| G8 手動 URL 鎖 key 未正規化 | ✅ 已解決：佇列 key 以正規化網址（`083c02c`） |
+| G9 完成與釋放鎖的空窗 | ✅ 已解決：先釋放佇列再 push_complete（`083c02c`） |
+| 同一台忙碌改排隊、可取消、安全鎖 | ✅ 完成（後端 `08740ec`、前端 `7c4d171`） |
+| G2 自訂 CA 憑證對 DB Gateway 無效 | ⏸ 降為低（兩台設定相同）；若現場是「關閉 SSL 驗證」在用才需補 |
+| G3 / G6 | ❎ 不成立（Proxy 相同、同一套 KIS） |
+| G4 Collector 單一設定 | ⏸ 暫不處理；超過 20 萬點分第二套 Collector 時再設計「Collector 設定檔」 |
+| 舊點 data_type=0 校正 | ⛔ **卡住**：現有 Gateway client 沒有讀取／修改既有 tag 的呼叫（只有建立、刪除、設 Scale），不知道 Gateway 是否支援 GET tags 或以 PUT 修改 data_type。待使用者提供 Gateway API 文件（Swagger `/docs`）或實際回應範例後再設計 |
+
+**已知小問題（暫不處理）**：`batch_size<=0` 會使該台整台失敗（ZeroDivisionError 被最後防線接住）；`GET /api/history` 讀檔未加鎖；頂欄「KEPWARE GW · OFFLINE」恆為 OFFLINE（Gateway 物件無 status，原本就如此）；Step 5 沒有「同步結構」按鈕；`failed` 狀態的分台顯示未經瀏覽器驗證。
+
