@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """批次刪除（POST /api/kw/delete-batch，`dry_run=false`）的行為測試：用假的
-KepwareGatewayClient 驅動 `_exec_kw_delete` 這條背景任務程式碼路徑，驗證
+KepwareGatewayClient 驅動 `_kw_delete_worker` 這條背景任務程式碼路徑，驗證
 delete_tag 真的被呼叫、Kepware 回 404（tag 不存在）視為成功、任務結束後
-Gateway 鎖確實釋放。"""
+Gateway 佇列確實釋放。"""
 import io
 
-import pytest
-
 import app.main as m
+from app.gateway_queue import gateway_key
 from tests.fake_kepware import (
     wait_lock_released,
     FakeKepwareState,
@@ -16,13 +15,6 @@ from tests.fake_kepware import (
     make_fake_kepware_client,
     poll_task,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_gateway_locks():
-    m._gateway_locks.clear()
-    yield
-    m._gateway_locks.clear()
 
 
 def _upload_delete_csv(api_client, admin_headers):
@@ -45,7 +37,7 @@ def _upload_delete_csv(api_client, admin_headers):
 def test_kw_delete_batch_calls_delete_tag_and_treats_404_as_success(api_client, admin_headers, monkeypatch):
     """dry_run=false 時：delete_tag 對兩筆資料都應該被呼叫；其中一筆 Kepware 回
     404（tag 本來就不存在）要視為成功（略過），不能算失敗；任務結束後
-    Gateway 鎖必須被釋放。"""
+    Gateway 佇列必須被釋放。"""
     upload_id = _upload_delete_csv(api_client, admin_headers)
 
     state = FakeKepwareState()
@@ -75,5 +67,5 @@ def test_kw_delete_batch_calls_delete_tag_and_treats_404_as_success(api_client, 
         assert c["device_name"] == "DEV1"
         assert c["tag_group"] == "2F.CHS"
 
-    gw_key = m._gateway_lock_key(gw["id"], gw["url"])
-    assert wait_lock_released(m, gw_key), "任務結束後鎖應該已經釋放"
+    gw_key = gateway_key(gw["id"], gw["url"])
+    assert wait_lock_released(m, gw_key), "任務結束後佇列應該已經釋放"

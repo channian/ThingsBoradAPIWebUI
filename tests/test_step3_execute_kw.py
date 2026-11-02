@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """Step 3（POST /api/kw/execute）背景任務的**行為測試**：用假的
-KepwareGatewayClient 取代真實 client，驅動 `app.main` 內 `_exec_kw_execute`
+KepwareGatewayClient 取代真實 client，驅動 `app.main` 內 `_kw_execute_worker`
 這條真正會被執行到的程式碼路徑——建點迴圈、tag group 預建、409/429/500 錯誤處理、
-tb_status 狀態更新、429 重試在真實流程中是否真的有接上、login 失敗時的
-try/finally 鎖釋放。
+tb_status 狀態更新、429 重試在真實流程中是否真的有接上、login 失敗時 Gateway 佇列
+有被釋放。
 
 在此之前，Step 3 完全沒有任何行為測試：只有 `tests/test_data_type.py` 對
-`create_tag(...)` 呼叫是否帶 `data_type` 關鍵字做 AST 靜態檢查，以及
-`tests/test_gateway_lock.py` 對 try/finally 結構做 AST 靜態檢查，兩者都不會
-實際執行迴圈本體。
+`create_tag(...)` 呼叫是否帶 `data_type` 關鍵字做 AST 靜態檢查，不會實際執行迴圈本體。
 """
-import pytest
 import requests
 
 import app.main as m
+from app.gateway_queue import gateway_key
 from tests.fake_kepware import (
     wait_lock_released,
     FakeKepwareState,
@@ -23,13 +21,6 @@ from tests.fake_kepware import (
     make_fake_kepware_client,
     poll_task,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_gateway_locks():
-    m._gateway_locks.clear()
-    yield
-    m._gateway_locks.clear()
 
 
 def _tb_status_of(pg_client_obj, tag_name):
@@ -166,13 +157,11 @@ def test_step3_429_retry_then_success(api_client, admin_headers, monkeypatch):
     assert _tb_status_of(m.pg_client, "T_429") == "done"
 
 
-# ── 10：login 失敗時任務仍正常結束、鎖有釋放 ──
+# ── 10：login 失敗時任務仍正常結束、佇列有釋放 ──
 
-def test_step3_login_failure_completes_task_and_releases_lock(api_client, admin_headers, monkeypatch):
+def test_step3_login_failure_completes_task_and_releases_queue(api_client, admin_headers, monkeypatch):
     """10. Kepware 登入失敗時：任務仍應正常結束（done=True、全部計為失敗），
-    且 Gateway 的鎖必須被釋放——這是 try/finally 的**執行期**驗證，
-    與 `tests/test_gateway_lock.py` 裡的 AST 靜態檢查互補（AST 只能確認程式碼
-    「長得像」try/finally，無法確認 finally 真的在例外路徑上被執行到）。"""
+    且 Gateway 的佇列必須被釋放（不然後面排隊的任務永遠輪不到）。"""
     _insert_pending_row(m.pg_client, "T_LOGIN_FAIL", "PLC1.LF")
 
     state = FakeKepwareState()
@@ -192,5 +181,5 @@ def test_step3_login_failure_completes_task_and_releases_lock(api_client, admin_
     assert len(state.login_calls) == 1, "login 應該被呼叫過一次（雖然失敗）"
     assert not state.create_tag_calls, "登入都失敗了，不該有任何 create_tag 呼叫"
 
-    gw_key = m._gateway_lock_key(gw["id"], gw["url"])
-    assert wait_lock_released(m, gw_key), "login 失敗的例外路徑上，鎖也必須被釋放"
+    gw_key = gateway_key(gw["id"], gw["url"])
+    assert wait_lock_released(m, gw_key), "login 失敗的例外路徑上，佇列也必須被釋放"

@@ -372,6 +372,26 @@ class PGClient:
                 )
                 return cur.rowcount
 
+    def get_staging_statuses(self, ids: list, field: str) -> dict:
+        """單一 SQL 查出多筆暫存列某個狀態欄位的目前值，回傳 {id: status}。
+
+        供排隊中的背景任務「輪到時」重新檢查：狀態已不是 pending 的列代表被先前的任務處理過，
+        不可重複送出。field 只允許 tb_status / pg_status / scale_status（否則 ValueError，
+        欄位名會直接組進 SQL，必須白名單）；ids 為空回 {}；查無的 id 不會出現在結果中
+        （例如暫存列在排隊期間被刪除）。"""
+        if field not in ("tb_status", "pg_status", "scale_status"):
+            raise ValueError("field must be tb_status/pg_status/scale_status")
+        ids = list(ids or [])
+        if not ids:
+            return {}
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id, {field} FROM scada_tag_config WHERE id = ANY(%s)",
+                    (ids,),
+                )
+                return {row[0]: row[1] for row in cur.fetchall()}
+
     def delete_staging(self, ids: list) -> int:
         """刪除暫存表資料"""
         with self._get_conn() as conn:

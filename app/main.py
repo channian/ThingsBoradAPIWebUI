@@ -9,11 +9,15 @@ import io
 import json
 import logging
 import os
+import random
+import re
 import requests
 import threading
 import time
 import uuid
 import datetime
+from collections import Counter
+from dataclasses import dataclass
 from typing import Optional
 
 # 載入 .env：必須在任何 app.* 模組被匯入之前執行。
@@ -31,11 +35,16 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from app.task_manager import TaskManager
+from app.task_manager import TaskManager, _smart_get
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
-from app.gateway_router import resolve_gateway, find_unmapped, localize_reason
+from app.gateway_router import (
+    resolve_gateway, find_unmapped, localize_reason, group_by_gateway, is_routable,
+)
+from app.gateway_queue import GatewayQueue, QueueFullError, gateway_key, normalize_gateway_url
+from app.gateway_jobs import PartSpec, run_job
+from app.safety import check_batch_size, get_limits, SafetyError
 from app.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, require_role, VALID_ROLES,
@@ -142,34 +151,16 @@ config_manager = ConfigManager(CONFIG_FILE)
 
 task_manager = TaskManager()
 
-# ── Gateway 併發鎖 ──────────────────────────────────────
+# ── Gateway 作業佇列 ────────────────────────────────────
 # Kepware GW 限速為每分鐘 60 次（per 帳號+路徑），建點/Scale/刪除共用同一額度桶。
-# 同一 Gateway 若併發執行多個背景任務，實際速率會疊加而撞限速，故同時只允許一個任務。
-# 採「拒絕」而非排隊：瓶頸在限速，排隊不會更快，直接回報讓呼叫端可決定何時重試。
-_gateway_locks: dict = {}          # gateway_key -> task_id
-_gateway_lock_mutex = threading.Lock()
+# 同一 Gateway 若併發執行多個背景任務，實際速率會疊加而撞限速，所以「同一台一次只跑一個」；
+# 但不再拒絕（舊版回 409），而是排隊（先進先出），不同台的 Gateway 則互相並行。
+# 佇列內容在記憶體：伺服器重啟會遺失排隊與執行中的任務（與背景任務一貫行為相同）。
+# 詳見 app/gateway_queue.py（佇列）與 app/gateway_jobs.py（一個請求 → 單一 task_id → 每台一個 part）。
+gateway_queue = GatewayQueue()
 
-
-def _gateway_lock_key(gateway_id, gw_url) -> str:
-    """有 gateway_id 用它，否則用手動憑證的 URL 當 key"""
-    return f"gw:{gateway_id}" if gateway_id else f"url:{gw_url}"
-
-
-def _acquire_gateway_lock(key: str, task_id: str):
-    """嘗試取得鎖。成功回 None；失敗回目前佔用該 Gateway 的 task_id"""
-    with _gateway_lock_mutex:
-        current = _gateway_locks.get(key)
-        if current:
-            return current
-        _gateway_locks[key] = task_id
-        return None
-
-
-def _release_gateway_lock(key: str, task_id: str):
-    """釋放鎖（只有持有者能釋放，避免誤放他人的鎖）"""
-    with _gateway_lock_mutex:
-        if _gateway_locks.get(key) == task_id:
-            _gateway_locks.pop(key, None)
+# 歷史紀錄檔的「讀→改→寫」要整段互斥：多個 part／多個任務可能在同一瞬間結束
+_history_lock = threading.Lock()
 
 
 # 暫存上傳的 CSV 資料 — 檔案式儲存，伺服器重啟不會遺失
@@ -310,23 +301,31 @@ def _save_history(records: list):
 
 
 def _append_history(task):
-    """任務完成後寫入歷史紀錄"""
-    records = _load_history()
+    """任務完成後寫入歷史紀錄。
+
+    由 push_complete 的 on_complete 呼叫，可能在多條執行緒同時進來（兩個任務同時結束），
+    所以「讀→改→寫」整段用 _history_lock 互斥，否則後寫的會把先寫的蓋掉。
+    started_at 只在第一個 part 真正開始執行時才有值；全部在排隊時就被取消的任務沒有，
+    退而用 ended_at，歷史列表才不會出現空的開始時間。"""
+    summary = task.summary or {}
     entry = {
         "task_id": task.id,
         "type": task.type,
         "dry_run": task.params.get("dry_run", True),
         "csv_filename": task.csv_filename,
-        "started_at": task.started_at,
+        "started_at": task.started_at or task.ended_at,
         "ended_at": task.ended_at,
-        "total": task.summary.get("total", 0) if task.summary else 0,
-        "success": task.summary.get("success", 0) if task.summary else 0,
-        "fail": task.summary.get("fail", 0) if task.summary else 0,
-        "skip": task.summary.get("skip", 0) if task.summary else 0,
+        "total": summary.get("total", 0),
+        "success": summary.get("success", 0),
+        "fail": summary.get("fail", 0),
+        "skip": summary.get("skip", 0),
+        "cancelled": bool(summary.get("cancelled", False)),
     }
-    records.insert(0, entry)  # 最新在最前
-    records = records[:200]   # 保留最近 200 筆
-    _save_history(records)
+    with _history_lock:
+        records = _load_history()
+        records.insert(0, entry)  # 最新在最前
+        records = records[:200]   # 保留最近 200 筆
+        _save_history(records)
     log.info(f"歷史紀錄已儲存: {task.type} | {task.csv_filename}")
 
 
@@ -352,13 +351,44 @@ def _retry_after_seconds(resp, default_wait: float) -> float:
     return max(1.0, min(wait, 120.0))
 
 
+# 可中斷睡眠的切片長度：取消要求最慢在一個切片（秒）內被察覺，
+# 不必等整段 delay / batch_pause / 429 退避（最長 120 秒）睡完
+_SLEEP_SLICE = 0.5
+
+
+def _sleep_interruptible(view, seconds: float) -> bool:
+    """睡 seconds 秒，但以 _SLEEP_SLICE 為單位切片，每片之前先看 view.cancelled。
+
+    view 是 PartView（或任何有 cancelled 屬性的物件；沒有該屬性視為永不取消）。
+    回傳 True＝睡滿且未被取消；False＝途中（或睡完時）發現已取消。
+    刻意用「累減剩餘秒數」而不是比對時鐘：行為只取決於 time.sleep 被呼叫的次數與長度，
+    測試把 time.sleep 換成假的也不會空轉。"""
+    remaining = float(seconds)
+    while remaining > 0:
+        if getattr(view, "cancelled", False):
+            return False
+        step = min(_SLEEP_SLICE, remaining)
+        time.sleep(step)
+        remaining -= step
+    return not getattr(view, "cancelled", False)
+
+
+def _pace(view, delay: float) -> None:
+    """逐筆之間的限速等待（delay 加一點隨機抖動），可被取消打斷。"""
+    _sleep_interruptible(view, delay + random.uniform(0.01, 0.05))
+
+
 def _kw_call_with_429_retry(task, desc: str, fn, max_retries: int = 3, default_wait: float = 5.0):
     """呼叫 Kepware API，遇 429 依伺服器建議時間等待後重試（最多 max_retries 次）。
 
     Kepware API Gateway 的限速是滑動視窗制（預設 60 次/分鐘），視窗要等舊請求
     過期才會釋放額度——固定等 5 秒重試幾乎必定再撞、且會造成後續連環失敗。
     429 回應帶有 Retry-After 標頭指出額度何時釋出，故以它為準。
-    非 429 的錯誤原樣拋出，由呼叫端處理（409 已存在、404 不存在等）。"""
+    非 429 的錯誤原樣拋出，由呼叫端處理（409 已存在、404 不存在等）。
+
+    task 可以是 Task 或 PartView（只用到 push_log 與可選的 cancelled）。
+    退避等待中收到取消：不再重試，直接以最後一次的 429 錯誤結束
+    （該筆會被呼叫端記為失敗，之後的迴圈偵測到取消就會停止）。"""
     attempt = 0
     while True:
         try:
@@ -370,7 +400,9 @@ def _kw_call_with_429_retry(task, desc: str, fn, max_retries: int = 3, default_w
                 attempt += 1
                 task.push_log("warning",
                               f"{desc} 收到 429 限速，暫停 {wait:.0f} 秒後重試（第 {attempt}/{max_retries} 次）")
-                time.sleep(wait)
+                if not _sleep_interruptible(task, wait):
+                    task.push_log("warning", f"{desc} 等待重試期間收到取消，放棄重試")
+                    raise
                 continue
             raise
 
@@ -874,22 +906,138 @@ async def get_history(user: dict = Depends(get_current_user)):
 
 @app.delete("/api/history")
 async def clear_history(user: dict = Depends(require_admin)):
-    _save_history([])
+    with _history_lock:
+        _save_history([])
     return {"success": True}
+
+
+# 網址去掉 userinfo（user:pass@）用的 scheme 判斷；規則與 gateway_queue.normalize_gateway_url 一致
+_URL_WITH_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*://)([^/?#]*)(.*)$", re.DOTALL)
+
+
+def _display_url(url) -> str:
+    """正規化 Gateway URL 並移除 userinfo（user:pass@），可安全顯示在 API 回應或畫面上。
+    手動憑證模式用網址當 Gateway 名稱，網址裡若夾帶帳密不能外洩給其他登入者。"""
+    text = normalize_gateway_url(url)
+    m = _URL_WITH_SCHEME_RE.match(text)
+    if m:
+        scheme, authority, rest = m.groups()
+        return f"{scheme}{authority.rpartition('@')[2]}{rest}"
+    head, slash, rest = text.partition("/")
+    return f"{head.rpartition('@')[2]}{slash}{rest}"
 
 
 @app.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
-    """查詢背景任務狀態"""
+    """查詢背景任務狀態。
+
+    舊欄位 task_id / done / progress / summary 不變；新增：
+      status     task.status()：queued / running / done / cancelled
+      cancelled  是否已收到取消要求
+      type       任務類型（kw_execute / pg_execute_scale / kw_delete）
+      username   送出者
+      gateways   每台 Gateway 的即時狀態 [{gateway_id, name, state, total, current,
+                 success, fail, skip, position}]；position 只有 state=queued 才有值
+                 （0＝輪到它了、n＝前面還有 n 個），其餘為 None。
+    刻意不回傳佇列 key、憑證或網址（手動憑證模式的 key 含網址，可能夾帶帳密）。"""
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    gateways = []
+    for g in list(task.gateways):
+        state = g.get("state")
+        gateways.append({
+            "gateway_id": g.get("gateway_id"),
+            "name": g.get("name"),
+            "state": state,
+            "total": g.get("total", 0),
+            "current": g.get("current", 0),
+            "success": g.get("success", 0),
+            "fail": g.get("fail", 0),
+            "skip": g.get("skip", 0),
+            "position": (gateway_queue.position(g.get("key"), task.id)
+                         if state == "queued" else None),
+        })
     return {
         "task_id": task.id,
         "done": task.done,
         "progress": task.progress,
         "summary": task.summary,
+        "status": task.status(),
+        "cancelled": task.cancelled,
+        "type": task.type,
+        "username": (task.params or {}).get("username", ""),
+        "gateways": gateways,
     }
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str, request: Request,
+                      user: dict = Depends(require_role("admin", "operator"))):
+    """取消背景任務（排隊中或執行中皆可）。
+
+    - 排隊中的 Gateway：立刻離開佇列（不會執行）。
+    - 執行中的 Gateway：處理完「目前這一筆」後停止；已成功的列照常寫回狀態，
+      尚未處理的筆數記在 summary.cancelled_remaining。
+    重複取消是冪等的（仍回 200）；任務已結束回 409；不是本機制產生的任務（沒有 gateways）回 400。"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="找不到任務")
+    if task.done:
+        raise HTTPException(status_code=409, detail="任務已結束，無法取消")
+    if not task.gateways:
+        raise HTTPException(status_code=400, detail="此任務不支援取消")
+    if not task.cancelled:
+        task.cancelled = True
+        task.push_log("warning", "收到取消要求")
+        _log_activity(request, user, "cancel_task", f"取消任務 {task.id}（{task.type}）")
+    # 無論是否第一次都喚醒：讓排隊中的等待者立刻重新檢查 cancelled，不必等下一次輪詢
+    gateway_queue.wake()
+    return {"success": True, "status": task.status()}
+
+
+def _queue_key_info(key: str, names: dict):
+    """佇列 key → (gateway_id, 顯示名稱)。dry-run 的專屬 key 回 None（不是真的 Gateway 佇列）。"""
+    if key.startswith("dry:"):
+        return None
+    if key.startswith("gw:"):
+        try:
+            gid = int(key[3:])
+        except ValueError:
+            return None, key
+        return gid, names.get(gid) or f"Gateway {gid}"
+    if key.startswith("url:"):
+        return None, _display_url(key[4:])      # 手動憑證：以去除 userinfo 的網址當名稱
+    return None, key
+
+
+@app.get("/api/kw/queue")
+async def kw_queue(user: dict = Depends(get_current_user)):
+    """目前各 Gateway 的作業佇列（佇列頭 position=0＝執行中，其後為排隊中）。"""
+    try:
+        names = {g["id"]: g["name"] for g in pg_client.get_gateways()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查詢 Gateway 失敗: {e}")
+    result = []
+    for key, task_ids in gateway_queue.snapshot().items():
+        info = _queue_key_info(key, names)
+        if info is None:
+            continue
+        gid, name = info
+        tasks = []
+        for position, tid in enumerate(task_ids):
+            task = task_manager.get_task(tid)
+            entry = next((g for g in list(task.gateways) if g.get("key") == key), None) if task else None
+            tasks.append({
+                "task_id": tid,
+                "type": task.type if task else "",
+                "username": ((task.params or {}).get("username", "") if task else ""),
+                "position": position,
+                "total": entry.get("total", 0) if entry else 0,
+            })
+        result.append({"gateway_id": gid, "gateway_name": name, "tasks": tasks})
+    result.sort(key=lambda r: (r["gateway_id"] is None, r["gateway_id"] or 0, r["gateway_name"]))
+    return result
 
 
 # ── API: CSV 範本下載 ─────────────────────────────────
@@ -1076,14 +1224,20 @@ def _load_route_context() -> dict:
     }
 
 
-def _route_for(item: dict, ctx: dict) -> dict:
-    """依 derive 結果列（需含 channel_name / site / zone）判斷該送哪台 Gateway，
-    回傳可直接放進 API 回應的 dict；reason 中的 Gateway id 已換成名稱。"""
-    res = resolve_gateway(
+def _resolve_route(item: dict, ctx: dict):
+    """依列（需含 channel_name / site / zone）判斷該送哪台 Gateway，回傳 RouteResult。
+    derive 預覽（_route_for）與三個執行端點（_plan_gateway_parts）共用同一個判斷。"""
+    return resolve_gateway(
         item.get("channel_name"), item.get("site"), item.get("zone"),
         ctx["channel_index"], ctx["site_map"], ctx["zone_map"],
         ctx["only_gateway_id"],
     )
+
+
+def _route_for(item: dict, ctx: dict) -> dict:
+    """依 derive 結果列（需含 channel_name / site / zone）判斷該送哪台 Gateway，
+    回傳可直接放進 API 回應的 dict；reason 中的 Gateway id 已換成名稱。"""
+    res = _resolve_route(item, ctx)
     return {
         "gateway_id": res.gateway_id,
         "gateway_name": ctx["names"].get(res.gateway_id),
@@ -1149,131 +1303,618 @@ async def kw_delete_route(route_id: int, request: Request,
         raise HTTPException(status_code=500, detail=f"刪除 Gateway 對應失敗: {e}")
 
 
+# ── Gateway 作業提交（Step 3 建點 / Step 5 Scale / 批次刪除 三個端點共用）─────────
+#
+# 請求處理函式的同步部分（都在回應 task_id 之前完成）：
+#   1. 安全鎖：批次點數上限（_check_batch，超過回 422）
+#   2. 推導列（各端點自己的邏輯）
+#   3. _plan_gateway_parts：決定模式、路由、分組、解析憑證 → _GatewayPlan（失敗回 400/404，尚未 enqueue）
+#   4. _dispatch_gateway_job：建 Task → 同步 enqueue（佇列深度上限，滿了回 429）→ run_job → 組回應
+# 之後每台 Gateway 在自己的背景執行緒排隊，輪到時呼叫 worker(view, part)。
+#
+# 重要設計：排隊中的任務使用的是「送出當下」的推導快照（part.items），輪到時不會重新推導。
+# 這是刻意的——輪到時只重新檢查狀態欄位（避免重複送出），不重新計算 channel/device/tag_groups/data_type。
+# 所以排隊期間若修改了 Step 3 手動覆寫（kw-override），已在排隊的任務不會套用；
+# 請先取消該任務、再重新送出。
+
+# 路由失敗的狀態 → 給人看的說明（組 400 訊息用）
+_ROUTE_STATUS_LABELS = {
+    "conflict": "結構快取與對應表指向不同台",
+    "conflict_channel": "channel 同時存在於多台 Gateway",
+    "unrouted": "找不到 channel 也沒有對應表",
+}
+
+
+@dataclass
+class _GatewayPlan:
+    """一個請求要送往哪些 Gateway 的計畫（_plan_gateway_parts 的結果）。"""
+    mode: str                  # manual（手動憑證，不路由）／filter（指定 gateway_id）／auto（自動）
+    parts: list                # [PartSpec, ...]，每台 Gateway 一個
+    blocked: list              # [{"name", "reason"}, ...]：無法判斷所屬 Gateway、不送出的列（僅 auto）
+    excluded: Optional[dict]   # 僅 filter：{"other_gateway": n, "blocked": m}，不送出也不計入 total
+
+
+def _check_batch(operation: str, count: int) -> None:
+    """安全鎖：單次批次點數上限。超過回 422（訊息已含補救方式）。"""
+    try:
+        check_batch_size(operation, count)
+    except SafetyError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+def _part_credentials(gateway_id, kw_gw_url=None, kw_gw_username=None, kw_gw_password=None) -> dict:
+    """解析某台 Gateway 的連線憑證，放進 PartSpec.payload（不放進 task.params，
+    避免明文密碼留在 task 物件上）。密碼解密失敗等 HTTPException 原樣往上拋——
+    呼叫時機一定在任何 enqueue 之前。"""
+    url, user, password, verify = _resolve_gw_credentials(
+        gateway_id, kw_gw_url, kw_gw_username, kw_gw_password)
+    return {"url": url, "user": user, "password": password, "verify": verify}
+
+
+def _unroutable_digest(pairs: list) -> str:
+    """[(item, RouteResult), ...] → 「各狀態筆數」說明文字（組 400 訊息用）。"""
+    counts = Counter(res.status for _, res in pairs)
+    return "、".join(f"{_ROUTE_STATUS_LABELS.get(s, s)}（{s}）{n} 筆" for s, n in counts.items())
+
+
+def _plan_gateway_parts(items: list, gateway_id, kw_gw_url, kw_gw_username, kw_gw_password) -> _GatewayPlan:
+    """依請求欄位決定三種模式之一，產生 _GatewayPlan。items 每筆需含 tag_name / channel_name / site / zone。
+
+    - 手動憑證（舊相容）：沒有 gateway_id 但有 kw_gw_url → 單一 part，不路由；
+      佇列 key 用正規化後的網址（尾斜線、大小寫不同的同一台共用同一個佇列）。
+    - 指定 Gateway（篩選）：有 gateway_id → 只處理路由到這台且可放行的列；其他台的、
+      無法判斷的列排除在本任務之外（不送、不計入 total），數量回報在 excluded。
+    - 自動：兩者都沒有 → 逐列路由並依 Gateway 分組；無法判斷的列不送出（狀態維持原樣），
+      以 blocked 交給 run_job 計入摘要。
+    整批都沒有可送的列 → 400（附原因）。系統只有 1 台 Gateway 時路由結果為 single，行為同舊版。
+    路由資料（結構快取、對應表、Gateway 清單）每個請求只載入一次。
+    """
+    manual_url = (kw_gw_url or "").strip()
+
+    if not gateway_id and manual_url:
+        cred = _part_credentials(None, manual_url, kw_gw_username, kw_gw_password)
+        part = PartSpec(None, _display_url(manual_url), gateway_key(None, manual_url),
+                        list(items), cred)
+        return _GatewayPlan("manual", [part], [], None)
+
+    ctx = _load_route_context()
+    names = ctx["names"]
+    routes = [_resolve_route(it, ctx) for it in items]
+
+    if gateway_id:
+        if gateway_id not in names:
+            raise HTTPException(status_code=404, detail=f"Gateway ID={gateway_id} 不存在")
+        mine: list = []
+        other = 0
+        unroutable: list = []
+        for it, res in zip(items, routes):
+            if not is_routable(res):
+                unroutable.append((it, res))
+            elif res.gateway_id == gateway_id:
+                mine.append(it)
+            else:
+                other += 1
+        if not mine:
+            detail = f"沒有屬於 Gateway「{names[gateway_id]}」的待處理資料"
+            notes = []
+            if other:
+                notes.append(f"屬於其他 Gateway 的 {other} 筆")
+            if unroutable:
+                notes.append(f"無法判斷所屬 Gateway 的 {len(unroutable)} 筆")
+            if notes:
+                detail += "（已排除：" + "、".join(notes) + "）"
+            if unroutable:
+                samples = "；".join(
+                    f"{it.get('tag_name', '')}：{localize_reason(res.reason, names)}"
+                    for it, res in unroutable[:3])
+                detail += f"。無法判斷的前 3 筆：{samples}"
+            raise HTTPException(status_code=400, detail=detail)
+        part = PartSpec(gateway_id, names[gateway_id], gateway_key(gateway_id, None),
+                        mine, _part_credentials(gateway_id))
+        return _GatewayPlan("filter", [part], [],
+                            {"other_gateway": other, "blocked": len(unroutable)})
+
+    # 自動模式
+    if not names:
+        raise HTTPException(
+            status_code=400,
+            detail="尚未設定任何 Gateway，無法自動判斷；請先到設定新增 Gateway，或提供 kw_gw_url",
+        )
+    groups, blocked_pairs = group_by_gateway(items, routes)
+    if not groups:
+        samples = "；".join(
+            f"{it.get('tag_name', '')}：{localize_reason(res.reason, names)}"
+            for it, res in blocked_pairs[:3])
+        raise HTTPException(
+            status_code=400,
+            detail=(f"全部 {len(items)} 筆都無法判斷所屬 Gateway，未送出任何資料"
+                    f"（{_unroutable_digest(blocked_pairs)}）。前 3 筆原因：{samples}。"
+                    "請確認各 Gateway 已「同步結構」，或在 Gateway 對應表設定棟別/園區"),
+        )
+    parts = [PartSpec(gid, names.get(gid) or f"Gateway {gid}", gateway_key(gid, None),
+                      gitems, _part_credentials(gid))
+             for gid, gitems in groups.items()]
+    blocked = [{"name": it.get("tag_name", ""), "reason": localize_reason(res.reason, names)}
+               for it, res in blocked_pairs]
+    return _GatewayPlan("auto", parts, blocked, None)
+
+
+def _job_message(plan: _GatewayPlan, ahead: dict, dry_run: bool) -> str:
+    """回應給使用者的一句話：排隊與否、blocked / excluded 的筆數。"""
+    queued = [p for p in plan.parts if ahead.get(p.key, 0) > 0]
+    started = [p for p in plan.parts if ahead.get(p.key, 0) == 0]
+    if queued:
+        msg = "、".join(
+            f"Gateway「{p.name}」已有任務進行中，已進入佇列（前面 {ahead[p.key]} 個）" for p in queued
+        ) + "；輪到時會自動開始"
+        if started:
+            msg += "；" + "、".join(f"Gateway「{p.name}」" for p in started) + "立即開始"
+    elif plan.parts:
+        names = "、".join(f"「{p.name}」" for p in plan.parts)
+        msg = (f"{'預演' if dry_run else '任務'}已開始執行（Gateway{names}，共 "
+               f"{sum(len(p.items) for p in plan.parts)} 筆）")
+    else:
+        msg = "沒有可處理的資料，任務已結束"
+    if plan.blocked:
+        msg += f"；另有 {len(plan.blocked)} 筆無法判斷所屬 Gateway，未送出"
+    ex = plan.excluded
+    if ex and (ex["other_gateway"] or ex["blocked"]):
+        msg += f"；已排除屬於其他 Gateway 的 {ex['other_gateway']} 筆、無法判斷的 {ex['blocked']} 筆"
+    return msg
+
+
+def _dispatch_gateway_job(task_type: str, csv_filename: str, params: dict, plan: _GatewayPlan,
+                          worker, dry_run: bool = False, initial_logs: Optional[list] = None) -> dict:
+    """建 Task → 同步 enqueue → run_job → 組回應（三個端點共用）。順序不可變：
+
+    1. create_task（要先有 task.id 才能排隊）。
+    2. enqueue_many：必須在請求處理期間「同步」完成（回應 task_id 之前），排隊順序才等於請求到達順序，
+       且「深度檢查＋加入」是單一原子操作。佇列已滿 → 把剛建的 task 移除、回 429。
+    3. run_job：每台一條背景執行緒（立刻返回）。若 enqueue 成功後、run_job 啟動前出任何例外，
+       必須對每個 key release 並移除 task，否則佇列頭會永遠卡著、後面的任務全部排不到。
+    dry_run（批次刪除預演）不碰 Gateway，所以不該與任何人排隊：每個 part 改用專屬 key
+    （dry:<task_id>:<序號>），照樣走同一條流程（仍可看到路由結果）。
+    """
+    task = task_manager.create_task(task_type, params)
+    task.csv_filename = csv_filename
+    task.on_complete = _append_history
+    for level, message in (initial_logs or []):
+        task.push_log(level, message)
+
+    parts = plan.parts
+    if dry_run:
+        for i, p in enumerate(parts):
+            p.key = f"dry:{task.id}:{i}"
+    keys = [p.key for p in parts]
+
+    ahead: dict = {}
+    if keys:
+        try:
+            ahead = gateway_queue.enqueue_many(
+                keys, task.id, max_depth=get_limits().queue_max_per_gateway)
+        except QueueFullError as e:
+            task_manager.tasks.pop(task.id, None)    # 沒有要執行的 task 不能殘留
+            name = next((p.name for p in parts if p.key == e.key), e.key)
+            raise HTTPException(
+                status_code=429,
+                detail=(f"Gateway「{name}」的任務佇列已滿（排隊中＋執行中共 {e.depth} 個，"
+                        f"上限 {e.limit} 個）。請稍後再試，或取消排隊中的任務；"
+                        "若需提高上限，請由管理者調整環境變數 KIS_LIMIT_QUEUE_PER_GATEWAY。"),
+            )
+        except BaseException:
+            task_manager.tasks.pop(task.id, None)
+            raise
+
+    try:
+        run_job(task, parts, worker, gateway_queue, blocked=plan.blocked)
+    except BaseException:
+        for key in keys:
+            gateway_queue.release(key, task.id)
+        task_manager.tasks.pop(task.id, None)
+        raise
+
+    resp = {
+        "task_id": task.id,
+        "queued": any(n > 0 for n in ahead.values()),
+        "queue": [{"gateway_id": p.gateway_id, "gateway_name": p.name, "ahead": ahead.get(p.key, 0)}
+                  for p in parts],
+        "blocked": len(plan.blocked),
+        "message": _job_message(plan, ahead, dry_run),
+    }
+    if plan.excluded is not None:
+        resp["excluded"] = plan.excluded
+    return resp
+
+
+# ── 三個背景 worker（每台 Gateway 呼叫一次：worker(view, part)）────────────────
+#
+# 共同約定：
+# - part.items 是送出當下的推導快照，part.payload 是憑證（url/user/password/verify）；
+#   限速參數（delay / batch_size / batch_pause）與 username / ip 在 view.params。
+# - 不得呼叫 push_complete：總摘要與完成通知由 gateway_jobs.run_job 統一負責，
+#   worker 只 return 該台的摘要 {"total","success","fail","skip","errors",["cancelled_remaining"]}。
+# - Step 3 / Step 5 在輪到時先用 get_staging_statuses 重新檢查狀態，不是 pending 的列
+#   （被先前排在前面的任務處理過了）直接略過、不呼叫 Kepware。
+# - 取消：每筆之間輪詢 view.cancelled；所有等待都用可中斷的睡眠；已成功的列在 finally 寫回狀態。
+# - 登入失敗＝這台待處理的列全數記為 fail。
+
+def _kw_execute_worker(view, part) -> dict:
+    """Step 3 建點：預建 tag group → 逐筆建 tag → 成功的列 tb_status 改 done。"""
+    params = view.params
+    delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+    cred = part.payload
+    items = part.items
+    total = len(items)
+
+    # 輪到時重新檢查：排在前面的任務可能已經處理過同一批列（狀態已不是 pending）
+    statuses = pg_client.get_staging_statuses([it["id"] for it in items], "tb_status")
+    todo = []
+    for it in items:
+        if statuses.get(it["id"]) == "pending":
+            todo.append(it)
+        else:
+            view.add_result(it["tag_name"], "skip", "已被先前任務處理")
+    skipped = total - len(todo)
+    if skipped:
+        view.push_log("info", f"{skipped} 筆已被先前任務處理（tb_status 已不是 pending），略過")
+    if not todo:
+        view.push_progress(total, total, 0, 0, skipped)
+        return {"total": total, "success": 0, "fail": 0, "skip": skipped, "errors": []}
+    if view.cancelled:
+        return {"total": total, "success": 0, "fail": 0, "skip": skipped, "errors": [],
+                "cancelled_remaining": len(todo)}
+
+    try:
+        client = KepwareGatewayClient(cred["url"], verify=cred["verify"])
+        client.login(cred["user"], cred["password"])
+        view.push_log("info", "Kepware Gateway 登入成功")
+    except Exception as e:
+        view.push_log("error", f"Kepware 登入失敗: {e}")
+        view.push_progress(total, total, 0, len(todo), skipped)
+        return {"total": total, "success": 0, "fail": len(todo), "skip": skipped,
+                "errors": [{"name": "*", "reason": str(e)}]}
+
+    # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
+    # 注意：這段同樣受 Kepware 限速管制（/api/config/tag_groups 路徑），
+    # 必須與建 tag 迴圈一樣節流 + 429 退避，否則 group 一多就會開場連環 429
+    unique_groups = {}
+    for item in todo:
+        ch, dev, grp = item["channel_name"], item["device_name"], item["tag_groups"]
+        if grp:
+            unique_groups[(ch, dev, grp)] = True
+    for (ch, dev, grp) in unique_groups:
+        if view.cancelled:
+            break
+        try:
+            _kw_call_with_429_retry(
+                view, f"Tag group {ch}/{dev}/{grp}",
+                lambda ch=ch, dev=dev, grp=grp: client.ensure_tag_groups(ch, dev, grp))
+        except Exception as e:
+            view.push_log("warning", f"Tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
+        _pace(view, delay)
+
+    success_ids = []
+    failed = []
+    success_count = 0
+    cancelled_remaining = 0
+    try:
+        for idx, item in enumerate(todo, 1):
+            if view.cancelled:
+                cancelled_remaining = len(todo) - (idx - 1)
+                view.push_log("warning", f"已取消，尚有 {cancelled_remaining} 筆未處理")
+                break
+            tag = item["tag_name"]
+            try:
+                _kw_call_with_429_retry(
+                    view, f"Tag {tag}",
+                    lambda item=item: client.create_tag(
+                        channel_name=item["channel_name"],
+                        device_name=item["device_name"],
+                        tag_name=item["tag_name"],
+                        address=item.get("address") or None,
+                        description=item.get("description") or None,
+                        tag_group=item["tag_groups"] or None,
+                        data_type=item.get("data_type", 8),
+                    ))
+                success_ids.append(item["id"])
+                success_count += 1
+                view.add_result(tag, "success", "")
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 409:
+                    success_ids.append(item["id"])
+                    success_count += 1
+                    view.add_result(tag, "success", "已存在")
+                else:
+                    status = e.response.status_code if e.response is not None else "?"
+                    text = e.response.text[:200] if e.response is not None else str(e)
+                    failed.append({"name": tag, "reason": f"HTTP {status}: {text}"})
+                    view.add_result(tag, "fail", f"HTTP {status}")
+            except Exception as e:
+                failed.append({"name": tag, "reason": str(e)})
+                view.add_result(tag, "fail", str(e))
+
+            view.push_progress(skipped + idx, total, success_count, len(failed), skipped)
+            _pace(view, delay)
+            if success_count > 0 and success_count % batch_size == 0:
+                view.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
+                _sleep_interruptible(view, batch_pause)
+    finally:
+        # 取消或例外時，已成功建好的列仍要寫回 done，否則下次會被當成待建點重送
+        if success_ids:
+            pg_client.update_staging_status(success_ids, "tb_status", "done")
+
+    try:
+        pg_client.add_activity_log(
+            params["username"], "execute_tb",
+            f"Kepware 建點（{part.name}）成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆",
+            params["ip"])
+    except Exception as e:
+        log.warning(f"[activity_log] 寫入失敗: {e}")
+
+    return {"total": total, "success": len(success_ids), "fail": len(failed), "skip": skipped,
+            "errors": failed, "cancelled_remaining": cancelled_remaining}
+
+
+def _scale_worker(view, part) -> dict:
+    """Step 5 Scale：逐筆呼叫 Kepware 設定 Scale；成功→scale_status=done、未啟用→skip。"""
+    params = view.params
+    delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+    cred = part.payload
+    items = part.items
+    total = len(items)
+
+    # 輪到時重新檢查：scale_status 已不是 pending（done / skip）的列是被先前任務處理過的
+    statuses = pg_client.get_staging_statuses([it["id"] for it in items], "scale_status")
+    todo = []
+    for it in items:
+        if statuses.get(it["id"]) == "pending":
+            todo.append(it)
+        else:
+            view.add_result(it["tag_name"], "skip", "已被先前任務處理")
+    prior_skipped = total - len(todo)
+    if prior_skipped:
+        view.push_log("info", f"{prior_skipped} 筆已被先前任務處理（scale_status 已不是 pending），略過")
+    if not todo:
+        view.push_progress(total, total, 0, 0, prior_skipped)
+        return {"total": total, "success": 0, "fail": 0, "skip": prior_skipped, "errors": []}
+    if view.cancelled:
+        return {"total": total, "success": 0, "fail": 0, "skip": prior_skipped, "errors": [],
+                "cancelled_remaining": len(todo)}
+
+    try:
+        client = KepwareGatewayClient(cred["url"], verify=cred["verify"])
+        client.login(cred["user"], cred["password"])
+        view.push_log("info", "Kepware Gateway 登入成功")
+    except Exception as e:
+        view.push_log("error", f"Kepware 登入失敗: {e}")
+        view.push_progress(total, total, 0, len(todo), prior_skipped)
+        return {"total": total, "success": 0, "fail": len(todo), "skip": prior_skipped,
+                "errors": [{"tag_name": "*", "reason": str(e)}]}
+
+    success_ids = []
+    failed = []
+    skip_ids = []
+    success_count = 0
+    skipped_count = 0            # 「未啟用 Scale」的略過；與 prior_skipped（已被先前任務處理）分開計
+    cancelled_remaining = 0
+    try:
+        for idx, item in enumerate(todo, 1):
+            if view.cancelled:
+                cancelled_remaining = len(todo) - (idx - 1)
+                view.push_log("warning", f"已取消，尚有 {cancelled_remaining} 筆未處理")
+                break
+            tag_name = item["tag_name"]
+
+            # 資料不全（scale_enabled=true 但缺範圍值）：不呼叫 Kepware，直接標記失敗，
+            # 且不可進 success_ids，讓該筆 scale_status 維持 pending 供修正後重跑
+            scale_error = item.get("scale_error")
+            if scale_error:
+                view.push_log("error", f"{tag_name} 資料不全: {scale_error}")
+                failed.append({"tag_name": tag_name, "reason": scale_error})
+                view.add_result(tag_name, "fail", scale_error)
+                view.push_progress(prior_skipped + idx, total, success_count, len(failed),
+                                   prior_skipped + skipped_count)
+                continue
+
+            # scale_enabled=false 的點本來就不需要 Scale，不必呼叫 Kepware 浪費限速額度，
+            # 直接標記為 skip（暫存表 scale_status 支援此值）
+            if item.get("scaling_type") == 0 and not item.get("scale_error"):
+                skip_ids.append(item["id"])
+                skipped_count += 1
+                view.add_result(tag_name, "skip", "未啟用 Scale")
+                view.push_progress(prior_skipped + idx, total, success_count, len(failed),
+                                   prior_skipped + skipped_count)
+                continue
+
+            config = {
+                "channel_name": item["channel_name"],
+                "device_name": item["device_name"],
+                "tag_name": item["full_tag_name"],
+                "data_type": item["data_type"],
+                "scaling_type": item["scaling_type"],
+            }
+            # Linear 才帶 scaling 參數
+            if item["scaling_type"] == 1:
+                config.update({
+                    "scaling_raw_low": item["scaling_raw_low"],
+                    "scaling_raw_high": item["scaling_raw_high"],
+                    "scaling_scaled_low": item["scaling_scaled_low"],
+                    "scaling_scaled_high": item["scaling_scaled_high"],
+                    "scaling_clamp_low": item.get("scaling_clamp_low", True),
+                    "scaling_clamp_high": item.get("scaling_clamp_high", True),
+                    "scaling_scaled_data_type": item.get("scaling_scaled_data_type", 8),
+                })
+
+            try:
+                _kw_call_with_429_retry(
+                    view, f"Scale {tag_name}",
+                    lambda config=config: client.set_tag_scaling(config))
+                success_ids.append(item["id"])
+                success_count += 1
+                view.add_result(tag_name, "success", "")
+            except Exception as e:
+                view.push_log("error", f"{tag_name} 失敗: {e}")
+                failed.append({"tag_name": tag_name, "reason": str(e)})
+                view.add_result(tag_name, "fail", str(e))
+
+            view.push_progress(prior_skipped + idx, total, success_count, len(failed),
+                               prior_skipped + skipped_count)
+            _pace(view, delay)
+            if success_count > 0 and success_count % batch_size == 0:
+                view.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
+                _sleep_interruptible(view, batch_pause)
+    finally:
+        # 取消或例外時，已處理完的列仍要寫回狀態（done / skip）
+        if success_ids:
+            pg_client.update_staging_status(success_ids, "scale_status", "done")
+        if skip_ids:
+            pg_client.update_staging_status(skip_ids, "scale_status", "skip")
+
+    try:
+        pg_client.add_activity_log(
+            params["username"], "execute_scale",
+            f"Scale 設定（{part.name}）成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆",
+            params["ip"])
+    except Exception as e:
+        log.warning(f"[activity_log] 寫入失敗: {e}")
+
+    return {"total": total, "success": len(success_ids), "fail": len(failed),
+            "skip": prior_skipped + skipped_count, "errors": failed,
+            "cancelled_remaining": cancelled_remaining}
+
+
+def _kw_delete_worker(view, part) -> dict:
+    """批次刪除：逐筆刪 Tag（404 視為成功）。dry_run 只模擬、不連 Kepware。
+    刪除沒有暫存列，所以不做「輪到時重新檢查」（重複刪除本身是冪等的：404 算成功）。"""
+    params = view.params
+    dry_run = params.get("dry_run", True)
+    delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+    cred = part.payload
+    items = part.items
+    total = len(items)
+
+    if not dry_run:
+        try:
+            client = KepwareGatewayClient(cred["url"], verify=cred.get("verify", True))
+            client.login(cred["user"], cred["password"])
+            view.push_log("info", "Kepware Gateway 登入成功")
+        except Exception as e:
+            view.push_log("error", f"Kepware 登入失敗: {e}")
+            view.push_progress(total, total, 0, total, 0)
+            return {"total": total, "success": 0, "fail": total, "skip": 0,
+                    "errors": [{"name": "*", "reason": str(e)}]}
+
+    success = fail = 0
+    failed_items = []
+    cancelled_remaining = 0
+    for idx, item in enumerate(items, 1):
+        if view.cancelled:
+            cancelled_remaining = total - (idx - 1)
+            view.push_log("warning", f"已取消，尚有 {cancelled_remaining} 筆未處理")
+            break
+        tag = item["tag_name"]
+        ch = item["channel_name"]
+        dev = item["device_name"]
+        grp = item["tag_groups"] or None
+        if dry_run:
+            view.push_log("info", f"[預演] 模擬刪除 Tag: {ch}/{dev}/{grp or ''}/{tag}")
+            success += 1
+            view.add_result(tag, "success", "預演")
+        else:
+            try:
+                _kw_call_with_429_retry(
+                    view, f"刪除 {tag}",
+                    lambda ch=ch, dev=dev, tag=tag, grp=grp: client.delete_tag(ch, dev, tag, tag_group=grp))
+                view.push_log("success", f"[成功] 已刪除 Tag: {tag}")
+                success += 1
+                view.add_result(tag, "success", "")
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else "?"
+                if status == 404:
+                    view.push_log("warning", f"[略過] Tag 不存在: {tag}")
+                    success += 1
+                    view.add_result(tag, "success", "不存在")
+                else:
+                    view.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
+                    fail += 1
+                    failed_items.append({"name": tag, "reason": f"HTTP {status}"})
+                    view.add_result(tag, "fail", f"HTTP {status}")
+            except Exception as e:
+                view.push_log("error", f"[異常] {tag}: {e}")
+                fail += 1
+                failed_items.append({"name": tag, "reason": str(e)})
+                view.add_result(tag, "fail", str(e))
+
+        view.push_progress(idx, total, success, fail, 0)
+        _pace(view, delay)
+        if success > 0 and success % batch_size == 0:
+            _sleep_interruptible(view, batch_pause)
+
+    return {"total": total, "success": success, "fail": fail, "skip": 0,
+            "errors": failed_items, "cancelled_remaining": cancelled_remaining}
+
+
+def _derive_delete_items(csv_rows: list) -> list:
+    """CSV 的 name / type → 刪除用的列（type 以 - 拆出 channel / device / tag_groups）。
+    刪除沒有暫存列，也沒有棟別/園區，路由只靠 channel（site / zone 皆空）。"""
+    derived = []
+    for row in csv_rows:
+        tag_name = _smart_get(row, "name")
+        tb_type = _smart_get(row, "type")
+        if not tag_name or not tb_type:
+            continue
+        tp = tb_type.split("-")
+        derived.append({
+            "tag_name": tag_name,
+            "channel_name": tp[0] if len(tp) > 0 else "",
+            "device_name": tp[1] if len(tp) > 1 else "",
+            "tag_groups": ".".join(tp[2:]) if len(tp) > 2 else "",
+            "site": "",
+            "zone": "",
+        })
+    return derived
+
+
 @app.post("/api/kw/delete-batch")
 async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                           user: dict = Depends(require_role("admin", "operator"))):
-    """透過 Kepware API 批次刪除 Tag（從 CSV 推導路徑）"""
+    """透過 Kepware API 批次刪除 Tag（從 CSV 推導路徑；背景任務）。
+
+    Gateway 自動判斷（依 type 的 channel）；同一台忙碌時排隊而非拒絕；可用
+    POST /api/tasks/{task_id}/cancel 取消。dry_run=true 只模擬、不碰 Kepware，不排隊、
+    不受批次點數上限限制。回應與輪詢方式見 API_SCHEMA.md。"""
     rows = _csv_store_get(req.upload_id)
     if rows is None:
         raise HTTPException(status_code=404, detail="找不到上傳的 CSV 資料，請重新上傳")
 
-    gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
-        req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+    derived = _derive_delete_items(rows)
+    if not req.dry_run:
+        _check_batch("delete", len(derived))     # 預演不碰 Kepware，不受批次上限限制
 
-    task = task_manager.create_task("kw_delete", {
-        "rows": rows,
+    username = user.get("sub", "") if isinstance(user, dict) else str(user)
+    params = {
         "dry_run": req.dry_run,
-        "kw_gw_url": gw_url,
-        "kw_gw_username": gw_user,
-        "kw_gw_password": gw_pass,
-        "kw_gw_verify": gw_verify,
-        "delay": req.delay,
-        "batch_size": req.batch_size,
-        "batch_pause": req.batch_pause,
-    })
-    task.csv_filename = "(Kepware 批次刪除)"
-    task.on_complete = _append_history
+        "delay": req.delay, "batch_size": req.batch_size, "batch_pause": req.batch_pause,
+        "username": username,
+    }
+    initial_logs = []
+    try:
+        if derived:
+            plan = _plan_gateway_parts(derived, req.gateway_id, req.kw_gw_url,
+                                       req.kw_gw_username, req.kw_gw_password)
+        else:
+            # 沒有可處理的列：維持舊行為（任務立刻以 total=0 結束），不開任何 part
+            plan = _GatewayPlan("auto", [], [], None)
+            initial_logs.append(("warning", "無可處理的 Tag 資料"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[deleteBatch] 準備階段失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批次刪除準備失敗: {e}")
 
-    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
-    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
-    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
-    if busy_task_id:
-        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
-        raise HTTPException(
-            status_code=409,
-            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
-                   f"請輪詢該任務直到完成後再重試",
-        )
-    task.params["_gw_lock_key"] = gw_key
-
-    def _exec_kw_delete(task):
-        try:
-            import datetime as dt, time, random
-            from app.task_manager import _smart_get
-            task.started_at = dt.datetime.now().isoformat()
-            params = task.params
-            csv_rows = params["rows"]
-            dry_run = params.get("dry_run", True)
-
-            # 從 CSV 的 name/type 直接拆解 Kepware 路徑
-            derived = []
-            for row in csv_rows:
-                tag_name = _smart_get(row, "name")
-                tb_type = _smart_get(row, "type")
-                if not tag_name or not tb_type:
-                    continue
-                tp = tb_type.split("-")
-                derived.append({
-                    "tag_name": tag_name,
-                    "channel_name": tp[0] if len(tp) > 0 else "",
-                    "device_name": tp[1] if len(tp) > 1 else "",
-                    "tag_groups": ".".join(tp[2:]) if len(tp) > 2 else "",
-                })
-            if not derived:
-                task.push_log("warning", "無可處理的 Tag 資料")
-                task.push_complete({"total": 0, "success": 0, "fail": 0, "skip": 0})
-                return
-
-            if not dry_run:
-                try:
-                    client = KepwareGatewayClient(params["kw_gw_url"],
-                                                  verify=params.get("kw_gw_verify", True))
-                    client.login(params["kw_gw_username"], params["kw_gw_password"])
-                    task.push_log("info", "Kepware Gateway 登入成功")
-                except Exception as e:
-                    task.push_log("error", f"Kepware 登入失敗: {e}")
-                    task.push_complete({"total": len(derived), "success": 0, "fail": 0, "skip": 0})
-                    return
-
-            total = len(derived)
-            success = fail = 0
-            failed_items = []
-            for idx, item in enumerate(derived, 1):
-                tag = item["tag_name"]
-                ch = item["channel_name"]
-                dev = item["device_name"]
-                grp = item["tag_groups"] or None
-                if dry_run:
-                    task.push_log("info", f"[預演] 模擬刪除 Tag: {ch}/{dev}/{grp or ''}/{tag}")
-                    success += 1
-                    task.add_result(tag, "success", "預演")
-                else:
-                    try:
-                        _kw_call_with_429_retry(
-                            task, f"刪除 {tag}",
-                            lambda ch=ch, dev=dev, tag=tag, grp=grp: client.delete_tag(ch, dev, tag, tag_group=grp))
-                        task.push_log("success", f"[成功] 已刪除 Tag: {tag}")
-                        success += 1
-                        task.add_result(tag, "success", "")
-                    except requests.HTTPError as e:
-                        status = e.response.status_code if e.response is not None else "?"
-                        if status == 404:
-                            task.push_log("warning", f"[略過] Tag 不存在: {tag}")
-                            success += 1
-                            task.add_result(tag, "success", "不存在")
-                        else:
-                            task.push_log("error", f"[失敗] Tag: {tag} (HTTP {status})")
-                            fail += 1
-                            failed_items.append({"name": tag, "reason": f"HTTP {status}"})
-                            task.add_result(tag, "fail", f"HTTP {status}")
-                    except Exception as e:
-                        task.push_log("error", f"[異常] {tag}: {e}")
-                        fail += 1
-                        failed_items.append({"name": tag, "reason": str(e)})
-                        task.add_result(tag, "fail", str(e))
-
-                task.push_progress(idx, total, success, fail, 0)
-                time.sleep(params.get("delay", 0.2) + random.uniform(0.01, 0.05))
-                if success > 0 and success % params.get("batch_size", 50) == 0:
-                    time.sleep(params.get("batch_pause", 5))
-
-            task.push_complete({"total": total, "success": success, "fail": fail, "skip": 0,
-                                "errors": failed_items})
-        finally:
-            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
-
-    task_manager.run_in_background(task, _exec_kw_delete)
-    return {"task_id": task.id}
+    return _dispatch_gateway_job("kw_delete", "(Kepware 批次刪除)", params, plan,
+                                 _kw_delete_worker, dry_run=req.dry_run,
+                                 initial_logs=initial_logs)
 
 
 # ── API: 設定管理 ─────────────────────────────────────
@@ -1681,148 +2322,43 @@ async def kw_execute(req: ExecuteKwRequest, request: Request,
     （與 /api/kw/delete-batch 相同的背景任務模式）。批次建點動輒數分鐘，
     先前以 async def 內直接 time.sleep 執行會阻塞 event loop 導致全站卡死；
     現在推導/驗證仍同步完成（快、可立即回饋錯誤），實際呼叫 Kepware API 的
-    慢速迴圈交給背景執行緒，並透過 task.progress 讓前端可顯示進度。"""
+    慢速迴圈交給背景執行緒，並透過 task.progress 讓前端可顯示進度。
+
+    Gateway 判斷（三擇一，見 _plan_gateway_parts）：手動憑證（kw_gw_url）／指定 gateway_id
+    （只處理屬於它的列）／兩者皆無＝自動依 channel 路由。同一台忙碌時不再回 409，
+    而是排隊（回應 queued=true）；佇列深度或批次點數超過安全鎖上限回 429 / 422。
+    排隊中的任務使用「送出當下」的推導快照，排隊期間若修改了手動覆寫，請取消後重送。"""
     try:
         staging = pg_client.get_staging_list(page=0, page_size=None, tb_status="pending")
         rows = staging["data"]
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
+        _check_batch("kw_execute", len(rows))
         if not rows:
             raise HTTPException(status_code=400, detail="無待建點資料")
 
         derived = pg_client.derive_kw_fields(rows)
-        gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
-            req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+        if not derived:
+            raise HTTPException(status_code=400, detail="無待建點資料")
+        plan = _plan_gateway_parts(derived, req.gateway_id, req.kw_gw_url,
+                                   req.kw_gw_username, req.kw_gw_password)
     except HTTPException:
         raise
     except Exception as e:
         log.error(f"[executeKW] 準備階段失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Kepware 建點準備失敗: {e}")
 
-    log.info(f"[executeKW] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}, batch_pause={req.batch_pause}")
+    log.info(f"[executeKW] 共 {len(derived)} 筆（模式={plan.mode}，Gateway {len(plan.parts)} 台，"
+             f"無法判斷 {len(plan.blocked)} 筆），delay={req.delay}, batch_size={req.batch_size}, "
+             f"batch_pause={req.batch_pause}")
 
     ip = request.client.host if request.client else ""
     username = user.get("sub", "") if isinstance(user, dict) else str(user)
-
-    task = task_manager.create_task("kw_execute", {
-        "derived": derived,
-        "gw_url": gw_url, "gw_user": gw_user, "gw_pass": gw_pass, "gw_verify": gw_verify,
+    params = {
         "delay": req.delay, "batch_size": req.batch_size, "batch_pause": req.batch_pause,
         "username": username, "ip": ip,
-    })
-    task.csv_filename = "(Kepware 建點)"
-    task.on_complete = _append_history
-
-    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
-    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
-    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
-    if busy_task_id:
-        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
-        raise HTTPException(
-            status_code=409,
-            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
-                   f"請輪詢該任務直到完成後再重試",
-        )
-    task.params["_gw_lock_key"] = gw_key
-
-    def _exec_kw_execute(task):
-        try:
-            import datetime as dt, time, random
-            task.started_at = dt.datetime.now().isoformat()
-            params = task.params
-            derived = params["derived"]
-            delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
-            total = len(derived)
-
-            try:
-                client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
-                client.login(params["gw_user"], params["gw_pass"])
-                task.push_log("info", "Kepware Gateway 登入成功")
-            except Exception as e:
-                task.push_log("error", f"Kepware 登入失敗: {e}")
-                task.push_complete({
-                    "total": total, "success": 0, "fail": total, "skip": 0,
-                    "errors": [{"name": "*", "reason": str(e)}],
-                    "message": f"Kepware 登入失敗: {e}",
-                })
-                return
-
-            # 預先建立所有需要的 tag group（收集 unique paths 後逐層建立）
-            # 注意：這段同樣受 Kepware 限速管制（/api/config/tag_groups 路徑），
-            # 必須與建 tag 迴圈一樣節流 + 429 退避，否則 group 一多就會開場連環 429
-            unique_groups = {}
-            for item in derived:
-                ch, dev, grp = item["channel_name"], item["device_name"], item["tag_groups"]
-                if grp:
-                    unique_groups[(ch, dev, grp)] = True
-            for (ch, dev, grp) in unique_groups:
-                try:
-                    _kw_call_with_429_retry(
-                        task, f"Tag group {ch}/{dev}/{grp}",
-                        lambda ch=ch, dev=dev, grp=grp: client.ensure_tag_groups(ch, dev, grp))
-                except Exception as e:
-                    task.push_log("warning", f"Tag group 建立失敗 {ch}/{dev}/{grp}: {e}")
-                time.sleep(delay + random.uniform(0.01, 0.05))
-
-            success_ids = []
-            failed = []
-            success_count = 0
-            for idx, item in enumerate(derived, 1):
-                tag = item["tag_name"]
-                try:
-                    _kw_call_with_429_retry(
-                        task, f"Tag {tag}",
-                        lambda item=item: client.create_tag(
-                            channel_name=item["channel_name"],
-                            device_name=item["device_name"],
-                            tag_name=item["tag_name"],
-                            address=item.get("address") or None,
-                            description=item.get("description") or None,
-                            tag_group=item["tag_groups"] or None,
-                            data_type=item.get("data_type", 8),
-                        ))
-                    success_ids.append(item["id"])
-                    success_count += 1
-                    task.add_result(tag, "success", "")
-                except requests.HTTPError as e:
-                    if e.response is not None and e.response.status_code == 409:
-                        success_ids.append(item["id"])
-                        success_count += 1
-                        task.add_result(tag, "success", "已存在")
-                    else:
-                        status = e.response.status_code if e.response is not None else "?"
-                        text = e.response.text[:200] if e.response is not None else str(e)
-                        failed.append({"name": tag, "reason": f"HTTP {status}: {text}"})
-                        task.add_result(tag, "fail", f"HTTP {status}")
-                except Exception as e:
-                    failed.append({"name": tag, "reason": str(e)})
-                    task.add_result(tag, "fail", str(e))
-
-                task.push_progress(idx, total, success_count, len(failed), 0)
-                time.sleep(delay + random.uniform(0.01, 0.05))
-                if success_count > 0 and success_count % batch_size == 0:
-                    task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
-                    time.sleep(batch_pause)
-
-            if success_ids:
-                pg_client.update_staging_status(success_ids, "tb_status", "done")
-
-            try:
-                pg_client.add_activity_log(
-                    params["username"], "execute_tb",
-                    f"Kepware 建點成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
-            except Exception as e:
-                log.warning(f"[activity_log] 寫入失敗: {e}")
-
-            task.push_complete({
-                "total": total, "success": len(success_ids), "fail": len(failed), "skip": 0,
-                "errors": failed, "message": f"成功建立 {len(success_ids)} 筆 Tag",
-            })
-        finally:
-            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
-
-    task_manager.run_in_background(task, _exec_kw_execute)
-    return {"task_id": task.id}
+    }
+    return _dispatch_gateway_job("kw_execute", "(Kepware 建點)", params, plan, _kw_execute_worker)
 
 
 @app.post("/api/pg/execute/pg")
@@ -1971,12 +2507,14 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
 
     回傳 task_id，前端輪詢 GET /api/tasks/{task_id} 取得進度與最終結果
     （與 /api/kw/execute、/api/kw/delete-batch 相同的背景任務模式，
-    理由同上：批次呼叫 Kepware API 耗時，不能在 event loop 內直接 sleep）。"""
+    理由同上：批次呼叫 Kepware API 耗時，不能在 event loop 內直接 sleep）。
+    Gateway 判斷、排隊、安全鎖、取消與快照語意同 /api/kw/execute。"""
     try:
         staging = pg_client.get_staging_list(page=0, page_size=None, scale_status="pending")
         rows = staging["data"]
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
+        _check_batch("scale", len(rows))
         if not rows:
             raise HTTPException(status_code=400, detail="無待設定 Scale 的資料")
 
@@ -1985,148 +2523,24 @@ async def pg_execute_scale(req: ExecuteScaleRequest, request: Request,
             raise HTTPException(status_code=400,
                                 detail="無啟用 Scale 的資料（scale_enabled=false 或缺少範圍值）")
 
-        gw_url, gw_user, gw_pass, gw_verify = _resolve_gw_credentials(
-            req.gateway_id, req.kw_gw_url, req.kw_gw_username, req.kw_gw_password)
+        plan = _plan_gateway_parts(derived, req.gateway_id, req.kw_gw_url,
+                                   req.kw_gw_username, req.kw_gw_password)
     except HTTPException:
         raise
     except Exception as e:
         log.error(f"[executeScale] 準備階段失敗: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Scale 設定準備失敗: {e}")
 
-    log.info(f"[executeScale] 共 {len(derived)} 筆，delay={req.delay}, batch_size={req.batch_size}")
+    log.info(f"[executeScale] 共 {len(derived)} 筆（模式={plan.mode}，Gateway {len(plan.parts)} 台，"
+             f"無法判斷 {len(plan.blocked)} 筆），delay={req.delay}, batch_size={req.batch_size}")
 
     ip = request.client.host if request.client else ""
     username = user.get("sub", "") if isinstance(user, dict) else str(user)
-
-    task = task_manager.create_task("pg_execute_scale", {
-        "derived": derived,
-        "gw_url": gw_url, "gw_user": gw_user, "gw_pass": gw_pass, "gw_verify": gw_verify,
+    params = {
         "delay": req.delay, "batch_size": req.batch_size, "batch_pause": req.batch_pause,
         "username": username, "ip": ip,
-    })
-    task.csv_filename = "(Kepware Scale 設定)"
-    task.on_complete = _append_history
-
-    # Gateway 併發鎖：同一 Gateway 同時只能跑一個任務（避免限速額度疊加）
-    gw_key = _gateway_lock_key(req.gateway_id, gw_url)
-    busy_task_id = _acquire_gateway_lock(gw_key, task.id)
-    if busy_task_id:
-        task_manager.tasks.pop(task.id, None)   # 移除剛建立、不會執行的 task
-        raise HTTPException(
-            status_code=409,
-            detail=f"此 Gateway 目前有任務執行中（task_id={busy_task_id}），"
-                   f"請輪詢該任務直到完成後再重試",
-        )
-    task.params["_gw_lock_key"] = gw_key
-
-    def _exec_pg_execute_scale(task):
-        try:
-            import datetime as dt, time, random
-            task.started_at = dt.datetime.now().isoformat()
-            params = task.params
-            derived = params["derived"]
-            delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
-            total = len(derived)
-
-            try:
-                client = KepwareGatewayClient(params["gw_url"], verify=params["gw_verify"])
-                client.login(params["gw_user"], params["gw_pass"])
-                task.push_log("info", "Kepware Gateway 登入成功")
-            except Exception as e:
-                task.push_log("error", f"Kepware 登入失敗: {e}")
-                task.push_complete({
-                    "total": total, "success": 0, "fail": total, "skip": 0,
-                    "errors": [{"tag_name": "*", "reason": str(e)}],
-                    "message": f"Kepware 登入失敗: {e}",
-                })
-                return
-
-            success_ids = []
-            failed = []
-            skip_ids = []
-            success_count = 0
-            skipped_count = 0
-            for idx, item in enumerate(derived, 1):
-                tag_name = item["tag_name"]
-
-                # 資料不全（scale_enabled=true 但缺範圍值）：不呼叫 Kepware，直接標記失敗，
-                # 且不可進 success_ids，讓該筆 scale_status 維持 pending 供修正後重跑
-                scale_error = item.get("scale_error")
-                if scale_error:
-                    task.push_log("error", f"{tag_name} 資料不全: {scale_error}")
-                    failed.append({"tag_name": tag_name, "reason": scale_error})
-                    task.add_result(tag_name, "fail", scale_error)
-                    task.push_progress(idx, total, success_count, len(failed), skipped_count)
-                    continue
-
-                # scale_enabled=false 的點本來就不需要 Scale，不必呼叫 Kepware 浪費限速額度，
-                # 直接標記為 skip（暫存表 scale_status 支援此值）
-                if item.get("scaling_type") == 0 and not item.get("scale_error"):
-                    skip_ids.append(item["id"])
-                    skipped_count += 1
-                    task.add_result(tag_name, "skip", "未啟用 Scale")
-                    task.push_progress(idx, total, success_count, len(failed), skipped_count)
-                    continue
-
-                config = {
-                    "channel_name": item["channel_name"],
-                    "device_name": item["device_name"],
-                    "tag_name": item["full_tag_name"],
-                    "data_type": item["data_type"],
-                    "scaling_type": item["scaling_type"],
-                }
-                # Linear 才帶 scaling 參數
-                if item["scaling_type"] == 1:
-                    config.update({
-                        "scaling_raw_low": item["scaling_raw_low"],
-                        "scaling_raw_high": item["scaling_raw_high"],
-                        "scaling_scaled_low": item["scaling_scaled_low"],
-                        "scaling_scaled_high": item["scaling_scaled_high"],
-                        "scaling_clamp_low": item.get("scaling_clamp_low", True),
-                        "scaling_clamp_high": item.get("scaling_clamp_high", True),
-                        "scaling_scaled_data_type": item.get("scaling_scaled_data_type", 8),
-                    })
-
-                try:
-                    _kw_call_with_429_retry(
-                        task, f"Scale {tag_name}",
-                        lambda config=config: client.set_tag_scaling(config))
-                    success_ids.append(item["id"])
-                    success_count += 1
-                    task.add_result(tag_name, "success", "")
-                except Exception as e:
-                    task.push_log("error", f"{tag_name} 失敗: {e}")
-                    failed.append({"tag_name": tag_name, "reason": str(e)})
-                    task.add_result(tag_name, "fail", str(e))
-
-                task.push_progress(idx, total, success_count, len(failed), skipped_count)
-                time.sleep(delay + random.uniform(0.01, 0.05))
-                if success_count > 0 and success_count % batch_size == 0:
-                    task.push_log("info", f"已處理 {success_count} 筆，冷卻暫停 {batch_pause} 秒")
-                    time.sleep(batch_pause)
-
-            if success_ids:
-                pg_client.update_staging_status(success_ids, "scale_status", "done")
-            if skip_ids:
-                pg_client.update_staging_status(skip_ids, "scale_status", "skip")
-
-            try:
-                pg_client.add_activity_log(
-                    params["username"], "execute_scale",
-                    f"Scale 設定成功 {len(success_ids)} 筆，失敗 {len(failed)} 筆", params["ip"])
-            except Exception as e:
-                log.warning(f"[activity_log] 寫入失敗: {e}")
-
-            task.push_complete({
-                "total": total, "success": len(success_ids), "fail": len(failed),
-                "skip": skipped_count,
-                "errors": failed, "message": f"成功設定 {len(success_ids)} 筆 Scale",
-            })
-        finally:
-            _release_gateway_lock(task.params.get("_gw_lock_key", ""), task.id)
-
-    task_manager.run_in_background(task, _exec_pg_execute_scale)
-    return {"task_id": task.id}
+    }
+    return _dispatch_gateway_job("pg_execute_scale", "(Kepware Scale 設定)", params, plan, _scale_worker)
 
 
 # ── API: Collector DB + Reload ────────────────────────

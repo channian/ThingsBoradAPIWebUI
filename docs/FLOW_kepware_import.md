@@ -170,10 +170,11 @@ group_auto_create = dev_exists and not grp_exists and bool(grp)
 
 ### 3-2. 執行建點 `POST /api/kw/execute`（`main.py:1505`）· **背景任務**
 
-**同步階段**（可立即回饋錯誤）：撈 `tb_status=pending` 全部（`page_size=None`，**無 9999 截斷**）→ 依 `ids` 篩選 → `derive_kw_fields` → 解析 Gateway 憑證。無資料 → **400**。
+**同步階段**（可立即回饋錯誤）：撈 `tb_status=pending` 全部（`page_size=None`，**無 9999 截斷**）→ 依 `ids` 篩選 → 安全鎖批次上限（超過 **422**）→ `derive_kw_fields` → 依 `gateway_id`／`kw_gw_url` 決定 Gateway（自動／指定／手動，自動模式逐列依 channel 路由，無法判斷的列**不送出**）→ 解析各台憑證 → 建立 Task → 同步加入各台 Gateway 的佇列（佇列已滿 **429**）→ 啟動背景執行。無資料 → **400**。同一台忙碌時**排隊而不是 409**。
 
-**背景階段**：
-1. 登入 Gateway（失敗 → 整批標記失敗並結束）
+**背景階段**（每台 Gateway 各一條執行緒，輪到自己那台時才開始；排隊的任務用**送出當下的推導快照**，不重新推導）：
+0. **輪到時重新檢查** `tb_status`：已不是 `pending` 的列（被排在前面的任務處理過）略過、不呼叫 Kepware（計入 skip）
+1. 登入 Gateway（失敗 → 這台待處理的列全數標記失敗並結束）
 2. **預建所有不重複 tag group**：收集 unique `(channel, device, group)` → `ensure_tag_groups`（`kw_gw_client.py:165`）路徑 `2F.CHS` 拆 `.` 逐層建（`parent_group` 為前綴），**409 視為已存在**。此迴圈**亦套用 delay 節流 + 429 退避**
 3. 逐筆 `create_tag`（`kw_gw_client.py:188`）→ `POST /api/config/tags`
 
@@ -184,8 +185,10 @@ group_auto_create = dev_exists and not grp_exists and bool(grp)
 | HTTP 429 | 依回應 `Retry-After` 退避重試，最多 3 次 |
 | 其他 | 計入 fail，`errors` 記 `{name, reason}` |
 
-4. `success_ids` → `tb_status=done`（失敗者維持 `pending`，可重跑）
-5. 寫 `activity_log`（action `execute_tb`）+ 操作歷史
+4. `success_ids` → `tb_status=done`（失敗者維持 `pending`，可重跑；**取消或例外時也在 `finally` 寫回**，已成功的列不會丟失）
+5. 寫 `activity_log`（action `execute_tb`，每台 Gateway 一筆）+ 操作歷史
+
+可隨時 `POST /api/tasks/{task_id}/cancel`：排隊中立刻離開佇列，執行中做完目前這一筆就停（所有等待可被打斷）。
 
 **送往 Kepware 的 payload**：
 ```json
@@ -302,7 +305,7 @@ Kepware API Gateway 端限速為**滑動視窗 60 次/分鐘**（per `IP + 帳�
 | 429 退避 | 最多 3 次 | 優先讀回應 `Retry-After` → 其次 body `retry_after` → 最後 `batch_pause`，上限 120 秒 |
 
 每筆之後 `sleep(delay + rand(0.01, 0.05))`；每 `batch_size` 筆額外 `sleep(batch_pause)`。
-**沒有跨任務的全域鎖**——同一 Gateway 可被多個背景任務同時操作。
+**同一 Gateway 同一時間只跑一個任務**（`app/gateway_queue.py` 的每台 FIFO 佇列；舊版為「沒有跨任務鎖」，後來曾改為 409 拒絕，現為排隊）；不同 Gateway 互相並行。等待（逐筆 delay、批次暫停、429 退避）皆可被取消打斷。
 
 ---
 
@@ -329,7 +332,7 @@ Kepware API Gateway 端限速為**滑動視窗 60 次/分鐘**（per `IP + 帳�
 | # | 問題 | 修法 |
 |---|------|------|
 | **8** | 三個狀態欄無前後 gating，未建點就跑 Step 5 必然失敗卻無從得知 | `/api/pg/derive/scale` 回傳 `not_built_count`（`tb_status != done` 的筆數），前端 Step 5 顯示橘色提示橫幅。**刻意只提示不阻擋**——「Kepware 上已手動建好點位、只想補設定」是合法用法 |
-| **10** | 無跨任務鎖，同一 Gateway 併發任務疊加消耗限速額度 | 以 `gateway_id`（無則 URL）為 key 的記憶體鎖，三個寫入端點搶不到即回 **409** 並附上佔用中的 `task_id` 供輪詢。採拒絕而非排隊（瓶頸在限速，排隊不會更快）。三個背景函式整個主體包 `try/finally` 釋放，確保崩潰不會讓 Gateway 永久卡死；只有持有者能釋放 |
+| **10** | 無跨任務鎖，同一 Gateway 併發任務疊加消耗限速額度 | 以 `gateway_id`（無則 URL）為 key 的記憶體鎖，三個寫入端點搶不到即回 **409** 並附上佔用中的 `task_id` 供輪詢。三個背景函式整個主體包 `try/finally` 釋放，確保崩潰不會讓 Gateway 永久卡死；只有持有者能釋放。<br>**（2026-11 已被取代）** 改為每台 Gateway 一條 FIFO 佇列（`gateway_queue.py`）：同一台忙碌時**排隊**（回應 `queued: true`）而非 409，可取消，並加上批次點數／佇列深度安全鎖（422／429）；詳見 `API_SCHEMA.md` 與 `CLAUDE.md` |
 
 ### ✅ 已修正（第三批，commit `5392d00`，2026-07-26）
 

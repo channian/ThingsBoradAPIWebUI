@@ -356,3 +356,10 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 - **路由鍵**：以 channel（結構快取）為主。園區（`location_config.zone` ↔ `kepware_gateway.zone`）可作為交叉檢查警示，不作為路由依據（因部分園區跨網段時 zone 無法唯一決定 Gateway）。
 - **G7 釐清**：指 `POST /api/pg/staging/kw-override` 為整筆覆寫（channel/device/tag_groups/data_type 四欄一起寫入）。網頁每次送完整四欄故不受影響；僅直接呼叫 API 只送部分欄位者會洗掉其他覆寫。與 Step 5 的 `scaling_scaled_data_type`（固定 8）無關。
 
+
+### 批次 2b 實作紀錄（2026-11-02）：路由 × 排隊 × 取消 × 安全鎖已接進三個背景任務端點
+
+- `POST /api/kw/execute`、`/api/pg/execute/scale`、`/api/kw/delete-batch` 改走同一套流程（`main.py` 的 `_plan_gateway_parts` → `_dispatch_gateway_job`，底層 `gateway_queue.py` / `gateway_jobs.py` / `safety.py`）：省略 `gateway_id`＝自動依 channel 路由；指定＝只處理屬於該台的列；`kw_gw_url`＝手動憑證不路由。無法判斷的列不送出（`blocked`）。
+- **取代 409**：同一台忙碌改為 FIFO 排隊（`queued: true`），不同台並行；單一 `task_id`；新增 `POST /api/tasks/{id}/cancel`、`GET /api/kw/queue`；批次超限 422、佇列已滿 429。
+- 順帶解決 **G8**（手動 URL 鎖 key 未正規化：現以正規化網址排隊）與 **G9**（done 與釋放鎖的空窗：現為先釋放佇列、最後一個 part 才 `push_complete`）。
+- 已知限制：佇列在記憶體（重啟遺失）；排隊中的任務用送出當下的推導快照（排隊期間改覆寫請取消重送）。前端尚未接（下一批）。

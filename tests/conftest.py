@@ -245,14 +245,80 @@ def admin_headers():
     return {"Authorization": f"Bearer {token}"}
 
 
+def _drain_gateway_queue(main_module, timeout: float = 15.0):
+    """測試結束時確認 Gateway 作業佇列已清空。
+
+    背景任務是 daemon 執行緒，可能還在排隊或執行；佇列 key 是 gw:<id>，而每個測試的資料庫都是
+    重建的（SERIAL 從 1 開始），殘留的作業會擋住下一個測試的同名 key。所以這裡等它清空；
+    逾時就強制清掉（保護後續測試）並讓本測試以 teardown 錯誤失敗，不默默放過。"""
+    import time
+    queue = main_module.gateway_queue
+    deadline = time.monotonic() + timeout
+    while queue.snapshot() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    leftover = queue.snapshot()
+    if leftover:
+        with queue._cond:
+            queue._queues.clear()
+            queue._cond.notify_all()
+        pytest.fail(f"測試結束時 Gateway 佇列仍有殘留作業：{leftover}")
+
+
 @pytest.fixture
-def api_client(clean_db):
+def api_client(clean_db, monkeypatch, tmp_path):
     """FastAPI TestClient。以 `with` 進入時會觸發 app 的 on_startup（呼叫
     pg_client.ensure_schema()、建立初始 admin 帳號、啟動每週背景清理排程執行緒），
     離開時觸發 on_shutdown（設定 _cleanup_stop，讓背景排程執行緒盡快結束）。
     也就是說：測試主體開始執行時，schema 已經 migrate 完成，可以直接對
-    app.main.pg_client 寫測試資料。"""
+    app.main.pg_client 寫測試資料。
+
+    另外：任務歷史紀錄檔改寫到測試專用的暫存目錄（不污染 data/history.json）；
+    離開前確認 Gateway 作業佇列已清空（見 _drain_gateway_queue）。"""
     from fastapi.testclient import TestClient
     import app.main as main_module
+    monkeypatch.setattr(main_module, "HISTORY_FILE", str(tmp_path / "history.json"))
     with TestClient(main_module.app) as client:
         yield client
+        _drain_gateway_queue(main_module)
+
+
+# ── Gateway 佇列相關測試共用 fixture ───────────────────────────────
+
+@pytest.fixture
+def make_state(api_client):
+    """FakeKepwareState 工廠。測試結束（含失敗）時一律放行該狀態上所有被 add_gate 卡住的呼叫，
+    避免背景執行緒卡在 gate 上拖到逾時。依賴 api_client 是刻意的：fixture 依賴順序保證
+    本 fixture 會「先」於 api_client 收尾（放行 gate → 背景任務結束 → api_client 才檢查佇列已清空）。"""
+    from tests.fake_kepware import FakeKepwareState
+    states = []
+
+    def _make():
+        state = FakeKepwareState()
+        states.append(state)
+        return state
+
+    yield _make
+    for state in states:
+        state.open_all_gates()
+
+
+@pytest.fixture
+def safety_env():
+    """設定 KIS_LIMIT_* 環境變數並 reload_limits()；測試結束一律還原環境變數並重新載入，
+    不讓過小的上限汙染其他測試。用法：safety_env(KIS_LIMIT_QUEUE_PER_GATEWAY=2)。"""
+    from app.safety import reload_limits
+    saved = {}
+
+    def _set(**env):
+        for key, value in env.items():
+            saved.setdefault(key, os.environ.get(key))
+            os.environ[key] = str(value)
+        return reload_limits()
+
+    yield _set
+    for key, old in saved.items():
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
+    reload_limits()

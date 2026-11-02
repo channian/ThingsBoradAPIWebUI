@@ -90,8 +90,10 @@ def test_kw_call_with_429_retry_retries_then_succeeds(monkeypatch):
     assert result == "ok"
     assert calls["n"] == 3
     assert len(task.logs) == 2, "應該記錄兩次 429 重試的警告 log"
-    # Retry-After=1 秒，重試 2 次，確認等待秒數確實是依 Retry-After 算出的 1.0 秒，而非其他常數
-    assert sleep_calls == [1.0, 1.0], f"重試等待秒數應依 Retry-After 計算，實際呼叫: {sleep_calls}"
+    # Retry-After=1 秒，重試 2 次，確認等待秒數確實是依 Retry-After 算出的 1.0 秒，而非其他常數。
+    # 等待改為「可中斷睡眠」（切成 ≤0.5 秒的片段、每片之前檢查取消），所以看總長度與片段上限。
+    assert sum(sleep_calls) == pytest.approx(2.0), f"重試等待秒數應依 Retry-After 計算，實際呼叫: {sleep_calls}"
+    assert max(sleep_calls) <= 0.5, f"等待必須切成 ≤0.5 秒的片段，實際呼叫: {sleep_calls}"
 
 
 def test_kw_call_with_429_retry_reraises_non_429(monkeypatch):
@@ -114,3 +116,74 @@ def test_request_models_default_delay_within_rate_limit():
     assert m.ExecuteKwRequest().delay == 1.1
     assert m.ExecuteScaleRequest().delay == 1.1
     assert m.KwBatchDeleteRequest(upload_id="x").delay == 1.1
+
+
+# ── 可中斷睡眠 / 取消（批次 2b）──────────────────────────────────
+
+class _CancellableTask(_FakeTask):
+    """帶 cancelled 旗標的假 view（PartView 的最小介面）"""
+
+    def __init__(self, cancelled=False):
+        super().__init__()
+        self.cancelled = cancelled
+
+
+def test_sleep_interruptible_sleeps_whole_duration_in_slices(monkeypatch):
+    """沒被取消：睡滿指定秒數，且每片 ≤0.5 秒（取消最慢在一個切片內被察覺）"""
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", lambda secs: sleeps.append(secs))
+    assert m._sleep_interruptible(_CancellableTask(), 2.3) is True
+    assert sum(sleeps) == pytest.approx(2.3)
+    assert max(sleeps) <= 0.5 and len(sleeps) == 5
+
+
+def test_sleep_interruptible_stops_as_soon_as_cancelled(monkeypatch):
+    """睡到一半被取消：立刻停（回 False），不把剩下的秒數睡完"""
+    view = _CancellableTask()
+    sleeps = []
+
+    def fake_sleep(secs):
+        sleeps.append(secs)
+        if len(sleeps) == 2:
+            view.cancelled = True
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    assert m._sleep_interruptible(view, 60) is False
+    assert len(sleeps) == 2, f"取消後不該再睡，實際睡了 {len(sleeps)} 片"
+
+
+def test_sleep_interruptible_already_cancelled_does_not_sleep(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", lambda secs: sleeps.append(secs))
+    assert m._sleep_interruptible(_CancellableTask(cancelled=True), 5) is False
+    assert sleeps == []
+
+
+def test_sleep_interruptible_treats_missing_cancelled_attribute_as_not_cancelled(monkeypatch):
+    """舊式 task（沒有 cancelled 屬性）視為永不取消，照常睡滿"""
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", lambda secs: sleeps.append(secs))
+    assert m._sleep_interruptible(_FakeTask(), 1.0) is True
+    assert sum(sleeps) == pytest.approx(1.0)
+
+
+def test_kw_call_with_429_retry_stops_retrying_when_cancelled_during_backoff(monkeypatch):
+    """429 退避等待中收到取消：不再重試，直接以最後一次的 429 錯誤結束（該筆之後會被記為失敗）"""
+    task = _CancellableTask()
+
+    def fake_sleep(secs):
+        task.cancelled = True            # 退避等待的第一片就被取消
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    calls = {"n": 0}
+
+    def always_429():
+        calls["n"] += 1
+        err = requests.HTTPError("429")
+        err.response = _FakeResp(headers={"Retry-After": "30"}, json_body={})
+        raise err
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        m._kw_call_with_429_retry(task, "Tag X", always_429, max_retries=3)
+    assert exc_info.value.response.status_code == 429
+    assert calls["n"] == 1, "取消後不該再重試"

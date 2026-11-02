@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Step 5（POST /api/pg/execute/scale）背景任務的**行為測試**：用假的
-KepwareGatewayClient 取代真實 client，驅動 `app.main` 內 `_exec_pg_execute_scale`
+KepwareGatewayClient 取代真實 client，驅動 `app.main` 內 `_scale_worker`
 這條真正會被執行到的程式碼路徑（而不是只靜態比對原始碼字串）。
 
-補的缺口：把 `_exec_pg_execute_scale` 內
+補的缺口：把 `_scale_worker` 內
     if item.get("scaling_type") == 0 and not item.get("scale_error"):
 改成 `if False:`（Step 5 不再跳過未啟用 Scale 的點）後，原本
 `tests/test_data_type.py::test_step5_skips_tags_with_scale_disabled` 這個純
@@ -12,9 +12,9 @@ AST／字串靜態檢查完全抓不到（`skip_ids`、`continue`、`skip_status
 真的跑一次背景任務 → 檢查 Kepware 端實際收到哪些呼叫、DB 實際被改成什麼狀態」
 才能抓到這種邏輯性退化。
 """
-import pytest
 
 import app.main as m
+from app.gateway_queue import gateway_key
 from tests.fake_kepware import (
     wait_lock_released,
     FakeKepwareState,
@@ -23,14 +23,6 @@ from tests.fake_kepware import (
     make_fake_kepware_client,
     poll_task,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_gateway_locks():
-    """避免這個檔案裡的測試互相汙染鎖表，也避免汙染其他測試檔。"""
-    m._gateway_locks.clear()
-    yield
-    m._gateway_locks.clear()
 
 
 # 四筆測試資料共用的推導基礎：device_profile 直接指定 tb_type，
@@ -92,7 +84,7 @@ def test_step5_execute_scale_end_to_end(api_client, admin_headers, monkeypatch):
        A 的 payload 使用推導值，且帶正確的 scaling_raw_*/scaling_scaled_*。
     3. DB 的 scale_status：A、D → done；B → skip；C → 維持 pending。
     4. summary：success=2、skip=1、fail=1，且 C 的失敗原因提到 scaled_low。
-    5. 任務結束後該 Gateway 的鎖已釋放，且立刻再打一次 execute/scale 不會回 409。
+    5. 任務結束後該 Gateway 的佇列已釋放，且立刻再打一次 execute/scale 直接開始（不排隊）。
     """
     _seed_four_rows(m.pg_client)
 
@@ -156,15 +148,16 @@ def test_step5_execute_scale_end_to_end(api_client, admin_headers, monkeypatch):
     assert len(c_errors) == 1, summary["errors"]
     assert "scaled_low" in c_errors[0]["reason"], c_errors[0]
 
-    # ── 5. Gateway 鎖已釋放，立刻再呼叫一次不會 409 ──
-    gw_key = m._gateway_lock_key(gw["id"], gw["url"])
-    assert wait_lock_released(m, gw_key), "任務結束後鎖應該已經釋放"
+    # ── 5. Gateway 佇列已釋放，立刻再呼叫一次直接開始（不排隊、不是 409）──
+    gw_key = gateway_key(gw["id"], gw["url"])
+    assert wait_lock_released(m, gw_key), "任務結束後佇列應該已經釋放"
 
     resp2 = api_client.post(
         "/api/pg/execute/scale",
         json={"gateway_id": gw["id"], "delay": 0, "batch_size": 50, "batch_pause": 0},
         headers=admin_headers,
     )
-    assert resp2.status_code != 409, resp2.text
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["queued"] is False, resp2.json()
     # 把第二次任務（只剩 C 一筆，仍會失敗）跑完，避免殘留背景執行緒影響後續測試
     poll_task(api_client, admin_headers, resp2.json()["task_id"])

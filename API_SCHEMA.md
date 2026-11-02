@@ -5,7 +5,7 @@
 > 上線、曾造成「HTTP 200 但實際沒生效」事故的行為變更：
 > - 全新端點 `POST /api/pg/staging/kw-override`（先前完全沒有文件）
 > - `POST /api/kw/execute`、`POST /api/pg/execute/scale`、
->   `POST /api/kw/delete-batch` 新增的 **Gateway 併發鎖（409）**
+>   `POST /api/kw/delete-batch` 當時新增的 Gateway 併發鎖（409；**2026-11 已改為排隊，見下方批次 2b**）
 > - `POST /api/pg/derive/scale` / `POST /api/pg/execute/scale` 的
 >   `scale_error`／`not_built_count`／`skip` 行為
 > - CSV 匯入表頭不分大小寫、上傳大小/筆數上限、Collector 寫入結果欄位
@@ -16,7 +16,17 @@
 > **2026-11 多 Gateway 自動路由（基礎建設）**：新增 `/api/kw/routes` 三個端點（棟別/園區 → Gateway
 > 對應表）；`/api/kw/derive`、`/api/pg/derive/scale` 每筆新增 `site` / `zone` / `route`；
 > `POST /api/pg/staging/kw-override` 改為**部分更新**（沒送的欄位不再被洗掉）。
-> 詳見第 7 節「Gateway 自動路由」。execute 端點尚未依 `route` 分流（見該節說明）。
+> 詳見第 7 節「Gateway 自動路由」。
+>
+> **2026-11 批次 2b（路由 × 排隊 × 取消 × 安全鎖，execute 端點行為變更）**：
+> `POST /api/kw/execute`、`POST /api/pg/execute/scale`、`POST /api/kw/delete-batch`
+> - **省略 `gateway_id` ＝ 自動依 channel 路由**（可跨多台，仍是單一 `task_id`）；無法判斷的列不送出（`blocked`）。
+> - **同一台 Gateway 忙碌時不再回 409，改為排隊**（`200` + `queued: true`）；**移除 409**，新增 **422**（批次超過上限）、**429**（佇列已滿）。
+> - 回應新增 `queued` / `queue` / `blocked` / `excluded` / `message`（`task_id` 保留）。
+> - 新增 `POST /api/tasks/{id}/cancel`、`GET /api/kw/queue`；`GET /api/tasks/{id}` 新增 `status` / `cancelled` / `type` / `username` / `gateways`；
+>   `summary` 新增 `gateways` / `blocked` / `cancelled` / `cancelled_remaining`，`errors[]` 新增 `gateway`，並**移除 `message`**。
+> - 排隊的任務輪到時會重新檢查狀態、略過已被先前任務處理的列；排隊中的任務使用送出當下的推導快照（排隊期間改手動覆寫請取消重送）。
+> - 批次刪除登入失敗現為 `fail = total`（舊為 0）。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -158,10 +168,40 @@ curl -X POST http://localhost:9000/api/user/change-password \
 
 `POST /api/kw/execute`、`POST /api/pg/execute/scale`、`POST /api/kw/delete-batch`
 三個「真正呼叫 Kepware API」的端點，因為批次執行動輒數分鐘，**都是背景任務**：
-呼叫後立即回傳 `{"task_id": "..."}`，**HTTP 200 只代表任務已建立、開始排隊，
+呼叫後立即回傳 `task_id`，**HTTP 200 只代表任務已建立（也可能正在排隊），
 不代表已經執行完成、更不代表 Kepware 已經套用變更**。
 
-必須接著輪詢 `GET /api/tasks/{task_id}` 直到 `done: true`，才能從 `summary` 得知真正結果：
+必須接著輪詢 `GET /api/tasks/{task_id}` 直到 `done: true`，才能從 `summary` 得知真正結果。
+**只看 HTTP 狀態碼或只看 `task_id` 回來就當作成功，是最容易誤判「已生效」的寫法。**
+
+#### 三個執行端點的共通回應（HTTP 200）
+
+```json
+{
+  "task_id": "abc12345",
+  "queued": true,
+  "queue": [
+    { "gateway_id": 1, "gateway_name": "K8 廠區 GW",  "ahead": 1 },
+    { "gateway_id": 2, "gateway_name": "K18 廠區 GW", "ahead": 0 }
+  ],
+  "blocked": 0,
+  "excluded": { "other_gateway": 0, "blocked": 0 },
+  "message": "Gateway「K8 廠區 GW」已有任務進行中，已進入佇列（前面 1 個）；輪到時會自動開始；Gateway「K18 廠區 GW」立即開始"
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| task_id | 單一任務編號；**一個請求不論涉及幾台 Gateway 都只有一個 `task_id`** |
+| queued | 任一台 Gateway 前面還有任務（`ahead > 0`）時為 `true`：任務已進入佇列，輪到時自動開始，**不需要重送** |
+| queue | 每台涉及的 Gateway 一筆：`ahead` = 送出當下排在它前面的任務數（0＝立刻開始）。手動憑證時 `gateway_id` 為 `null`、`gateway_name` 為去除帳密後的網址 |
+| blocked | 自動模式下「無法判斷所屬 Gateway」而**不送出**的列數（這些列維持 `pending`，並計入最終 `summary` 的 `total` / `fail` / `errors`）；其他模式為 0 |
+| excluded | **僅指定 `gateway_id` 時才有**：`other_gateway` = 屬於其他 Gateway 而被排除的列數、`blocked` = 無法判斷而被排除的列數。這些列不送出、**不計入** `total` |
+| message | 給人看的一句話（排隊與否、blocked / excluded 的筆數） |
+
+#### GET /api/tasks/{task_id}
+
+查詢背景任務狀態。**需要 JWT（任何已登入角色）**。
 
 ```bash
 curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
@@ -170,56 +210,157 @@ curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
 ```json
 {
   "task_id": "abc12345",
-  "done": true,
-  "progress": { "current": 60, "total": 60, "success": 58, "fail": 2, "skip": 0 },
-  "summary": {
-    "total": 60, "success": 58, "fail": 2, "skip": 0,
-    "errors": [{ "name": "TAG099", "reason": "HTTP 429: ..." }],
-    "message": "成功建立 58 筆 Tag"
-  }
+  "done": false,
+  "status": "running",
+  "cancelled": false,
+  "type": "kw_execute",
+  "username": "admin",
+  "progress": { "current": 60, "total": 120, "success": 58, "fail": 2, "skip": 0 },
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW",  "state": "running", "total": 70, "current": 60,
+      "success": 58, "fail": 2, "skip": 0, "position": null },
+    { "gateway_id": 2, "name": "K18 廠區 GW", "state": "queued",  "total": 50, "current": 0,
+      "success": 0, "fail": 0, "skip": 0, "position": 1 }
+  ],
+  "summary": null
 }
 ```
 
-`done: false` 時 `summary` 為 `null`；請務必檢查 `summary.fail`／`summary.errors`，
-**只看 HTTP 狀態碼或只看 `task_id` 回來就當作成功，是最容易誤判「已生效」的寫法**。
+| 欄位 | 說明 |
+|------|------|
+| task_id / done / progress / summary | 舊欄位，語意不變。`done: false` 時 `summary` 為 `null`；`progress` 是所有 Gateway 加總（含 `blocked`，視為已處理的失敗） |
+| status | `queued`（全部 Gateway 都在排隊）／`running`／`done`／`cancelled`（已結束且是被取消的） |
+| cancelled | 是否已收到取消要求（結束與否都可能為 `true`） |
+| type | `kw_execute`（Step 3）／`pg_execute_scale`（Step 5）／`kw_delete`（批次刪除） |
+| username | 送出者；查不到時為空字串 |
+| gateways | 每台 Gateway 的即時狀態；沒有 Gateway 資訊的舊式任務為空陣列。`state`：`queued`（排隊中）／`running`／`done`（正常返回，含取消後提早返回）／`cancelled`（排隊中就被取消、完全沒執行）／`failed`（worker 丟例外，該台全數記為失敗） |
+| gateways[].position | 只有 `state=queued` 才有值：`n`＝前面還有 `n` 個任務（含正在執行的那個，所以排隊中通常 ≥ 1；`0` 只會出現在剛輪到、尚未切成 `running` 的瞬間）；其餘 state 為 `null` |
 
-#### Gateway 併發鎖（HTTP 409）
+回應**刻意不含**佇列 key、憑證與網址（手動憑證的網址可能夾帶帳密）。找不到任務（例如伺服器重啟後記憶體中的任務已消失）回 404。
 
-`POST /api/kw/execute`、`POST /api/pg/execute/scale`、`POST /api/kw/delete-batch`
-這三個端點，**同一個 Gateway（以 `gateway_id` 識別；未帶 `gateway_id` 時以手動輸入的
-`kw_gw_url` 識別）同一時間只允許一個背景任務在跑**。若該 Gateway 已有任務執行中，
-呼叫會立即收到：
+任務完成後（`done: true`）的 `summary`：
 
-```
-HTTP 409
+```json
 {
-  "detail": "此 Gateway 目前有任務執行中（task_id=abc12345），請輪詢該任務直到完成後再重試"
+  "total": 122, "success": 118, "fail": 4, "skip": 0,
+  "errors": [
+    { "name": "K8_2F_CHS_TAG099", "reason": "HTTP 500: ...", "gateway": "K8 廠區 GW" },
+    { "name": "K20_1F_AC_T01", "reason": "找不到 channel，且棟別/園區未設定對應（...）", "gateway": null }
+  ],
+  "cancelled": false,
+  "cancelled_remaining": 0,
+  "blocked": 1,
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW",  "state": "done", "total": 70, "success": 68, "fail": 2, "skip": 0 },
+    { "gateway_id": 2, "name": "K18 廠區 GW", "state": "done", "total": 51, "success": 50, "fail": 0, "skip": 0 }
+  ]
 }
 ```
 
-**理由**：Kepware API Gateway 的限速是滑動視窗 60 次/分鐘（per 帳號+路徑），建點／Scale／
-刪除三個操作打的是同一組路徑、共用同一額度桶；若允許併發，只會讓實際呼叫速率疊加、更快撞
-到限速（429），並不會讓整體跑得更快，所以用「直接拒絕」取代「排隊等待」，讓呼叫端自行決定
-何時重試。
+| 欄位 | 說明 |
+|------|------|
+| total / success / fail / skip | 全部 Gateway 加總。`total` 含 `blocked`；`fail` 含 `blocked` |
+| errors | 失敗明細。每筆多一個 `gateway`：失敗發生在哪台（Gateway 名稱）；`blocked` 的列沒有 Gateway，為 `null`。Step 3 / 刪除的鍵是 `name`，Step 5 的鍵是 `tag_name`（blocked 一律用 `name`） |
+| gateways | 每台的結果 `{gateway_id, name, state, total, success, fail, skip}` |
+| blocked | 無法判斷所屬 Gateway 而未送出的列數 |
+| cancelled | 任務是否被取消 |
+| cancelled_remaining | 因取消而**尚未處理**的列數（排隊中就被取消的整批 + 執行中被取消時還沒做的列） |
 
-**不同 Gateway 之間互不影響、可以並行執行**（例如多網段、多台 Gateway 部署時，對 GW-A 執行
-建點的同時，可以對 GW-B 執行 Scale，兩者不會互相鎖住）。
+> **相容性**：先前 `summary` 內的 `message`（例如「成功建立 58 筆 Tag」）已移除；請改讀 `success` / `fail` / `skip` / `errors`。
+> `summary` 只有任務**整個結束**時才存在。
 
-呼叫端正確處理方式：收到 409 → 從 `detail` 字串中解析出佔用中的 `task_id` → 輪詢
-`GET /api/tasks/{task_id}` 直到該任務 `done: true` → 再重送原本的請求。
+#### Gateway 判斷（三種模式）與排隊
 
-**Python 輪詢範例**（三個背景任務端點通用，含 409 併發鎖處理）：
+三個執行端點都用同一套流程。**Gateway 的判斷方式依請求欄位而定**：
+
+| 模式 | 觸發條件 | 行為 |
+|------|---------|------|
+| **自動**（建議） | 沒有 `gateway_id`、也沒有 `kw_gw_url` | 逐列依 channel 路由（見第 7 節「Gateway 自動路由」），依 Gateway 分組；一個請求可跨多台，仍是單一 `task_id`。**無法判斷的列（`conflict` / `conflict_channel` / `unrouted`）不送出**，維持原狀態（`pending`），以 `blocked` 回報並計入摘要。整批都無法判斷 → 400 |
+| **指定 Gateway** | 有 `gateway_id` | 語意是「只處理屬於這台的列」：路由到其他台的列、無法判斷的列都排除在任務之外（不送、不計入 `total`），筆數回報在 `excluded`。這台沒有任何列 → 400。系統只有 1 台 Gateway 時，所有列都屬於它（與舊行為完全相同，不需要同步結構） |
+| **手動憑證**（舊相容） | 沒有 `gateway_id`、有 `kw_gw_url` | 不做路由，整批送往該網址；佇列以**正規化後的網址**識別（尾斜線、大小寫不同的同一台共用同一個佇列） |
+
+**排隊規則**：每台 Gateway 各有一條先進先出（FIFO）佇列——**同一台一次只跑一個任務**（Kepware 限速是每台各自計算，
+同時跑只會讓速率疊加而更快撞 429），**不同台互相並行**。同一台忙碌時**不再回 409**，而是 `200` + `queued: true`，
+輪到時自動開始。一個請求跨兩台時，兩台各自等自己的佇列（不需要同時取得兩把鎖，沒有死結）。
+佇列存在伺服器記憶體中，**伺服器重啟會遺失排隊中與執行中的任務**。
+
+**輪到時會重新檢查狀態**：排隊的任務輪到時，先重新查詢暫存列的狀態（Step 3 看 `tb_status`、Step 5 看 `scale_status`），
+**不是 `pending` 的列（已被排在前面的任務處理過）直接略過**、不呼叫 Kepware，計入 `skip`——所以兩個任務處理同一批列不會重複送出。
+批次刪除沒有暫存列，不做此檢查（重複刪除是冪等的，404 視為成功）。
+
+> ⚠️ **排隊中的任務使用「送出當下」的推導結果（快照），輪到時不會重新推導。**
+> 排隊期間若修改了 Step 3 手動覆寫（`POST /api/pg/staging/kw-override`），已在排隊的任務不會套用；
+> 請先 `POST /api/tasks/{task_id}/cancel` 取消，再重新送出。
+
+#### 安全鎖（HTTP 422 / 429）
+
+在建立任務**之前**先做上限檢查，超過就直接拒絕、不建立任務、不碰 Kepware：
+
+| 狀況 | 回應 | 上限（環境變數，預設） |
+|------|------|-------------------|
+| 單次批次點數超過上限 | **422** `{"detail": "Kepware 建點單次最多處理 10000 點，本次要求 12000 點，已超過上限。請分批處理（以 ids 縮小範圍），或由管理者調整環境變數 KIS_LIMIT_KW_EXECUTE。"}` | `KIS_LIMIT_KW_EXECUTE`＝10000（Step 3）、`KIS_LIMIT_SCALE`＝10000（Step 5）、`KIS_LIMIT_DELETE`＝2000（批次刪除） |
+| 某台 Gateway 的佇列已滿（排隊中＋執行中） | **429** `{"detail": "Gateway「K8 廠區 GW」的任務佇列已滿（排隊中＋執行中共 5 個，上限 5 個）。請稍後再試，或取消排隊中的任務；若需提高上限，請由管理者調整環境變數 KIS_LIMIT_QUEUE_PER_GATEWAY。"}` | `KIS_LIMIT_QUEUE_PER_GATEWAY`＝5 |
+
+點數 `N` = 套用 `ids` 篩選後的待處理列數（Step 3 / 5，路由之前）；批次刪除為 CSV 中同時有 `name` 與 `type` 的列數。
+**等於上限允許，超過才拒絕。** 批次刪除的 `dry_run=true`（預演）不碰 Kepware，**不受批次上限限制、也不排隊**。
+一個請求跨多台時，任一台的佇列已滿就整個請求回 429（原子：另一台也不會被加入）。
+
+#### POST /api/tasks/{task_id}/cancel
+
+取消任務（排隊中或執行中皆可）。**需要 JWT（admin / operator）**，會寫入操作日誌。
+
+- **排隊中的 Gateway**：立刻離開佇列、完全不執行（該台 `state=cancelled`），後面的任務遞補。
+- **執行中的 Gateway**：處理完**目前這一筆**後停止（所有等待——限速間隔、批次暫停、429 退避——都可被打斷，
+  不必等整段睡完）；**已成功的列仍會照常寫回狀態**（`done` / `skip`），尚未處理的筆數記在 `summary.cancelled_remaining`。
+- 取消不會回復已經送到 Kepware 的變更。
+
+```json
+{ "success": true, "status": "running" }
+```
+
+| 狀況 | 回應 |
+|------|------|
+| 成功（含**重複取消**，冪等） | 200 `{"success": true, "status": ...}`；取消生效後用 `GET /api/tasks/{id}` 輪詢到 `done` |
+| 找不到任務 | 404 |
+| 任務已結束 | **409** `{"detail": "任務已結束，無法取消"}` |
+| 任務沒有 Gateway 資訊（非本機制產生的舊式任務） | 400 |
+| 非 admin / operator | 403 |
+
+#### GET /api/kw/queue
+
+目前各 Gateway 的佇列內容。**需要 JWT（任何已登入角色）**。
+
+```json
+[
+  {
+    "gateway_id": 1,
+    "gateway_name": "K8 廠區 GW",
+    "tasks": [
+      { "task_id": "abc12345", "type": "kw_execute", "username": "admin", "position": 0, "total": 70 },
+      { "task_id": "def67890", "type": "pg_execute_scale", "username": "tester", "position": 1, "total": 12 }
+    ]
+  }
+]
+```
+
+`position` 0＝執行中，其後為排隊中（先進先出）；`total` 是該任務在這台 Gateway 要處理的列數。
+手動憑證的佇列 `gateway_id` 為 `null`、`gateway_name` 為去除帳密後的網址。沒有任何作業時回 `[]`。
+
+**Python 輪詢範例**（三個背景任務端點通用，含排隊 / 429 / 422 處理）：
 
 ```python
 import time, requests
 
 def run_and_wait(url, body, headers, poll_interval=1, timeout=600,
-                 retry_wait=2, max_busy_retries=5):
-    """送出背景任務請求並等待完成，回傳 summary（請務必檢查其中的 fail / errors）。
+                 full_wait=30, max_full_retries=5):
+    """送出背景任務請求並等待完成，回傳 summary（請務必檢查其中的 fail / errors / cancelled）。
 
-    遇到 409（同一 Gateway 已有任務執行中）會等佔用中的任務結束後重送，
-    最多重送 max_busy_retries 次；任何一次等待超過 timeout 秒即拋出 TimeoutError。
-    ⚠️ 不要寫成無上限的重試迴圈：Gateway 上若有任務卡住，程式會永遠等下去且毫無錯誤訊息。
+    - 200 且 queued=True：該 Gateway 忙碌，任務已進入佇列。印出提示後照常輪詢即可，
+      輪到時會自動開始，**不需要重送**（不會有 409）。
+    - 429（佇列已滿）：等 full_wait 秒後重送，最多 max_full_retries 次，仍滿就拋 RuntimeError。
+      ⚠️ 不要寫成無上限的重試迴圈：佇列若一直被卡住，程式會永遠等下去且毫無錯誤訊息。
+    - 422（批次點數超過安全鎖上限）：不重試，直接拋 RuntimeError（請用 ids 縮小範圍）。
+    - timeout 是「輪詢等待」的總秒數上限（排隊的時間也算在內，排隊多個任務時請調大）；超過拋 TimeoutError。
     """
     base = url.rsplit('/api/', 1)[0]
 
@@ -239,24 +380,27 @@ def run_and_wait(url, body, headers, poll_interval=1, timeout=600,
             waited += poll_interval
         raise TimeoutError(f"task {task_id} 超過 {timeout} 秒仍未完成")
 
-    for _ in range(max_busy_retries + 1):
+    for attempt in range(max_full_retries + 1):
         r = requests.post(url, headers=headers, json=body)
-        if r.status_code == 409:
-            # detail 範例："此 Gateway 目前有任務執行中（task_id=abc12345），請輪詢…"
-            detail = r.json()["detail"]
-            busy_task_id = detail.split("task_id=")[1].split("）")[0].split(")")[0]
-            wait_task(busy_task_id)   # 佔用任務已結束或已不存在 → 重送；逾時則拋出
-            time.sleep(retry_wait)    # 讓 Gateway 限速視窗稍微釋放
+        if r.status_code == 422:
+            raise RuntimeError(f"批次超過安全鎖上限，請縮小範圍：{r.json()['detail']}")
+        if r.status_code == 429:
+            if attempt == max_full_retries:
+                raise RuntimeError(f"Gateway 佇列持續已滿，重送 {max_full_retries} 次後仍無法排入：{r.json()['detail']}")
+            time.sleep(full_wait)         # 佇列已滿：等前面的任務做完一些再重送
             continue
 
         r.raise_for_status()
-        task_id = r.json()["task_id"]
+        resp = r.json()
+        if resp.get("queued"):
+            print("已進入佇列：", resp["message"])
+        if resp.get("blocked"):
+            print(f"注意：有 {resp['blocked']} 筆無法判斷所屬 Gateway，未送出")
+        task_id = resp["task_id"]
         summary = wait_task(task_id)
         if summary is None:
             raise RuntimeError(f"task {task_id} 已遺失（伺服器可能重啟），請至網頁「歷史」分頁確認結果")
         return summary
-
-    raise RuntimeError(f"Gateway 持續忙碌，重送 {max_busy_retries} 次後仍無法執行")
 ```
 
 ---
@@ -689,22 +833,27 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
 
 實務上 9 成點位皆為 Float（8），因此後端 `KW_DATA_TYPE_DEFAULT = 8` 為未覆寫時的預設值。
 
+> ⚠️ **覆寫只影響之後送出的任務。** 已經在排隊的 `POST /api/kw/execute` / `POST /api/pg/execute/scale`
+> 任務使用的是**送出當下的推導快照**，輪到時不會重新推導；排隊期間修改覆寫請先
+> `POST /api/tasks/{task_id}/cancel` 取消該任務，再重新送出。
+
 ---
 
 ### 步驟 3：執行 Kepware 建點（背景任務）
 
 #### POST /api/kw/execute
 
-推導欄位後呼叫 Kepware API Gateway 建立 tag group + tag，成功後更新 `tb_status = done`。
-**回傳 `{"task_id": ...}`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**
-**同一 Gateway 若已有任務在跑會回 409，見上方「Gateway 併發鎖（HTTP 409）」。**  
+推導欄位 → 依 channel 自動判斷各列該送哪台 Gateway → 呼叫 Kepware API Gateway 建立 tag group + tag，
+成功的列更新 `tb_status = done`。
+**回傳 `task_id`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**
+**同一台 Gateway 忙碌時不再回 409，而是排隊（回應 `queued: true`），見上方「Gateway 判斷（三種模式）與排隊」。**  
 **需要 JWT（admin / operator）**
 
 **Request Body**
 
 ```json
 {
-  "gateway_id": 1,
+  "gateway_id": null,
   "ids": null,
   "delay": 1.1,
   "batch_size": 50,
@@ -714,18 +863,41 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
 
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
-| gateway_id | int? | null | 使用 DB 中已設定的 Gateway（`kepware_gateway` 表，含加密密碼）；**建議用這個，與網頁 UI 行為一致** |
-| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 不指定 `gateway_id` 時，改用這三個手動帶入憑證（不會存進 DB）；**兩者擇一，優先用 gateway_id** |
-| ids | list? | null | 指定暫存表 id；null = 全部 `tb_status=pending` |
+| gateway_id | int? | null | **省略＝自動**：每一列依 channel 判斷所屬 Gateway（可跨多台，仍是單一 `task_id`），無法判斷的列不送出。**指定＝只處理屬於這台的列**（其他台與無法判斷的列排除，數量回報在 `excluded`）。系統只有 1 台 Gateway 時兩者行為相同 |
+| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 沒有 `gateway_id` 但提供 `kw_gw_url` ＝ 手動憑證（不會存進 DB）：**不路由**，整批送往該網址；仍會依正規化後的網址排隊 |
+| ids | list? | null | 指定暫存表 id；null = 全部 `tb_status=pending`。批次點數上限檢查的 N 是**套用 `ids` 之後**的列數 |
 | delay | float | **1.1** | 每筆間隔秒數。Kepware API Gateway 限速為滑動視窗 60 次/分鐘（per 帳號+路徑），1.1 秒 ≈ 每分鐘 48 筆留有餘裕；若 Gateway 端調高限速可調低加速 |
 | batch_size | int | 50 | 批次大小（達到後暫停 `batch_pause`） |
 | batch_pause | float | 5.0 | 批次暫停秒數；收到 429 時優先讀取 Kepware 回應的 `Retry-After` 決定實際等待秒數，讀不到才用此值，最多重試 3 次 |
 
-**Response 200（立即回傳，非最終結果）**
+**Response 200（立即回傳，非最終結果）**：見上方「三個執行端點的共通回應」。
 
 ```json
-{ "task_id": "abc12345" }
+{
+  "task_id": "abc12345", "queued": false,
+  "queue": [{ "gateway_id": 1, "gateway_name": "K8 廠區 GW", "ahead": 0 }],
+  "blocked": 0, "message": "任務已開始執行（Gateway 「K8 廠區 GW」，共 245 筆）"
+}
 ```
+
+**錯誤回應**
+
+| 狀況 | 回應 |
+|------|------|
+| 沒有待建點資料 | 400 `無待建點資料` |
+| 自動模式：全部列都無法判斷所屬 Gateway | 400（說明筆數、各狀態筆數與前 3 筆原因，不建立任務） |
+| 指定 `gateway_id`：沒有屬於這台的待處理列 | 400（附被排除的「其他台／無法判斷」筆數） |
+| `gateway_id` 不存在 | 404 |
+| Gateway 密碼無法解密（`KW_ENCRYPT_KEY` 變更） | 400（在任何排隊之前就拒絕，不會留下殘留的佇列項目） |
+| 批次點數超過 `KIS_LIMIT_KW_EXECUTE` | 422 |
+| 該 Gateway 佇列已滿（`KIS_LIMIT_QUEUE_PER_GATEWAY`） | 429 |
+
+**執行行為（`_kw_execute_worker`，每台 Gateway 各跑一次）**
+
+1. **輪到時重新檢查**：`tb_status` 已不是 `pending` 的列（被排在前面的任務處理過）直接略過、不呼叫 Kepware，計入 `skip`；全部略過的任務連登入都不做。
+2. 登入失敗＝這台待處理的列**全數記為失敗**（`fail`），`errors` 帶登入失敗原因。
+3. 預建所有不重複的 tag group → 逐筆建 tag；Kepware 回 409（已存在）視為成功；429 依 `Retry-After` 退避重試。
+4. **取消**：每筆之間檢查取消要求，停下時已成功的列照常寫回 `tb_status = done`。
 
 **輪詢 `GET /api/tasks/abc12345` 取得的 `summary`（`done:true` 之後）**
 
@@ -733,9 +905,12 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
 {
   "total": 245, "success": 240, "fail": 5, "skip": 0,
   "errors": [
-    { "name": "K8_2F_CHS_TAG099", "reason": "HTTP 409: ..." }
+    { "name": "K8_2F_CHS_TAG099", "reason": "HTTP 500: ...", "gateway": "K8 廠區 GW" }
   ],
-  "message": "成功建立 240 筆 Tag"
+  "cancelled": false, "cancelled_remaining": 0, "blocked": 0,
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 245, "success": 240, "fail": 5, "skip": 0 }
+  ]
 }
 ```
 
@@ -745,10 +920,13 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
 TASK_ID=$(curl -s -X POST http://localhost:9000/api/kw/execute \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"gateway_id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+  -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")   # 省略 gateway_id＝自動
 
 # 務必輪詢，不要只看上面這個 200
 curl http://localhost:9000/api/tasks/$TASK_ID -H "Authorization: Bearer $TOKEN"
+
+# 想中途停下來（排隊中或執行中皆可）
+curl -X POST http://localhost:9000/api/tasks/$TASK_ID/cancel -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -951,9 +1129,10 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 
 #### POST /api/pg/execute/scale
 
-推導欄位後呼叫 Kepware API Gateway 設定 Scale，成功後更新 `scale_status = done`。
-**回傳 `{"task_id": ...}`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**
-**同一 Gateway 若已有任務在跑會回 409，見上方「Gateway 併發鎖（HTTP 409）」。**
+推導欄位 → 依 channel 自動判斷各列該送哪台 Gateway → 呼叫 Kepware API Gateway 設定 Scale，
+成功後更新 `scale_status = done`。
+**回傳 `task_id`，請依上方「背景任務與輪詢」章節輪詢結果，不要只看 HTTP 200。**
+**同一台 Gateway 忙碌時不再回 409，而是排隊（回應 `queued: true`），見上方「Gateway 判斷（三種模式）與排隊」。**
 > 這是最容易踩坑的端點：舊版文件曾記載此端點直接同步回傳 `{success, failed, ...}`，
 > 但實際上早已改為背景任務，只回傳 `task_id`。若您的程式檢查 `response["success"]`
 > 一類的欄位，會因為該 key 不存在而誤判、或直接吞掉 `KeyError`，
@@ -964,7 +1143,7 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 
 ```json
 {
-  "gateway_id": 1,
+  "gateway_id": null,
   "ids": null,
   "delay": 1.1,
   "batch_size": 50,
@@ -974,21 +1153,31 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
-| gateway_id | int? | null | 使用 DB 中已設定的 Gateway；**建議用這個，與網頁 UI 行為一致**——若改用手動 `kw_gw_url` 且填錯，會打到錯誤的 Kepware 實例而完全看不出來 |
-| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 不指定 `gateway_id` 時的手動憑證，兩者擇一 |
-| ids | list? | null | 指定暫存表 id；null = 全部 `scale_status=pending` |
+| gateway_id | int? | null | 同 `/api/kw/execute`：**省略＝自動**依 channel 分到各台 Gateway；**指定＝只處理屬於這台的列**。手動 `kw_gw_url` 填錯會打到錯誤的 Kepware 實例而完全看不出來，建議用自動或 `gateway_id` |
+| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 沒有 `gateway_id` 但提供 `kw_gw_url` ＝ 手動憑證，不路由 |
+| ids | list? | null | 指定暫存表 id；null = 全部 `scale_status=pending`。批次點數上限檢查的 N 是套用 `ids` 之後的列數 |
 | delay | float | **1.1** | 同 `/api/kw/execute`，理由同上（60 次/分鐘限速） |
 | batch_size | int | 50 | 批次大小 |
 | batch_pause | float | 5.0 | 批次暫停秒數；429 時優先讀取 `Retry-After` |
 
-**Response 200（立即回傳，非最終結果——這裡不會有 success/failed！）**
+**Response 200（立即回傳，非最終結果——這裡不會有 success/failed！）**：欄位同「三個執行端點的共通回應」。
 
 ```json
-{ "task_id": "def67890" }
+{
+  "task_id": "def67890", "queued": true,
+  "queue": [{ "gateway_id": 1, "gateway_name": "K8 廠區 GW", "ahead": 1 }],
+  "blocked": 0,
+  "message": "Gateway「K8 廠區 GW」已有任務進行中，已進入佇列（前面 1 個）；輪到時會自動開始"
+}
 ```
 
-**執行行為（`_exec_pg_execute_scale`，逐筆判斷，三種結果）**
+**錯誤回應**：同 `/api/kw/execute`，另外：沒有待設定 Scale 的資料 → 400 `無待設定 Scale 的資料`；
+全部都沒有啟用 Scale → 400 `無啟用 Scale 的資料（...）`；批次超過 `KIS_LIMIT_SCALE` → 422。
+> 注意：自動模式下，`scale_enabled=false` 的列也要路由才知道歸哪台；channel 無法判斷的列即使不需要 Scale 也會被當成 `blocked`。
 
+**執行行為（`_scale_worker`，每台 Gateway 各跑一次，逐筆判斷，三種結果）**
+
+0. **輪到時重新檢查**：`scale_status` 已不是 `pending`（被排在前面的任務處理過）的列直接略過，計入 `skip`。
 1. **`scale_error` 非空**（`scale_enabled=true` 但缺範圍值）→ **直接記為失敗，完全不呼叫
    Kepware API**（不浪費限速額度打一個註定失敗的請求）；計入 `summary.errors`
    （`[{"tag_name","reason"}]`，`reason` 就是 `scale_error` 的內容）；該筆 `scale_status`
@@ -1000,25 +1189,30 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
    成功則 `scale_status = done`、計入 `summary.success`；HTTP 失敗則計入 `summary.errors`、
    `scale_status` 維持 `pending`。
 
+登入失敗＝這台待處理的列全數記為失敗。**取消**時已處理完的列（`done` / `skip`）照常寫回狀態。
+
 **輪詢 `GET /api/tasks/def67890` 取得的 `summary`（`done:true` 之後）**
 
 ```json
 {
   "total": 200, "success": 178, "fail": 12, "skip": 10,
   "errors": [
-    { "tag_name": "K8_2F_CHS_TAG050", "reason": "scale_enabled 為 true 但缺少 scaled_low" },
-    { "tag_name": "K8_2F_CHS_TAG099", "reason": "Tag not found in Kepware" }
+    { "tag_name": "K8_2F_CHS_TAG050", "reason": "scale_enabled 為 true 但缺少 scaled_low", "gateway": "K8 廠區 GW" },
+    { "tag_name": "K8_2F_CHS_TAG099", "reason": "Tag not found in Kepware", "gateway": "K8 廠區 GW" }
   ],
-  "message": "成功設定 178 筆 Scale"
+  "cancelled": false, "cancelled_remaining": 0, "blocked": 0,
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 200, "success": 178, "fail": 12, "skip": 10 }
+  ]
 }
 ```
 
 | 欄位 | 說明 |
 |------|------|
 | success | 成功呼叫 Kepware 並設定 Scale 的筆數，`scale_status` 已更新為 `done` |
-| skip | `scale_enabled=false` 而跳過（不需要 Scale）的筆數，`scale_status` 已更新為 `skip`——**不是先前版本文件裡恆為 0 的舊行為** |
-| fail | `scale_error`（資料不全）+ 實際呼叫 Kepware 失敗，兩者合計；這些筆 `scale_status` 皆維持 `pending` |
-| errors | `[{"tag_name","reason"}]`，資料不全與 Kepware 呼叫失敗混在同一個陣列裡，可用 `reason` 文字（`scale_enabled 為 true 但缺少 ...` 開頭）分辨是否為資料不全 |
+| skip | `scale_enabled=false` 而跳過（不需要 Scale）的筆數，`scale_status` 已更新為 `skip`；加上「輪到時發現已被先前任務處理」而略過的筆數 |
+| fail | `scale_error`（資料不全）+ 實際呼叫 Kepware 失敗 + `blocked`，三者合計；這些筆 `scale_status` 皆維持 `pending` |
+| errors | `[{"tag_name","reason","gateway"}]`，資料不全與 Kepware 呼叫失敗混在同一個陣列裡，可用 `reason` 文字（`scale_enabled 為 true 但缺少 ...` 開頭）分辨是否為資料不全；`blocked` 的列用 `name` 鍵且 `gateway` 為 `null` |
 
 **curl 範例**
 
@@ -1026,7 +1220,7 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 TASK_ID=$(curl -s -X POST http://localhost:9000/api/pg/execute/scale \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"gateway_id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
+  -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
 
 curl http://localhost:9000/api/tasks/$TASK_ID -H "Authorization: Bearer $TOKEN"
 ```
@@ -1591,8 +1785,10 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 判斷順序：單台旁路 → `conflict_channel` → channel 恰 1 台時與對應表交叉檢查（`ok` / `conflict`）→
 `channel_only` → `map_only` → `unrouted`。比對皆為精確字串比對（先去除前後空白；空值視為「沒有」）。
 
-> **目前階段**：`route` 僅供預覽與檢查。`/api/kw/execute`、`/api/pg/execute/scale`、
-> `/api/kw/delete-batch` **尚未依 `route` 分流**，仍送往請求指定的那台 Gateway。
+> **執行端點已依 `route` 分流**：`/api/kw/execute`、`/api/pg/execute/scale`、`/api/kw/delete-batch`
+> 省略 `gateway_id` 時逐列路由並依 Gateway 分組（可放行的 status 才會送出，`conflict` / `conflict_channel` /
+> `unrouted` 的列**不送出**、維持原狀態並以 `blocked` 回報）；指定 `gateway_id` 時只處理路由到該台的列。
+> 詳見第 2 節「Gateway 判斷（三種模式）與排隊」。刪除沒有暫存列，路由只看 `type` 的 channel（棟別/園區皆空）。
 
 ---
 
@@ -1662,8 +1858,8 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 ### POST /api/kw/delete-batch （背景任務）
 
 透過 Kepware API 批次刪除 Tag（從 CSV 的 `name`/`type` 欄位推導 channel/device/tag_group 路徑）。
-**回傳 `{"task_id": ...}`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**
-**同一 Gateway 若已有任務在跑會回 409，見第 2 節「Gateway 併發鎖（HTTP 409）」。**  
+**回傳 `task_id`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**
+**同一台 Gateway 忙碌時不再回 409，而是排隊（回應 `queued: true`），見第 2 節「Gateway 判斷（三種模式）與排隊」。**  
 **需要 JWT（admin / operator）**
 
 **CSV 欄位**: `name`（tag 名稱）, `type`（DeviceProfile，格式如 `K8CHS-CHS-2F-CHS`）
@@ -1673,7 +1869,7 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 ```json
 {
   "upload_id": "a1b2c3d4",
-  "gateway_id": 1,
+  "gateway_id": null,
   "dry_run": true,
   "delay": 1.1,
   "batch_size": 50,
@@ -1684,22 +1880,38 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
 | upload_id | string | ✓ | 先呼叫 `POST /api/csv/upload` 取得 |
-| gateway_id | int? | null | 同執行建點/Scale，建議用這個而非手動憑證 |
-| dry_run | bool | true | 預演模式，不實際呼叫刪除 API |
+| gateway_id | int? | null | 同執行建點/Scale：**省略＝自動**（依 `type` 的第一段 channel 路由；刪除沒有棟別/園區資訊，所以 channel 不在任何 Gateway 的結構快取時會被當成無法判斷）；指定＝只處理屬於這台的列；有 `kw_gw_url` 無 `gateway_id`＝手動憑證，不路由 |
+| dry_run | bool | true | 預演模式，不實際呼叫刪除 API、**不連 Kepware、不排隊、不受批次點數上限限制**（仍會回報路由結果） |
 | delay / batch_size / batch_pause | | 1.1 / 50 / 5.0 | 同執行建點/Scale |
 
-**Response 200（立即回傳，非最終結果）**
+**Response 200（立即回傳，非最終結果）**：欄位同第 2 節「三個執行端點的共通回應」。
 
 ```json
-{ "task_id": "a3f7b2c1d9e4f580" }
+{
+  "task_id": "a3f7b2c1", "queued": false,
+  "queue": [{ "gateway_id": 1, "gateway_name": "K8 廠區 GW", "ahead": 0 }],
+  "blocked": 0, "message": "任務已開始執行（Gateway 「K8 廠區 GW」，共 200 筆）"
+}
 ```
+
+CSV 裡沒有任何同時有 `name` 與 `type` 的列時，任務會立刻以 `total: 0` 結束（與舊行為相同）。
+
+**錯誤回應**：找不到 `upload_id` → 404；無法判斷所屬 Gateway／沒有屬於所指定 Gateway 的列 → 400；
+`dry_run=false` 且筆數超過 `KIS_LIMIT_DELETE`（預設 2000）→ 422；該 Gateway 佇列已滿 → 429。
+
+**執行行為（`_kw_delete_worker`）**：Kepware 回 404（tag 不存在）視為成功；登入失敗＝這台全數記為失敗（`fail = total`；
+舊版此情況 `fail = 0`，已修正）；可取消，取消時 `cancelled_remaining` 為尚未處理的筆數。
 
 **輪詢 `GET /api/tasks/{task_id}` 取得的 `summary`**
 
 ```json
 {
   "total": 200, "success": 195, "fail": 5, "skip": 0,
-  "errors": [{ "name": "TAG001", "reason": "HTTP 404" }]
+  "errors": [{ "name": "TAG001", "reason": "HTTP 404", "gateway": "K8 廠區 GW" }],
+  "cancelled": false, "cancelled_remaining": 0, "blocked": 0,
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 200, "success": 195, "fail": 5, "skip": 0 }
+  ]
 }
 ```
 
@@ -1791,7 +2003,9 @@ v3 UI 已不使用此套設定，屬遺留端點）。**本節全部端點皆需
 | 401 | 未登入或 Token 無效/過期 |
 | 403 | 角色權限不足 |
 | 404 | 資源不存在 |
-| 409 | 資源衝突（帳號重複、選項已存在） |
+| 409 | 資源衝突（帳號重複、選項已存在、Gateway 名稱重複）；取消一個已結束的任務（`POST /api/tasks/{id}/cancel`）。**三個執行端點不再回 409**（同一台 Gateway 忙碌改為排隊） |
+| 422 | 批次點數超過安全鎖上限（執行端點）；或請求欄位格式不符 |
+| 429 | Gateway 作業佇列已滿（執行端點）；或登入失敗次數過多被暫時鎖定 |
 | 500 | 伺服器內部錯誤（PG/TB/Kepware 連線問題等） |
 
 ---
@@ -1814,6 +2028,10 @@ v3 UI 已不使用此套設定，屬遺留端點）。**本節全部端點皆需
 | `PG_PASSWORD` | — | 資料庫密碼 |
 | `CSV_UPLOAD_MAX_BYTES` | `10485760`（10MB） | 單檔 CSV 上傳大小上限，超過回 400。`.env` 留空視為未設定，套用預設值。 |
 | `CSV_UPLOAD_MAX_ROWS` | `50000` | 單檔 CSV 資料筆數上限，超過回 400。`.env` 留空視為未設定，套用預設值。 |
+| `KIS_LIMIT_KW_EXECUTE` | `10000` | Step 3 建點單次批次點數上限，超過回 422（等於上限允許）。非正整數一律退回預設並記錄警告。 |
+| `KIS_LIMIT_SCALE` | `10000` | Step 5 Scale 設定單次批次點數上限，超過回 422。 |
+| `KIS_LIMIT_DELETE` | `2000` | 批次刪除（`dry_run=false`）單次點數上限，超過回 422；預演不受限。 |
+| `KIS_LIMIT_QUEUE_PER_GATEWAY` | `5` | 單一 Gateway 同時允許的「排隊中＋執行中」任務數，已滿回 429。 |
 | `CSV_UPLOAD_CLEANUP_DAYS` | `30` | 暫存 CSV 上傳檔（`data/csv_uploads/`）保留天數，超過即於每週一凌晨 3 點清理排程中刪除。`.env` 留空視為未設定，套用預設值。 |
 
 > **關於「.env 有此行但值留空」**：`os.getenv("X", default)` 只在環境變數**完全不存在**時才回傳 `default`；
