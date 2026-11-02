@@ -12,6 +12,11 @@
 >
 > （上一次全面校正在 2026-07，移除已不存在的 TB 端點，並補上當時未記載的
 > `/api/kw/delete-batch`、`/api/kw/gateways`。）
+>
+> **2026-11 多 Gateway 自動路由（基礎建設）**：新增 `/api/kw/routes` 三個端點（棟別/園區 → Gateway
+> 對應表）；`/api/kw/derive`、`/api/pg/derive/scale` 每筆新增 `site` / `zone` / `route`；
+> `POST /api/pg/staging/kw-override` 改為**部分更新**（沒送的欄位不再被洗掉）。
+> 詳見第 7 節「Gateway 自動路由」。execute 端點尚未依 `route` 分流（見該節說明）。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -558,6 +563,14 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
       "profile_exists": true,
       "data_type": 8,
       "overridden": false,
+      "site": "K8",
+      "zone": "A",
+      "route": {
+        "gateway_id": 1,
+        "gateway_name": "K8 廠區 GW",
+        "status": "ok",
+        "reason": "結構快取與棟別/園區對應表一致"
+      },
       "validation": {
         "channel_exists": true,
         "device_exists": true,
@@ -573,6 +586,8 @@ curl -X POST http://localhost:9000/api/pg/staging/import \
 | 欄位 | 說明 |
 |------|------|
 | data_type | Kepware tag 資料型別 enum（整數）。暫存列有手動覆寫（`kw_data_type` 非 NULL）就用覆寫值，否則預設 **8（Float）**——與是否需要 Scale 無關，任何 tag 都需要正確型別。enum 對照表見下方「步驟 3（可選）：手動覆寫」章節 |
+| site / zone | 該筆的棟別（暫存列 `site`，已 strip）與園區（以 `site` 比對 `location_config` 取得的 `zone`）；缺值為空字串。Gateway 自動路由的判斷依據 |
+| route | **Gateway 自動路由結果**（預覽），**不論請求是否帶 `gateway_id` 都會回傳**：`{gateway_id, gateway_name, status, reason}`。`status` 各值含意見第 7 節「Gateway 自動路由」；`reason` 為可直接顯示的繁體中文說明（衝突時已把 Gateway id 換成名稱）。與下方 `validation` 無關——`validation` 仍只針對請求指定的那台 `gateway_id`；`route` 則是系統依 channel 與對應表判定「這筆該送哪台」 |
 | overridden | 是否曾手動覆寫過（供 UI 標示）。條件：`channel`/`device` 覆寫值存在且與推導值不同、或 `tag_groups` 覆寫值（可為空字串）與推導值不同、或 `data_type` 有覆寫（`kw_data_type` 非 NULL，即使覆寫值恰好等於預設 8 也算） |
 
 | validation 欄位 | 說明 |
@@ -598,27 +613,35 @@ curl -X POST http://localhost:9000/api/kw/derive \
 儲存 Step 3 手動覆寫的 Channel / Device / Groups / Data Type 到暫存表
 （`scada_tag_config` 的 `kw_channel` / `kw_device` / `kw_tag_groups` / `kw_data_type` 欄位），
 下次 `/api/kw/derive`、`/api/pg/derive/scale` 會優先採用覆寫值而非推導值。
+**部分更新**：只有請求中「有送」的欄位會被更新，**沒送的欄位維持資料庫原值不動**。
 **需要 JWT（admin / operator）**
 
-**Request Body**
+**Request Body**（只改 data_type 的例子；四個欄位都可省略，但至少要送一個）
 
 ```json
-{
-  "id": 1,
-  "channel": "K8CHS",
-  "device": "CHS",
-  "tag_groups": "2F.CHS",
-  "data_type": 8
-}
+{ "id": 1, "data_type": 8 }
 ```
 
-| 欄位 | 型別 | 預設 | 說明 |
+| 欄位 | 型別 | 必填 | 說明 |
 |------|------|------|------|
 | id | int | ✓ | 暫存表 `scada_tag_config.id` |
-| channel | string | `""` | 覆寫的 Channel 名稱；空字串會存成 **NULL**（清除覆寫、回到推導值） |
-| device | string | `""` | 覆寫的 Device 名稱；空字串同樣存成 **NULL**（清除覆寫） |
-| tag_groups | string | `""` | 覆寫的 Tag Groups 路徑；**空字串會被存成空字串（不是 NULL）**——見下方警語 |
-| data_type | int \| null | `null` | Kepware data_type enum；`null` 或省略會清除覆寫（回到預設 Float=8），有值則存整數 |
+| channel | string | | 覆寫的 Channel 名稱 |
+| device | string | | 覆寫的 Device 名稱 |
+| tag_groups | string | | 覆寫的 Tag Groups 路徑 |
+| data_type | int \| null | | Kepware data_type enum |
+
+**各欄位「沒送」與「送了空值」的語意對照**
+
+| 欄位 | 沒送 | 送空值 | 送有值 |
+|------|------|--------|--------|
+| channel | 不動 | `""` → 存 **NULL**（清除覆寫，回到推導值） | 存該值 |
+| device | 不動 | `""` → 存 **NULL**（清除覆寫，回到推導值） | 存該值 |
+| tag_groups | 不動 | `""` → 存**空字串**（**不是 NULL**），等於把該 tag 覆寫到 **device 根層級**（不在任何 group 之下），不是「不覆寫」 | 存該值 |
+| data_type | 不動 | `null` 或 `""` → 存 **NULL**（清除覆寫，回到預設 Float=8） | 存整數 |
+
+- `channel` / `device` / `tag_groups` 不接受 `null`（回 422）；`data_type` 傳非整數字串（如 `"abc"`）也回 422。
+  因此本端點**無法**把 `tag_groups` 還原成「未覆寫」(NULL)——送 `""` 代表根層級覆寫。
+- 網頁 UI（`saveAllKwOverrides`）每次送完整四欄，行為與改版前相同（四欄全送 = 整組寫入）。
 
 **Response 200**
 
@@ -626,25 +649,33 @@ curl -X POST http://localhost:9000/api/kw/derive \
 { "success": true }
 ```
 
-失敗（找不到該筆暫存資料）回 **404**：`{"detail": "找不到暫存列 id=999"}`
+| 狀況 | 回應 |
+|------|------|
+| 四個可更新欄位一個都沒送（例如只送 `{"id":5}`） | **400** `{"detail": "至少需提供一個要更新的欄位"}`（不查 DB、不改任何資料） |
+| 有送欄位但找不到該筆暫存資料 | **404** `{"detail": "找不到暫存列 id=999"}` |
+| 欄位型別不合（`channel: null`、`data_type: "abc"`） | **422** |
 
-> ⚠️ **這是整筆覆寫（full replace），不是只改單一欄位——四個欄位每次呼叫都會一起被設定**，
-> 語意務必先弄清楚再呼叫：
-> - `channel` / `device`：空字串 → 存 NULL（清除覆寫，回到推導值）
-> - `tag_groups`：**空字串會被存成空字串本身，不是 NULL**；而推導邏輯（`derive_kw_fields` /
->   `derive_scale_fields`）只要 `kw_tag_groups` 非 NULL 就會採用它，**因此空字串等於把該 tag
->   覆寫到 device 根層級（不在任何 group 之下）**，不是「不覆寫」
-> - `data_type`：`null`（或省略）→ 清除覆寫、回到預設 Float(8)；帶整數 → 存該型別
->
-> **後果**：呼叫端若只想改其中一個欄位（例如只想改 data_type，送
-> `{"id":5,"data_type":1}`），channel/device/tag_groups 會被一併帶成空字串／清空——
-> **等於連帶把該筆 tag_groups 覆寫成 device 根層級、並清除既有的 channel/device 覆寫**，
-> 不會停留在「原本的推導值」。
->
-> **正確用法**：呼叫前先用 `POST /api/kw/derive` 取得該筆目前實際生效的
-> `channel_name` / `device_name` / `tag_groups` / `data_type`（覆寫值優先、否則為推導值），
-> **四個欄位全部帶上目前值**，只改動想改的那個欄位再送出。網頁 UI（`saveAllKwOverrides`）
-> 正是這樣做的——每次都把 `kwDerive.data` 該列目前顯示的四個欄位整包送出。
+> 改版前這是「整筆覆寫」：只送 `{"id":5,"data_type":1}` 會把 channel/device 清空、tag_groups 洗成空字串
+> （＝根層級）。現已修正，直接呼叫 API 可以只送想改的欄位，不必再先查目前值、四欄全帶。
+
+**curl 範例**
+
+```bash
+# 只把 data_type 改成 1（Boolean），channel/device/tag_groups 維持原樣
+curl -X POST http://localhost:9000/api/pg/staging/kw-override \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"id":5,"data_type":1}'
+
+# 把 tag 覆寫到 device 根層級（tag_groups 送空字串；其他欄位不動）
+curl -X POST http://localhost:9000/api/pg/staging/kw-override \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"id":5,"tag_groups":""}'
+
+# 清除 data_type 覆寫（回到預設 Float=8）
+curl -X POST http://localhost:9000/api/pg/staging/kw-override \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"id":5,"data_type":null}'
+```
 
 **Kepware data_type enum 對照表**（`static/js/app.js` `KW_DATA_TYPES`）：
 
@@ -657,21 +688,6 @@ curl -X POST http://localhost:9000/api/kw/derive \
 | 5 | Word | 10 | String | 15 | QWord |
 
 實務上 9 成點位皆為 Float（8），因此後端 `KW_DATA_TYPE_DEFAULT = 8` 為未覆寫時的預設值。
-
-**curl 範例**（正確用法：四個欄位皆帶上目前值）
-
-```bash
-# 1. 先查目前實際生效的值
-curl -s -X POST http://localhost:9000/api/kw/derive \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"ids":[5],"tb_status":null}' | python3 -m json.tool
-# 假設回傳 channel_name=K8CHS, device_name=CHS, tag_groups=2F.CHS, data_type=8
-
-# 2. 只想把 data_type 改成 1（Boolean），channel/device/tag_groups 仍要帶目前值
-curl -X POST http://localhost:9000/api/pg/staging/kw-override \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"id":5,"channel":"K8CHS","device":"CHS","tag_groups":"2F.CHS","data_type":1}'
-```
 
 ---
 
@@ -872,6 +888,14 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
       "scale_enabled": true,
       "data_type": 8,
       "scale_error": null,
+      "site": "K8",
+      "zone": "A",
+      "route": {
+        "gateway_id": 1,
+        "gateway_name": "K8 廠區 GW",
+        "status": "ok",
+        "reason": "結構快取與棟別/園區對應表一致"
+      },
       "scaling_type": 1,
       "scaling_raw_low": 0.0,
       "scaling_raw_high": 4000.0,
@@ -907,6 +931,7 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 |------|------|
 | tag_groups / channel_name / device_name / full_tag_name | 與 `/api/kw/derive` 一致：若該筆在 Step 3 有手動覆寫（`kw_channel`/`kw_device`/`kw_tag_groups`），這裡套用的是**覆寫後**的路徑，確保 Step 3 建點路徑與 Step 5 設 Scale 的路徑一致（不會出現「點建在 A 路徑、Scale 卻設到推導出的 B 路徑」） |
 | data_type | Kepware tag 資料型別 enum（整數）。套用 Step 3 的覆寫值（`kw_data_type`），未覆寫則預設 8（Float），與 `/api/kw/derive` 的 `data_type` 邏輯一致 |
+| site / zone / route | 與 `/api/kw/derive` 相同：棟別、園區，以及 **Gateway 自動路由結果**（`{gateway_id, gateway_name, status, reason}`，status 含意見第 7 節「Gateway 自動路由」）。路由用的 channel 是套用 Step 3 覆寫後的 `channel_name`，所以同一筆在 Step 3 與 Step 5 的 `route` 一定一致 |
 | scaling_scaled_data_type | **固定回傳 8**，不受上面 `data_type` 覆寫影響——這是 Scale 換算後輸出值的型別，Kepware 固定用 Float 儲存縮放結果，與 tag 本身的原始型別是兩件事 |
 | scale_error | `null` 或字串。`scale_enabled=true` 但 `raw_low`/`raw_high`/`scaled_low`/`scaled_high` 任一缺值時，不會再靜默降級為「不設 Scale」，而是回傳此欄位說明缺哪些欄位；此時 `scaling_type` 仍是 0，但**不代表可以安全跳過**——執行時會被判定失敗（見下方執行端點） |
 | scale_enabled=false（falsy） | 這是既有正常設計，`scaling_type=0` 且 `scale_error=null`——執行時會被跳過（`skip`），不算錯誤 |
@@ -1537,6 +1562,100 @@ curl http://localhost:9000/api/io-mapping/download/ab12cd34 \
 ```json
 { "success": true, "channels": 5, "devices": 12, "groups": 34 }
 ```
+
+---
+
+### Gateway 自動路由（棟別/園區 → Gateway 對應表）
+
+由同一套 KIS 管理多台 Gateway 時，每筆點位該送哪一台由系統自動判斷（CSV 不需多一欄）。
+判斷依據有二，**兩者交叉檢查、不一致就擋下，絕不退回預設 Gateway**（那會靜默建錯地方）：
+
+1. **channel 名稱**：各 Gateway 的結構快取（`kepware_structure`，需先 `POST /api/kw/gateways/{id}/sync`）
+   知道某 channel 在哪台。
+2. **棟別/園區對應表**（`gateway_route_map`，由下方 `/api/kw/routes` 管理）：先查棟別（`site`），
+   查不到才查園區（`zone`）——site 比 zone 具體，優先。
+
+`POST /api/kw/derive` 與 `POST /api/pg/derive/scale` 的每筆結果都附帶 `route`
+（`{gateway_id, gateway_name, status, reason}`），`status` 如下：
+
+| status | 意義 | 可放行 | gateway_id |
+|--------|------|:------:|------------|
+| `single` | 系統**只有 1 台** Gateway，直接使用（不要求同步結構、不要求對應表，行為與多 Gateway 改版前一致） | ✓ | 該台 |
+| `ok` | channel（結構快取）與對應表指向**同一台** | ✓ | 該台 |
+| `channel_only` | 只有 channel 能判斷：棟別/園區未設定對應，未做交叉檢查 | ✓ | 結構快取那台 |
+| `map_only` | 只有對應表能判斷：channel 不在任何 Gateway 的結構快取（尚未同步，或 Kepware 上尚未建立該 channel） | ✓ | 對應表那台 |
+| `conflict` | channel 與對應表指向**不同台**（`reason` 寫明兩邊各是哪台） | ✗ | `null` |
+| `conflict_channel` | 同一 channel 同時存在於**多台** Gateway | ✗ | `null` |
+| `unrouted` | channel 與對應表都查不到 | ✗ | `null` |
+
+判斷順序：單台旁路 → `conflict_channel` → channel 恰 1 台時與對應表交叉檢查（`ok` / `conflict`）→
+`channel_only` → `map_only` → `unrouted`。比對皆為精確字串比對（先去除前後空白；空值視為「沒有」）。
+
+> **目前階段**：`route` 僅供預覽與檢查。`/api/kw/execute`、`/api/pg/execute/scale`、
+> `/api/kw/delete-batch` **尚未依 `route` 分流**，仍送往請求指定的那台 Gateway。
+
+---
+
+### GET /api/kw/routes
+
+列出對應表，並列出 `location_config` 中尚未被涵蓋的棟別/園區。**需要 JWT**（任何已登入角色）。
+
+**Response 200**
+
+```json
+{
+  "routes": [
+    { "id": 1, "match_type": "site", "match_value": "K18",
+      "gateway_id": 2, "gateway_name": "K18 廠區 GW" },
+    { "id": 2, "match_type": "zone", "match_value": "A",
+      "gateway_id": 1, "gateway_name": "K8 廠區 GW" }
+  ],
+  "unmapped_sites": ["K20"],
+  "unmapped_zones": ["B"]
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| routes | 依 `match_type`、`match_value` 排序；`match_type` 為 `site`（棟別）或 `zone`（園區） |
+| unmapped_sites | `location_config` 出現的棟別中，**自己沒有 site 對應、其 zone 也沒有 zone 對應**者（與實際路由一致；同一 site 有多列時採最前面那列的 zone，同推導邏輯） |
+| unmapped_zones | `location_config` 出現的園區中，**完全沒有 zone 對應**者（即使其下棟別已各自有 site 對應也會列出） |
+
+---
+
+### POST /api/kw/routes
+
+新增或更新一筆對應（upsert）：同 `match_type` + `match_value` 已存在則改指向新的 Gateway。**admin only**
+
+```json
+{ "match_type": "site", "match_value": "K18", "gateway_id": 2 }
+```
+
+| 欄位 | 型別 | 必填 | 說明 |
+|------|------|------|------|
+| match_type | string | ✓ | `site` 或 `zone` |
+| match_value | string | ✓ | 棟別或園區名稱（前後空白會去除；精確比對，區分大小寫） |
+| gateway_id | int | ✓ | 目標 Gateway（見 `GET /api/kw/gateways`） |
+
+**Response 200**：該筆對應（同 `routes[]` 的格式）
+
+```json
+{ "id": 1, "match_type": "site", "match_value": "K18", "gateway_id": 2, "gateway_name": "K18 廠區 GW" }
+```
+
+| 狀況 | 回應 |
+|------|------|
+| `match_type` 不是 `site`/`zone`、`match_value` 空白 | 400 |
+| `gateway_id` 不存在 | 404 `{"detail": "Gateway 不存在"}` |
+| 缺必填欄位 | 422 |
+| 非 admin | 403 |
+
+---
+
+### DELETE /api/kw/routes/{route_id}
+
+刪除一筆對應。**admin only**。成功回 `{"success": true}`；不存在回 404。
+（刪除 Gateway 時，指向它的對應會連帶刪除。）
 
 ---
 

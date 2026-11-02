@@ -10,7 +10,10 @@ from contextlib import contextmanager
 from typing import Optional
 
 import psycopg2
+import psycopg2.errors
 import psycopg2.extras
+
+from app.gateway_router import build_channel_index
 
 log = logging.getLogger("pg_client")
 
@@ -123,6 +126,16 @@ class PGClient:
                     tag_group VARCHAR(500),
                     synced_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(gateway_id, channel, device, tag_group)
+                );
+                CREATE TABLE IF NOT EXISTS gateway_route_map (
+                    id SERIAL PRIMARY KEY,
+                    match_type VARCHAR(10) NOT NULL
+                        CHECK (match_type IN ('site', 'zone')),
+                    match_value VARCHAR(255) NOT NULL,
+                    gateway_id INTEGER NOT NULL
+                        REFERENCES kepware_gateway(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(match_type, match_value)
                 );
             """)
 
@@ -720,6 +733,97 @@ class PGClient:
                 row = cur.fetchone()
                 return row[0] if row and row[0] else None
 
+    # ── Gateway 自動路由：對應表 + 輔助查詢 ───────────────
+
+    _ROUTE_MATCH_TYPES = ("site", "zone")
+
+    def list_gateway_routes(self) -> list:
+        """列出「棟別/園區 → Gateway」對應表（含 gateway_name）"""
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT r.id, r.match_type, r.match_value, r.gateway_id,
+                           g.name AS gateway_name
+                    FROM gateway_route_map r
+                    JOIN kepware_gateway g ON g.id = r.gateway_id
+                    ORDER BY r.match_type, r.match_value, r.id
+                """)
+                return [dict(r) for r in cur.fetchall()]
+
+    def upsert_gateway_route(self, match_type: str, match_value: str,
+                             gateway_id: int) -> dict:
+        """新增或更新一筆對應；同 (match_type, match_value) 已存在則改指向新的 gateway_id。
+        match_type 非 site/zone 或 match_value 為空 → ValueError；
+        gateway_id 不存在 → ValueError。回傳含 gateway_name 的該筆資料。"""
+        if match_type not in self._ROUTE_MATCH_TYPES:
+            raise ValueError("match_type 必須是 site 或 zone")
+        match_value = (match_value or "").strip()
+        if not match_value:
+            raise ValueError("match_value 不可為空")
+        try:
+            with self._get_conn() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("""
+                        WITH up AS (
+                            INSERT INTO gateway_route_map (match_type, match_value, gateway_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (match_type, match_value)
+                            DO UPDATE SET gateway_id = EXCLUDED.gateway_id
+                            RETURNING id, match_type, match_value, gateway_id
+                        )
+                        SELECT up.id, up.match_type, up.match_value, up.gateway_id,
+                               g.name AS gateway_name
+                        FROM up JOIN kepware_gateway g ON g.id = up.gateway_id
+                    """, (match_type, match_value, gateway_id))
+                    return dict(cur.fetchone())
+        except psycopg2.errors.ForeignKeyViolation:
+            raise ValueError(f"Gateway ID={gateway_id} 不存在")
+
+    def delete_gateway_route(self, route_id: int) -> bool:
+        """刪除一筆對應；不存在回 False"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM gateway_route_map WHERE id = %s", (route_id,))
+                return cur.rowcount > 0
+
+    def get_route_maps(self) -> tuple:
+        """回傳 (site_map, zone_map)，各為 {match_value: gateway_id}"""
+        site_map: dict = {}
+        zone_map: dict = {}
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT match_type, match_value, gateway_id FROM gateway_route_map")
+                for match_type, match_value, gateway_id in cur.fetchall():
+                    (site_map if match_type == "site" else zone_map)[match_value] = gateway_id
+        return site_map, zone_map
+
+    def get_channel_index(self) -> dict:
+        """所有 Gateway 的 channel 索引 {channel: [gateway_id, ...]}。
+        單一 SQL 一次取回（不可每台 Gateway 各查一次）。"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT channel, gateway_id
+                    FROM kepware_structure
+                    ORDER BY channel, gateway_id
+                """)
+                return build_channel_index(cur.fetchall())
+
+    def count_gateways(self) -> int:
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM kepware_gateway")
+                return cur.fetchone()[0]
+
+    def get_only_gateway_id(self):
+        """系統恰好只有 1 台 Gateway 時回傳該台 id，否則（0 台或多台）回 None"""
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*), MIN(id) FROM kepware_gateway")
+                count, min_id = cur.fetchone()
+                return min_id if count == 1 else None
+
     # ── 操作日誌 (activity_log) ──────────────────────────
 
     def add_activity_log(self, username: str, action: str,
@@ -1166,6 +1270,9 @@ class PGClient:
                 "profile_exists": base["profile_exists"],
                 "data_type": _resolve_kw_data_type(row),
                 "overridden": overridden,
+                # Gateway 自動路由的依據（棟別/園區）；缺值為空字串
+                "site": base["site"],
+                "zone": base["zone"],
             })
         return results
 
@@ -1191,6 +1298,55 @@ class PGClient:
                      tag_groups if tag_groups is not None else None,
                      dt,
                      staging_id),
+                )
+                return cur.rowcount > 0
+
+    # kw-override 部分更新：欄位名稱 → 暫存表欄位
+    _KW_OVERRIDE_COLUMNS = {
+        "channel": "kw_channel",
+        "device": "kw_device",
+        "tag_groups": "kw_tag_groups",
+        "data_type": "kw_data_type",
+    }
+
+    def patch_kw_overrides(self, staging_id: int, fields: dict) -> bool:
+        """部分更新 Step 3 手動覆寫：只對 fields 內有的鍵產生 SET 子句，沒給的欄位維持原值。
+        有給的欄位語意與 update_kw_overrides 相同：
+          channel / device：空字串或 None → NULL（清除覆寫、回到推導值）
+          tag_groups：空字串存空字串（= device 根層級覆寫，不是 NULL）；只有 None 才存 NULL
+          data_type：None 或空字串 → NULL（清除覆寫、回到預設 Float(8)），其餘轉整數
+        fields 為空或含未知鍵 → ValueError。暫存列不存在回 False。"""
+        if not fields:
+            raise ValueError("至少需提供一個要更新的欄位")
+        unknown = set(fields) - set(self._KW_OVERRIDE_COLUMNS)
+        if unknown:
+            raise ValueError(f"不支援的欄位: {', '.join(sorted(unknown))}")
+
+        set_parts = []
+        params = []
+        for key, column in self._KW_OVERRIDE_COLUMNS.items():
+            if key not in fields:
+                continue
+            value = fields[key]
+            if key in ("channel", "device"):
+                value = value or None
+            elif key == "data_type":
+                dt = None
+                if value not in (None, ""):
+                    try:
+                        dt = int(value)
+                    except (TypeError, ValueError):
+                        dt = None
+                value = dt
+            # tag_groups 原樣存入：空字串 = device 根層級覆寫（不是 NULL），None 才存 NULL
+            set_parts.append(f"{column} = %s")
+            params.append(value)
+        params.append(staging_id)
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE scada_tag_config SET {', '.join(set_parts)} WHERE id = %s",
+                    params,
                 )
                 return cur.rowcount > 0
 
@@ -1295,6 +1451,9 @@ class PGClient:
                 "scaling_type": scaling_type,
                 "data_type": _resolve_kw_data_type(row),
                 "scale_error": scale_error,
+                # Gateway 自動路由的依據（棟別/園區）；缺值為空字串
+                "site": base["site"],
+                "zone": base["zone"],
             }
             if scaling_type == 1:
                 entry.update({
@@ -1315,7 +1474,8 @@ class PGClient:
 def _derive_base_fields(row: dict, devices_cache: dict,
                         profiles_cache: dict, locations: list) -> dict:
     """共用推導邏輯，回傳 site_prefix/floor/system/driver_type/nodename/
-    tb_type/channel_name/device_name/tag_groups/address/profile_exists/tabname/matched_loc。
+    tb_type/channel_name/device_name/tag_groups/address/profile_exists/tabname/matched_loc，
+    以及供 Gateway 路由用的 site（strip 後的暫存列 site）/ zone（location_config 比對結果，缺值為空字串）。
     若 tag_name 為空回傳 None。
     """
     tag_name = row.get("tag_name", "")
@@ -1343,6 +1503,8 @@ def _derive_base_fields(row: dict, devices_cache: dict,
         nodename = site_prefix + system
 
     matched_loc = next((l for l in locations if l["site"] == site_val), None)
+    # 供 Gateway 自動路由使用的 site / zone（缺值給空字串；IFIX 分支內另有自己的 zone 處理，維持不變）
+    out_zone = (matched_loc["zone"] if matched_loc else "") or ""
 
     csv_profile = (row.get("device_profile") or "").strip()
     if csv_profile:
@@ -1383,6 +1545,8 @@ def _derive_base_fields(row: dict, devices_cache: dict,
         "profile_exists": profile_exists,
         "tabname": tabname,
         "matched_loc": matched_loc,
+        "site": site_val,
+        "zone": out_zone,
     }
 
 

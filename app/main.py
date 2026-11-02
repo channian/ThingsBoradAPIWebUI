@@ -29,12 +29,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.task_manager import TaskManager
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
 from app.kw_gw_client import KepwareGatewayClient
+from app.gateway_router import resolve_gateway, find_unmapped, localize_reason
 from app.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, require_role, VALID_ROLES,
@@ -425,11 +426,21 @@ class StagingQueryRequest(BaseModel):
 
 
 class KwOverrideRequest(BaseModel):
+    """Step 3 手動覆寫（部分更新）：只有請求中「有送」的欄位會被更新，沒送的欄位維持資料庫原值。
+    下列預設值只用於讓欄位可省略，是否更新一律看 model_fields_set，不看值。"""
     id: int
     channel: str = ""
     device: str = ""
     tag_groups: str = ""
     data_type: Optional[int] = None
+
+    @field_validator("data_type", mode="before")
+    @classmethod
+    def _blank_data_type_is_none(cls, v):
+        # 空字串 / 純空白視同 null（清除覆寫），與 PGClient.update_kw_overrides 的語意一致
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class TagCondition(BaseModel):
@@ -579,6 +590,12 @@ class GatewayUpdateRequest(BaseModel):
     verify_ssl: Optional[bool] = None
     zone: Optional[str] = None
     is_default: Optional[bool] = None
+
+
+class GatewayRouteRequest(BaseModel):
+    match_type: str          # "site"（棟別）或 "zone"（園區）
+    match_value: str
+    gateway_id: int
 
 
 class UserLoginRequest(BaseModel):
@@ -1043,6 +1060,95 @@ async def kw_get_structure(gw_id: int, user: dict = Depends(get_current_user)):
     }
 
 
+# ── API: Gateway 自動路由（棟別/園區 → Gateway 對應表）──────
+
+def _load_route_context() -> dict:
+    """載入路由判斷所需的全部資料（結構快取 channel 索引、對應表、Gateway 清單）。
+    每個請求只在開頭呼叫一次，之後逐列判斷（_route_for）純記憶體運算、不再查 DB。"""
+    site_map, zone_map = pg_client.get_route_maps()
+    return {
+        "channel_index": pg_client.get_channel_index(),
+        "site_map": site_map,
+        "zone_map": zone_map,
+        # 系統只有 1 台 Gateway → 一律走單台旁路（行為與多 Gateway 改版前一致）
+        "only_gateway_id": pg_client.get_only_gateway_id(),
+        "names": {g["id"]: g["name"] for g in pg_client.get_gateways()},
+    }
+
+
+def _route_for(item: dict, ctx: dict) -> dict:
+    """依 derive 結果列（需含 channel_name / site / zone）判斷該送哪台 Gateway，
+    回傳可直接放進 API 回應的 dict；reason 中的 Gateway id 已換成名稱。"""
+    res = resolve_gateway(
+        item.get("channel_name"), item.get("site"), item.get("zone"),
+        ctx["channel_index"], ctx["site_map"], ctx["zone_map"],
+        ctx["only_gateway_id"],
+    )
+    return {
+        "gateway_id": res.gateway_id,
+        "gateway_name": ctx["names"].get(res.gateway_id),
+        "status": res.status,
+        "reason": localize_reason(res.reason, ctx["names"]),
+    }
+
+
+@app.get("/api/kw/routes")
+async def kw_list_routes(user: dict = Depends(get_current_user)):
+    """列出「棟別/園區 → Gateway」對應表，並列出 location_config 中尚未被涵蓋的棟別/園區"""
+    try:
+        routes = pg_client.list_gateway_routes()
+        site_map = {r["match_value"]: r["gateway_id"]
+                    for r in routes if r["match_type"] == "site"}
+        zone_map = {r["match_value"]: r["gateway_id"]
+                    for r in routes if r["match_type"] == "zone"}
+        unmapped_sites, unmapped_zones = find_unmapped(
+            pg_client.get_locations(), site_map, zone_map)
+        return {
+            "routes": routes,
+            "unmapped_sites": unmapped_sites,
+            "unmapped_zones": unmapped_zones,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查詢 Gateway 對應表失敗: {e}")
+
+
+@app.post("/api/kw/routes")
+async def kw_upsert_route(req: GatewayRouteRequest, request: Request,
+                          user: dict = Depends(require_admin)):
+    """新增或更新一筆對應（同 match_type + match_value 已存在則改指向新的 Gateway）"""
+    try:
+        if not pg_client.get_gateway(req.gateway_id):
+            raise HTTPException(status_code=404, detail="Gateway 不存在")
+        route = pg_client.upsert_gateway_route(
+            req.match_type, req.match_value, req.gateway_id)
+        _log_activity(request, user, "upsert_gateway_route",
+                      f"設定 Gateway 對應: {route['match_type']}={route['match_value']}"
+                      f" → Gateway '{route['gateway_name']}' (ID={route['gateway_id']})")
+        return route
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"設定 Gateway 對應失敗: {e}")
+
+
+@app.delete("/api/kw/routes/{route_id}")
+async def kw_delete_route(route_id: int, request: Request,
+                          user: dict = Depends(require_admin)):
+    """刪除一筆對應"""
+    try:
+        ok = pg_client.delete_gateway_route(route_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="對應不存在")
+        _log_activity(request, user, "delete_gateway_route", f"刪除 Gateway 對應 ID={route_id}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除 Gateway 對應失敗: {e}")
+
+
 @app.post("/api/kw/delete-batch")
 async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
                           user: dict = Depends(require_role("admin", "operator"))):
@@ -1295,9 +1401,16 @@ async def pg_staging_query(req: StagingQueryRequest,
 @app.post("/api/pg/staging/kw-override")
 async def pg_staging_kw_override(req: KwOverrideRequest,
                                   user: dict = Depends(require_role("admin", "operator"))):
-    """儲存 Step 3 手動覆寫的 channel / device / tag_groups"""
+    """儲存 Step 3 手動覆寫的 channel / device / tag_groups / data_type（部分更新）。
+    只更新請求中「有送」的欄位，沒送的欄位維持資料庫原值；有送的欄位語意不變
+    （channel/device 空字串 → NULL；tag_groups 空字串 → 空字串＝根層級覆寫；data_type null/空 → NULL）。"""
     try:
-        ok = pg_client.update_kw_overrides(req.id, req.channel, req.device, req.tag_groups, req.data_type)
+        fields = {k: getattr(req, k)
+                  for k in ("channel", "device", "tag_groups", "data_type")
+                  if k in req.model_fields_set}
+        if not fields:
+            raise HTTPException(status_code=400, detail="至少需提供一個要更新的欄位")
+        ok = pg_client.patch_kw_overrides(req.id, fields)
         if not ok:
             raise HTTPException(status_code=404, detail=f"找不到暫存列 id={req.id}")
         return {"success": True}
@@ -1512,6 +1625,12 @@ async def kw_derive(req: DeriveRequest,
             rows = [r for r in rows if r["id"] in req.ids]
         results = pg_client.derive_kw_fields(rows)
 
+        # 自動路由預覽：不論請求是否帶 gateway_id 都回傳 route（資料於此處一次取齊）
+        route_ctx = _load_route_context()
+        for item in results:
+            item["route"] = _route_for(item, route_ctx)
+
+        # validation 仍針對請求指定的 gateway_id，與 route 無關
         if req.gateway_id:
             structure = pg_client.get_structure(req.gateway_id)
             for item in results:
@@ -1832,6 +1951,9 @@ async def pg_derive_scale(req: DeriveScaleRequest,
         if req.ids:
             rows = [r for r in rows if r["id"] in req.ids]
         results = pg_client.derive_scale_fields(rows)
+        route_ctx = _load_route_context()
+        for item in results:
+            item["route"] = _route_for(item, route_ctx)
         # 尚未在 Kepware 建點（tb_status != done）的筆數：Scale 是 PUT（更新語意），
         # 該 tag 若在 Kepware 不存在必然失敗；此處只提示、不阻擋
         # （合法用法：Kepware 上已手動建好點位，只想補設定）。
