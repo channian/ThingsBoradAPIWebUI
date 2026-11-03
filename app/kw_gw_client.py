@@ -185,6 +185,22 @@ class KepwareGatewayClient:
 
     # ── Tag CRUD ──
 
+    def get_tag(self, channel_name: str, device_name: str,
+                tag_name: str, tag_group: str = None) -> dict:
+        """讀取單一 Tag 定義（唯讀）。
+
+        GET /api/config/channels/{channel}/devices/{device}/tags/{tag}?tag_group=...
+        tag_group 為點分隔的群組路徑（如 "2F.CHS"），沒有群組就不帶。
+        回應內容格式（欄位名稱）以 Gateway 實際回傳為準，這裡原樣回傳 JSON。
+        路徑各段先做 URL 編碼，避免名稱含空白或特殊字元。"""
+        from urllib.parse import quote
+        path = (f"/api/config/channels/{quote(channel_name, safe='')}"
+                f"/devices/{quote(device_name, safe='')}"
+                f"/tags/{quote(tag_name, safe='')}")
+        resp = self._request("GET", path, params={"tag_group": tag_group} if tag_group else None)
+        resp.raise_for_status()
+        return resp.json()
+
     def create_tag(self, channel_name: str, device_name: str,
                    tag_name: str, address: str = None,
                    data_type: int = 0, description: str = None,
