@@ -2,7 +2,7 @@
 """
 安全鎖模組：限制單次批次作業的點數，以及單一 Gateway 的任務佇列深度。
 
-背景：Step 3 建點 / Step 5 Scale / 批次刪除都是對 Kepware 的大量寫入，
+背景：Step 3 建點 / Step 5 Scale / 批次刪除 / data_type 校正都是對 Kepware 的大量讀寫，
 為避免誤操作一次送出過大的批次，在啟動背景任務「之前」先做上限檢查。
 
 設計原則
@@ -73,7 +73,7 @@ class SafetyLimits:
     """各項安全上限（不可變）。
 
     欄位：
-        kw_execute_max: Step 3 Kepware 建點，單次最多點數。
+        kw_execute_max: Step 3 Kepware 建點，單次最多點數（data_type 檢查／校正共用此上限）。
         scale_max: Step 5 Kepware Scale 設定，單次最多點數。
         delete_max: Kepware 批次刪除，單次最多點數。
         queue_max_per_gateway: 單一 Gateway 同時允許的「排隊中＋執行中」任務數。
@@ -155,6 +155,8 @@ OPERATIONS: dict[str, OperationSpec] = {
     "kw_execute": OperationSpec("Kepware 建點", _FIELD_ENV_VARS["kw_execute_max"], "kw_execute_max"),
     "scale": OperationSpec("Kepware Scale 設定", _FIELD_ENV_VARS["scale_max"], "scale_max"),
     "delete": OperationSpec("Kepware 批次刪除", _FIELD_ENV_VARS["delete_max"], "delete_max"),
+    # data_type 檢查／校正：沿用建點的上限與環境變數（同樣是逐筆打 Kepware 的批次，不另設新上限）
+    "datatype": OperationSpec("Kepware 資料型態校正", _FIELD_ENV_VARS["kw_execute_max"], "kw_execute_max"),
 }
 
 
@@ -190,7 +192,7 @@ def check_batch_size(operation: str, count: int, limits: SafetyLimits | None = N
     """檢查單次批次的點數是否在該操作的上限內。
 
     參數：
-        operation: 操作代號，必須是 OPERATIONS 的鍵（"kw_execute" / "scale" / "delete"）。
+        operation: 操作代號，必須是 OPERATIONS 的鍵（"kw_execute" / "scale" / "delete" / "datatype"）。
         count: 本次批次要處理的點數。
         limits: 上限設定；省略時使用 get_limits()。
 

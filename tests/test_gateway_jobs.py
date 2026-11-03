@@ -273,6 +273,139 @@ def test_errors_get_gateway_field_without_mutating_worker_dicts():
     assert "gateway" not in plain                # 不改動 worker 傳回的原物件
 
 
+# ── details（worker 選填的顯示用清單）────────────────────
+
+def details_worker(details):
+    """回傳固定 details 的 worker（其餘欄位用 ok_worker 的）。"""
+    def worker(view, part):
+        summary = ok_worker(view, part)
+        summary["details"] = details
+        return summary
+    return worker
+
+
+def test_details_default_to_empty_list_when_no_worker_gives_any():
+    q = GatewayQueue()
+    task = make_task()
+    finish(launch(task, [make_part("甲"), make_part("乙", gid=2)], ok_worker, q))
+    assert task.summary["details"] == []
+
+
+def test_details_are_kept_and_get_the_gateway_name_without_mutating_the_original():
+    q = GatewayQueue()
+    task = make_task()
+    original = {"tag_name": "T1", "actual": 0, "expected": 8}
+    worker_details = [original]
+    finish(launch(task, [make_part("甲", gid=1)], details_worker(worker_details), q))
+    assert task.summary["details"] == [{"tag_name": "T1", "actual": 0, "expected": 8, "gateway": "甲"}]
+    assert original == {"tag_name": "T1", "actual": 0, "expected": 8}, "不改動 worker 傳回的原物件"
+    assert worker_details == [original]
+
+
+def test_details_keep_an_existing_gateway_field():
+    q = GatewayQueue()
+    task = make_task()
+    finish(launch(task, [make_part("甲")], details_worker(
+        [{"tag_name": "T1", "gateway": "自訂"}, {"tag_name": "T2"}]), q))
+    assert task.summary["details"] == [{"tag_name": "T1", "gateway": "自訂"},
+                                       {"tag_name": "T2", "gateway": "甲"}]
+
+
+def test_details_of_several_gateways_are_concatenated_in_part_order_not_finish_order():
+    """乙先結束、甲後結束，總摘要的 details 仍是甲在前、乙在後（與 gateways / errors 的順序一致）。"""
+    q = GatewayQueue()
+    task = make_task()
+    b_done = threading.Event()
+
+    def worker(view, part):
+        if part.name == "甲":
+            must(b_done, "乙先結束")
+            return {"total": 2, "success": 2, "fail": 0, "skip": 0, "errors": [],
+                    "details": [{"tag_name": "a1"}, {"tag_name": "a2"}]}
+        summary = {"total": 1, "success": 1, "fail": 0, "skip": 0, "errors": [],
+                   "details": [{"tag_name": "b1"}]}
+        b_done.set()
+        return summary
+
+    finish(launch(task, [make_part("甲", n=2, gid=1), make_part("乙", n=1, gid=2)], worker, q))
+    assert task.summary["details"] == [
+        {"tag_name": "a1", "gateway": "甲"}, {"tag_name": "a2", "gateway": "甲"},
+        {"tag_name": "b1", "gateway": "乙"},
+    ]
+
+
+@pytest.mark.parametrize("bad", [None, "abc", {"tag_name": "T1"}, 5, ("x",), True])
+def test_details_that_is_not_a_list_is_treated_as_empty(bad):
+    q = GatewayQueue()
+    task = make_task()
+    finish(launch(task, [make_part("甲")], details_worker(bad), q))
+    assert task.summary["details"] == []
+    assert task.summary["gateways"][0]["state"] == "done", "details 型別怪異不可讓 part 失敗"
+
+
+def test_details_keeps_only_dict_elements_in_order():
+    q = GatewayQueue()
+    task = make_task()
+    finish(launch(task, [make_part("甲")], details_worker(
+        [1, "x", None, {"a": 1}, [2], {"b": 2}, ("c",)]), q))
+    assert task.summary["details"] == [{"a": 1, "gateway": "甲"}, {"b": 2, "gateway": "甲"}]
+
+
+def test_failed_and_queue_cancelled_parts_contribute_no_details():
+    q = GatewayQueue()
+    q.enqueue_many(["gw:2"], "blocker")           # 乙這台被別人佔住 → 取消時還在排隊
+    task = make_task()
+    b_waiting = threading.Event()
+
+    def worker(view, part):
+        if part.name == "甲":
+            b_waiting.wait(TIMEOUT)
+            raise RuntimeError("boom")
+        return details_worker([{"tag_name": "never"}])(view, part)
+
+    done = launch(task, [make_part("甲", key="gw:1"), make_part("乙", key="gw:2")], worker, q)
+    wait_for(lambda: task.gateways[0]["state"] == "running", "甲開始執行")
+    task.cancelled = True
+    q.wake()
+    wait_for(lambda: task.gateways[1]["state"] == "cancelled", "乙的排隊項目被取消")
+    b_waiting.set()
+    finish(done)
+    assert [g["state"] for g in task.summary["gateways"]] == ["failed", "cancelled"]
+    assert task.summary["details"] == []
+
+
+def test_details_do_not_change_the_meaning_of_the_existing_summary_fields():
+    q = GatewayQueue()
+    task = make_task()
+    blocked = [{"name": "X", "reason": "r"}]
+    finish(launch(task, [make_part("甲", n=2, gid=1)], details_worker([{"tag_name": "T1"}]), q,
+                  blocked=blocked))
+    s = task.summary
+    assert set(s) == {"total", "success", "fail", "skip", "errors", "cancelled", "cancelled_remaining",
+                      "gateways", "blocked", "details"}
+    assert (s["total"], s["success"], s["fail"], s["skip"]) == (3, 2, 1, 0)
+    assert s["blocked"] == 1 and s["cancelled"] is False and s["cancelled_remaining"] == 0
+    assert s["errors"] == [{"name": "X", "reason": "r", "gateway": None}]
+    assert s["gateways"] == [{"gateway_id": 1, "name": "甲", "state": "done",
+                              "total": 2, "success": 2, "fail": 0, "skip": 0}]
+    assert not any("details" in g for g in s["gateways"]), "details 只放在總摘要，不進每台的明細"
+
+
+def test_details_in_complete_event_and_for_jobs_without_parts():
+    q = GatewayQueue()
+    task = make_task()
+    finish(launch(task, [make_part("甲")], details_worker([{"tag_name": "T1"}]), q))
+    events = []
+    while not task.events.empty():
+        events.append(task.events.get_nowait())
+    complete = [e for e in events if e["type"] == "complete"]
+    assert len(complete) == 1 and complete[0]["details"] == [{"tag_name": "T1", "gateway": "甲"}]
+
+    empty = make_task("t2")
+    run_job(empty, [], lambda v, p: pytest.fail("不該被呼叫"), q, blocked=[{"name": "X", "reason": "r"}])
+    assert empty.summary["details"] == []
+
+
 def test_same_gateway_two_jobs_run_strictly_in_order():
     q = GatewayQueue()
     t1, t2 = make_task("t1"), make_task("t2")

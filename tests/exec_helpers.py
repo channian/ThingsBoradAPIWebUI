@@ -118,6 +118,10 @@ def post_delete(api_client, headers, upload_id, **body):
     return api_client.post("/api/kw/delete-batch", json=payload, headers=headers)
 
 
+def post_datatype(api_client, headers, **body):
+    return api_client.post("/api/kw/datatype-check", json=fast_body(**body), headers=headers)
+
+
 def get_task(api_client, headers, task_id):
     resp = api_client.get(f"/api/tasks/{task_id}", headers=headers)
     assert resp.status_code == 200, resp.text

@@ -177,13 +177,17 @@ class _Job:
         n = len(part.items)
         reason = str(exc) or type(exc).__name__
         return {"total": n, "success": 0, "fail": n, "skip": 0,
-                "errors": [{"name": part.name, "reason": reason}], "cancelled_remaining": 0}
+                "errors": [{"name": part.name, "reason": reason}], "cancelled_remaining": 0,
+                "details": []}
 
     @staticmethod
     def _normalize(part: PartSpec, raw) -> dict:
         """把 worker 回傳的摘要整理成固定欄位；不是 dict 或數值無法轉整數就拋例外（視為 worker 失敗）。"""
         if not isinstance(raw, dict):
             raise TypeError(f"worker 必須回傳摘要 dict，實際回傳 {type(raw).__name__}")
+        # details（選填）：worker 附給前端顯示的任意資料（如 data_type 檢查找出的需校正清單）。
+        # 不是 list 視為沒有；list 內只保留 dict 元素（其他型別無法補 gateway 欄位，也沒有意義）
+        details = raw.get("details")
         return {
             "total": _int_of(raw, "total", len(part.items)),
             "success": _int_of(raw, "success", 0),
@@ -191,6 +195,7 @@ class _Job:
             "skip": _int_of(raw, "skip", 0),
             "errors": list(raw.get("errors") or []),
             "cancelled_remaining": _int_of(raw, "cancelled_remaining", 0),
+            "details": [d for d in details if isinstance(d, dict)] if isinstance(details, list) else [],
         }
 
     def _execute(self, index: int):
@@ -213,7 +218,7 @@ class _Job:
                 log.warning("作業 %s 不在 %s 的佇列中，略過 Gateway %s", task.id, part.key, part.name)
                 self.log(part, "warning", "不在佇列中，未執行")
             return STATE_CANCELLED, {"total": n, "success": 0, "fail": 0, "skip": 0,
-                                     "errors": [], "cancelled_remaining": n}
+                                     "errors": [], "cancelled_remaining": n, "details": []}
 
         self._mark_running(index)
         try:
@@ -261,6 +266,7 @@ class _Job:
     def build_summary(self) -> dict:
         nb = len(self.blocked)
         errors: list = []
+        details: list = []
         gateways: list = []
         total = success = fail = skip = remaining = 0
         for part, entry, res in zip(self.parts, self.entries, self.results):
@@ -276,6 +282,10 @@ class _Job:
                 else:
                     err = {"name": str(err), "reason": "", "gateway": part.name}
                 errors.append(err)
+            for d in res["details"]:
+                d = dict(d)                                   # 不改動 worker 傳回的原物件
+                d.setdefault("gateway", part.name)
+                details.append(d)
             gateways.append({"gateway_id": part.gateway_id, "name": part.name,
                              "state": entry["state"], "total": res["total"],
                              "success": res["success"], "fail": res["fail"], "skip": res["skip"]})
@@ -291,6 +301,7 @@ class _Job:
             "cancelled_remaining": remaining,
             "gateways": gateways,
             "blocked": nb,
+            "details": details,
         }
 
     def complete(self) -> None:
@@ -323,7 +334,9 @@ def run_job(task: Task, parts: list, worker: Callable, queue: GatewayQueue,
         parts: 每台 Gateway 一個 PartSpec；key 不可重複（否則同一個 job 的兩個 part 會共用
             同一個佇列項目而同時執行，破壞「同一台序列」）→ ValueError。
         worker: ``worker(view: PartView, part: PartSpec) -> dict``，回傳該台摘要
-            ``{"total","success","fail","skip","errors":[...], "cancelled_remaining"(選填)}``；
+            ``{"total","success","fail","skip","errors":[...], "cancelled_remaining"(選填),
+            "details"(選填)}``；details 是給前端顯示的 dict 清單（如需校正的點位），總摘要的
+            details 為各台依序串接、每筆缺 ``gateway`` 欄位時補上該台名稱。
             丟例外 → 該台全數記為失敗，其他台不受影響。不得自行 push_complete。
         queue: 呼叫端**已事先**對 parts 的所有 key 執行過 ``enqueue_many(keys, task.id, ...)``。
         blocked: 無法路由而被擋下的列 ``[{"name","reason"}]``；不開 part、不排隊，
@@ -332,7 +345,7 @@ def run_job(task: Task, parts: list, worker: Callable, queue: GatewayQueue,
 
     parts 與 blocked 皆為空，或只有 blocked：不開執行緒，直接同步 push_complete。
     總摘要欄位見 _Job.build_summary（保留舊有的 total/success/fail/skip/errors，
-    因此只讀這四個數字的 _append_history 不受影響）。
+    因此只讀這四個數字的 _append_history 不受影響；details 是後來新增的欄位，沒有就是 []）。
     """
     parts = list(parts or [])
     keys = [p.key for p in parts]

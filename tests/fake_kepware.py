@@ -25,10 +25,23 @@ Step 5 (`/api/pg/execute/scale`) 與批次刪除 (`/api/kw/delete-batch`) 的
     gate.open()              # 放行；之後的呼叫不再卡住
 測試一定要在 finally 裡 gate.open()，否則背景執行緒會一直卡到逾時。
 
+data_type 檢查／校正（`/api/kw/datatype-check`）用的「Kepware 上的 Tag 資料表」：
+    state.set_remote_tag("CH1", "DEV1", "2F.CHS", "T1", data_type=0)      # 預設回應含 name / data_type / scaling_type / address
+    state.set_remote_tag("CH1", "DEV1", "2F.CHS", "T2", payload={"name": "T2"})   # 完全自訂回應（例如缺 data_type 欄位）
+    state.queue_get_tag_error("T3", http_error(500))                      # 注入 GET 失敗（404 / 429 / 500...）；佇列中的 None＝這次放行
+                                                                          # （例：queue_get_tag_error("T3", None, http_error(500))＝第一次讀成功、第二次讀失敗）
+    state.queue_set_data_type_error("T1", http_error(429, retry_after=1)) # 注入 PUT 失敗
+    state.put_applies_data_type = False        # PUT「成功」但沒真的改 data_type（測讀回不符）
+    state.put_side_effects = {"scaling_type": 1}   # PUT 順便動到其他欄位（測斷路器）
+    state.put_hook = lambda remote, call, n: ...  # 更細的副作用：remote 為該 Tag 的回應 dict，call 為這次 PUT 的記錄，n 為全域第幾次 PUT（從 1 起算）
+    state.get_tag_calls / state.set_tag_data_type_calls / state.events（依序的 ("GET"|"PUT", tag_name)）記錄所有呼叫；
+    get_tag 回傳深拷貝（寫入前後的兩份回應才不會是同一個物件）；Tag 不在資料表 → 404。
+
 背景任務在獨立執行緒呼叫這裡的方法，因此所有記錄操作都用 threading.Lock 保護，
 確保 thread-safe（雖然 CPython 的 list.append 本身是原子操作，但「先查詢佇列、
 再 pop 再 raise」這種複合操作不是原子的，仍需要鎖）。
 """
+import copy
 import threading
 import time
 
@@ -116,11 +129,21 @@ class FakeKepwareState:
         self._scaling_errors = {}
         self._delete_tag_errors = {}
         self._gates = {}
+        # data_type 檢查／校正用
+        self.get_tag_calls = []
+        self.set_tag_data_type_calls = []
+        self.events = []                      # 依序的 ("GET"|"PUT", tag_name)，驗證「先讀再寫」的順序
+        self.remote_tags = {}                 # (channel, device, group, tag) -> 回應 dict
+        self._get_tag_errors = {}
+        self._set_data_type_errors = {}
+        self.put_applies_data_type = True     # False＝PUT 成功但不改 data_type
+        self.put_side_effects = {}            # PUT 時順便寫進該 Tag 回應的其他欄位
+        self.put_hook = None                  # put_hook(remote_dict, call_dict, n)：更細的副作用
 
     # ── 卡住呼叫（製造「執行中」）──
 
     def add_gate(self, method, tag_name=None, hold_timeout=10.0):
-        """卡住 method（login / create_tag / set_tag_scaling / delete_tag）的呼叫。
+        """卡住 method（login / create_tag / set_tag_scaling / delete_tag / get_tag / set_tag_data_type）的呼叫。
         tag_name 為 None＝任何 tag 都卡（login 只能用 None）；set_tag_scaling 的 tag_name
         是 Kepware 全名（含 tag group，例如 "2F.CHS.STEP5_A"）。回傳 CallGate。"""
         gate = CallGate(hold_timeout)
@@ -155,6 +178,39 @@ class FakeKepwareState:
     def queue_delete_tag_error(self, tag_name, *errors):
         with self._lock:
             self._delete_tag_errors.setdefault(tag_name, []).extend(errors)
+
+    def queue_get_tag_error(self, tag_name, *errors):
+        """為指定 tag_name 的 get_tag() 呼叫依序佇列例外（每次呼叫消耗一個，包含寫入後的讀回驗證）；
+        佇列中放 None 代表「這一次放行（成功）」，用來讓第 N 次讀取才失敗。"""
+        with self._lock:
+            self._get_tag_errors.setdefault(tag_name, []).extend(errors)
+
+    def queue_set_data_type_error(self, tag_name, *errors):
+        with self._lock:
+            self._set_data_type_errors.setdefault(tag_name, []).extend(errors)
+
+    # ── 「Kepware 上的 Tag」資料表（data_type 檢查／校正）──
+
+    def set_remote_tag(self, channel, device, group, tag, data_type=8, payload=None, **extra):
+        """登錄 Kepware 上的一個 Tag。payload 有給就原樣當作 GET 的回應；否則用預設回應
+        {name, data_type, scaling_type, address, description} 再疊上 extra。group 為 "" 或 None＝device 根層級。"""
+        if payload is None:
+            payload = {"name": tag, "data_type": data_type, "scaling_type": 0,
+                       "address": f"ns=2;s=PLC.{tag}", "description": ""}
+            payload.update(extra)
+        with self._lock:
+            self.remote_tags[(channel, device, group or "", tag)] = payload
+
+    def remote_data_type(self, channel, device, group, tag):
+        """目前 Kepware 上該 Tag 回應中的 data_type（頂層）；不存在回 None。"""
+        with self._lock:
+            payload = self.remote_tags.get((channel, device, group or "", tag))
+            return None if payload is None else payload.get("data_type")
+
+    def remote_snapshot(self):
+        """整份資料表的深拷貝，用來證明「沒有任何寫入」。"""
+        with self._lock:
+            return copy.deepcopy(self.remote_tags)
 
     # ── 內部：依序取出並拋出（若佇列已空則視為成功、不拋出）──
 
@@ -240,6 +296,59 @@ def make_fake_kepware_client(state_or_map):
                 state.set_tag_scaling_calls.append(dict(config))
             state._wait_gate("set_tag_scaling", config.get("tag_name"))
             state._pop_and_raise(state._scaling_errors, config.get("tag_name"))
+            return {"success": True}
+
+        def get_tag(self, channel_name, device_name, tag_name, tag_group=None):
+            state = self.state
+            with state._lock:
+                state.get_tag_calls.append({
+                    "channel_name": channel_name,
+                    "device_name": device_name,
+                    "tag_name": tag_name,
+                    "tag_group": tag_group,
+                })
+                state.events.append(("GET", tag_name))
+            state._wait_gate("get_tag", tag_name)
+            state._pop_and_raise(state._get_tag_errors, tag_name)
+            with state._lock:
+                payload = state.remote_tags.get((channel_name, device_name, tag_group or "", tag_name))
+                if payload is None:
+                    missing = True
+                else:
+                    missing = False
+                    snapshot = copy.deepcopy(payload)      # 呼叫端拿到的是副本，之後 PUT 不會改到它
+            if missing:
+                raise http_error(404, detail=f"找不到 Tag {channel_name}/{device_name}/{tag_group or ''}/{tag_name}")
+            return snapshot
+
+        def set_tag_data_type(self, channel_name, device_name, tag_name, data_type, tag_group=None):
+            state = self.state
+            with state._lock:
+                call = {
+                    "channel_name": channel_name,
+                    "device_name": device_name,
+                    "tag_name": tag_name,
+                    "data_type": data_type,
+                    "tag_group": tag_group,
+                }
+                state.set_tag_data_type_calls.append(call)
+                call_no = len(state.set_tag_data_type_calls)           # 全域第幾次 PUT（從 1 起算）
+                state.events.append(("PUT", tag_name))
+            state._wait_gate("set_tag_data_type", tag_name)
+            state._pop_and_raise(state._set_data_type_errors, tag_name)
+            with state._lock:
+                remote = state.remote_tags.get((channel_name, device_name, tag_group or "", tag_name))
+                if remote is None:
+                    missing = True
+                else:
+                    missing = False
+                    if state.put_applies_data_type:
+                        remote["data_type"] = data_type
+                    remote.update(state.put_side_effects)
+                    if state.put_hook is not None:
+                        state.put_hook(remote, call, call_no)
+            if missing:
+                raise http_error(404, detail=f"找不到 Tag {tag_name}")
             return {"success": True}
 
         def delete_tag(self, channel_name, device_name, tag_name, tag_group=None):

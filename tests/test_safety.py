@@ -156,7 +156,7 @@ def test_load_limits_reads_os_environ_by_default(monkeypatch):
 
 # ── check_batch_size ───────────────────────────────────
 
-@pytest.mark.parametrize("operation", ["kw_execute", "scale", "delete"])
+@pytest.mark.parametrize("operation", ["kw_execute", "scale", "delete", "datatype"])
 def test_batch_boundary(operation):
     """count == 上限 放行；上限 + 1 擋下；0 放行。"""
     limits = SafetyLimits(kw_execute_max=10, scale_max=20, delete_max=30, queue_max_per_gateway=5)
@@ -185,17 +185,44 @@ def test_each_operation_uses_its_own_limit():
 
 
 def test_default_limits_values_enforced():
-    """用預設上限驗證：建點/Scale 10000，刪除 2000。"""
+    """用預設上限驗證：建點/Scale/資料型態校正 10000，刪除 2000。"""
     limits = load_limits({})
     check_batch_size("kw_execute", 10000, limits)
     check_batch_size("scale", 10000, limits)
     check_batch_size("delete", 2000, limits)
+    check_batch_size("datatype", 10000, limits)
     with pytest.raises(SafetyError):
         check_batch_size("kw_execute", 10001, limits)
     with pytest.raises(SafetyError):
         check_batch_size("scale", 10001, limits)
     with pytest.raises(SafetyError):
         check_batch_size("delete", 2001, limits)
+    with pytest.raises(SafetyError):
+        check_batch_size("datatype", 10001, limits)
+
+
+def test_datatype_shares_the_kw_execute_limit_and_env_var():
+    """資料型態檢查／校正沿用建點的上限欄位與環境變數，不是 scale / delete 的，也沒有自己的新上限。"""
+    # 只有 kw_execute_max 小：datatype 受它限制
+    small_kw = SafetyLimits(kw_execute_max=5, scale_max=1000, delete_max=1000)
+    check_batch_size("datatype", 5, small_kw)
+    with pytest.raises(SafetyError) as exc_info:
+        check_batch_size("datatype", 6, small_kw)
+    e = exc_info.value
+    assert (e.operation, e.limit, e.actual, e.code) == ("datatype", 5, 6, "batch_too_large")
+    assert "Kepware 資料型態校正" in str(e)
+    assert "KIS_LIMIT_KW_EXECUTE" in str(e)
+    assert "KIS_LIMIT_SCALE" not in str(e) and "KIS_LIMIT_DELETE" not in str(e)
+    # kw_execute_max 大、scale / delete 小：datatype 不受影響
+    small_others = SafetyLimits(kw_execute_max=1000, scale_max=1, delete_max=1)
+    check_batch_size("datatype", 1000, small_others)
+    # 環境變數 KIS_LIMIT_KW_EXECUTE 同時調整兩者
+    limits = load_limits({"KIS_LIMIT_KW_EXECUTE": "7"})
+    assert limits.kw_execute_max == 7
+    check_batch_size("datatype", 7, limits)
+    with pytest.raises(SafetyError):
+        check_batch_size("datatype", 8, limits)
+    assert not hasattr(limits, "datatype_max"), "不新增獨立的上限欄位"
 
 
 def test_batch_error_attributes_and_message():
@@ -216,6 +243,7 @@ def test_batch_error_attributes_and_message():
     ("kw_execute", "Kepware 建點", "KIS_LIMIT_KW_EXECUTE"),
     ("scale", "Kepware Scale 設定", "KIS_LIMIT_SCALE"),
     ("delete", "Kepware 批次刪除", "KIS_LIMIT_DELETE"),
+    ("datatype", "Kepware 資料型態校正", "KIS_LIMIT_KW_EXECUTE"),
 ])
 def test_error_message_names_operation_and_its_own_env_var(operation, label, env_name):
     """訊息要寫出「該操作」的中文名稱與環境變數，不可混用別的操作的。"""
@@ -354,13 +382,14 @@ def test_get_limits_invalid_env_does_not_raise(monkeypatch, caplog):
 # ── OPERATIONS 表與表驅動 ──────────────────────────────
 
 def test_operations_table_contents():
-    assert set(OPERATIONS) == {"kw_execute", "scale", "delete"}
+    assert set(OPERATIONS) == {"kw_execute", "scale", "delete", "datatype"}
     assert OPERATIONS["kw_execute"] == OperationSpec("Kepware 建點", "KIS_LIMIT_KW_EXECUTE", "kw_execute_max")
     assert OPERATIONS["scale"] == OperationSpec("Kepware Scale 設定", "KIS_LIMIT_SCALE", "scale_max")
     assert OPERATIONS["delete"] == OperationSpec("Kepware 批次刪除", "KIS_LIMIT_DELETE", "delete_max")
+    assert OPERATIONS["datatype"] == OperationSpec("Kepware 資料型態校正", "KIS_LIMIT_KW_EXECUTE", "kw_execute_max")
 
 
-@pytest.mark.parametrize("operation", ["kw_execute", "scale", "delete"])
+@pytest.mark.parametrize("operation", ["kw_execute", "scale", "delete", "datatype"])
 def test_operations_table_matches_loader(operation):
     """OPERATIONS 登記的環境變數／欄位，必須真的是 load_limits 讀取的那個。
 

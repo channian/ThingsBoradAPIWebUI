@@ -7,6 +7,8 @@ import os
 import logging
 import requests
 
+from app.tag_datatype import is_writable_data_type
+
 log = logging.getLogger("kw_gw_client")
 
 
@@ -240,6 +242,38 @@ class KepwareGatewayClient:
             f"{self.base_url}/api/config/tags",
             headers=self._headers, json=payload,
             timeout=15, verify=self.verify, proxies=self.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_tag_data_type(self, channel_name: str, device_name: str,
+                          tag_name: str, data_type: int, tag_group: str = None) -> dict:
+        """只修改既有 Tag 的資料型態（data_type 校正用）。
+
+        PUT /api/config/tags，body **只含** channel_name / device_name / tag_name / data_type，
+        有 tag_group 才帶 tag_group；不會夾帶任何 scaling 或其他欄位。
+        data_type 必須是 1–15 的整數（0＝未指定是要被校正掉的狀態，不是校正目標；其餘值一律拒絕，
+        在送出前就丟 ValueError，不呼叫 Gateway）。
+
+        ★ 此端點對「部分更新」的行為（只傳 data_type 會不會把其他欄位洗掉）尚未以真實 Gateway 證實，
+        所以呼叫端（_datatype_worker）對最初幾筆寫入會讀回驗證，發現其他欄位被動到就中止。"""
+        if not is_writable_data_type(data_type):
+            raise ValueError(f"data_type 必須是 1–15 的整數，收到 {data_type!r}")
+        payload = {
+            "channel_name": channel_name,
+            "device_name": device_name,
+            "tag_name": tag_name,
+            "data_type": data_type,
+        }
+        if tag_group:
+            payload["tag_group"] = tag_group
+        resp = requests.put(
+            f"{self.base_url}/api/config/tags",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+            verify=self.verify,
+            proxies=self.proxies,
         )
         resp.raise_for_status()
         return resp.json()

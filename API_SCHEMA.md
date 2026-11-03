@@ -27,6 +27,10 @@
 >   `summary` 新增 `gateways` / `blocked` / `cancelled` / `cancelled_remaining`，`errors[]` 新增 `gateway`，並**移除 `message`**。
 > - 排隊的任務輪到時會重新檢查狀態、略過已被先前任務處理的列；排隊中的任務使用送出當下的推導快照（排隊期間改手動覆寫請取消重送）。
 > - 批次刪除登入失敗現為 `fail = total`（舊為 0）。
+>
+> **2026-11 data_type 檢查／校正（後端）**：新增 `POST /api/kw/datatype-check`（背景任務，沿用同一套路由／排隊／取消／安全鎖）；
+> 任務 `summary` 新增選填的 `details`（沒有時為 `[]`）；`type` 新增 `kw_datatype_check` / `kw_datatype_fix`。
+> ⚠️ **PUT 部分更新語意與讀取回應的欄位名稱尚待以真實 Gateway 確認**，詳見第 7 節。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -167,7 +171,7 @@ curl -X POST http://localhost:9000/api/user/change-password \
 ### 背景任務與輪詢（重要，共用契約）
 
 `POST /api/kw/execute`、`POST /api/pg/execute/scale`、`POST /api/kw/delete-batch`
-三個「真正呼叫 Kepware API」的端點，因為批次執行動輒數分鐘，**都是背景任務**：
+三個「真正呼叫 Kepware API」的端點（`POST /api/kw/datatype-check` 也是同一套背景任務機制，見第 7 節），因為批次執行動輒數分鐘，**都是背景任務**：
 呼叫後立即回傳 `task_id`，**HTTP 200 只代表任務已建立（也可能正在排隊），
 不代表已經執行完成、更不代表 Kepware 已經套用變更**。
 
@@ -231,7 +235,7 @@ curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
 | task_id / done / progress / summary | 舊欄位，語意不變。`done: false` 時 `summary` 為 `null`；`progress` 是所有 Gateway 加總（含 `blocked`，視為已處理的失敗） |
 | status | `queued`（全部 Gateway 都在排隊）／`running`／`done`／`cancelled`（已結束且是被取消的） |
 | cancelled | 是否已收到取消要求（結束與否都可能為 `true`） |
-| type | `kw_execute`（Step 3）／`pg_execute_scale`（Step 5）／`kw_delete`（批次刪除） |
+| type | `kw_execute`（Step 3）／`pg_execute_scale`（Step 5）／`kw_delete`（批次刪除）／`kw_datatype_check`（data_type 檢查）／`kw_datatype_fix`（data_type 校正） |
 | username | 送出者；查不到時為空字串 |
 | gateways | 每台 Gateway 的即時狀態；沒有 Gateway 資訊的舊式任務為空陣列。`state`：`queued`（排隊中）／`running`／`done`（正常返回，含取消後提早返回）／`cancelled`（排隊中就被取消、完全沒執行）／`failed`（worker 丟例外，該台全數記為失敗） |
 | gateways[].position | 只有 `state=queued` 才有值：`n`＝前面還有 `n` 個任務（含正在執行的那個，所以排隊中通常 ≥ 1；`0` 只會出現在剛輪到、尚未切成 `running` 的瞬間）；其餘 state 為 `null` |
@@ -260,11 +264,12 @@ curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
 | 欄位 | 說明 |
 |------|------|
 | total / success / fail / skip | 全部 Gateway 加總。`total` 含 `blocked`；`fail` 含 `blocked` |
-| errors | 失敗明細。每筆多一個 `gateway`：失敗發生在哪台（Gateway 名稱）；`blocked` 的列沒有 Gateway，為 `null`。Step 3 / 刪除的鍵是 `name`，Step 5 的鍵是 `tag_name`（blocked 一律用 `name`） |
+| errors | 失敗明細。每筆多一個 `gateway`：失敗發生在哪台（Gateway 名稱）；`blocked` 的列沒有 Gateway，為 `null`。Step 3 / 刪除的鍵是 `name`，Step 5 與 data_type 檢查／校正的鍵是 `tag_name`（blocked 一律用 `name`） |
 | gateways | 每台的結果 `{gateway_id, name, state, total, success, fail, skip}` |
 | blocked | 無法判斷所屬 Gateway 而未送出的列數 |
 | cancelled | 任務是否被取消 |
-| cancelled_remaining | 因取消而**尚未處理**的列數（排隊中就被取消的整批 + 執行中被取消時還沒做的列） |
+| cancelled_remaining | 因取消而**尚未處理**的列數（排隊中就被取消的整批 + 執行中被取消時還沒做的列）。data_type 校正的**電路斷路器中止**也用這個欄位表示「未處理筆數」，但此時 `cancelled` 仍為 `false` |
+| details | **選填、給前端顯示的清單**（目前只有 `kw_datatype_check` 會填：需校正的點位，結構見第 7 節）。各台 Gateway 的 details 依 Gateway 順序串接，每筆若沒有 `gateway` 欄位會補上該台名稱；沒有時為 `[]`。其他任務類型一律是 `[]` |
 
 > **相容性**：先前 `summary` 內的 `message`（例如「成功建立 58 筆 Tag」）已移除；請改讀 `success` / `fail` / `skip` / `errors`。
 > `summary` 只有任務**整個結束**時才存在。
@@ -298,7 +303,7 @@ curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
 
 | 狀況 | 回應 | 上限（環境變數，預設） |
 |------|------|-------------------|
-| 單次批次點數超過上限 | **422** `{"detail": "Kepware 建點單次最多處理 10000 點，本次要求 12000 點，已超過上限。請分批處理（以 ids 縮小範圍），或由管理者調整環境變數 KIS_LIMIT_KW_EXECUTE。"}` | `KIS_LIMIT_KW_EXECUTE`＝10000（Step 3）、`KIS_LIMIT_SCALE`＝10000（Step 5）、`KIS_LIMIT_DELETE`＝2000（批次刪除） |
+| 單次批次點數超過上限 | **422** `{"detail": "Kepware 建點單次最多處理 10000 點，本次要求 12000 點，已超過上限。請分批處理（以 ids 縮小範圍），或由管理者調整環境變數 KIS_LIMIT_KW_EXECUTE。"}` | `KIS_LIMIT_KW_EXECUTE`＝10000（Step 3；**data_type 檢查／校正共用此上限**，訊息中的操作名稱為「Kepware 資料型態校正」）、`KIS_LIMIT_SCALE`＝10000（Step 5）、`KIS_LIMIT_DELETE`＝2000（批次刪除） |
 | 某台 Gateway 的佇列已滿（排隊中＋執行中） | **429** `{"detail": "Gateway「K8 廠區 GW」的任務佇列已滿（排隊中＋執行中共 5 個，上限 5 個）。請稍後再試，或取消排隊中的任務；若需提高上限，請由管理者調整環境變數 KIS_LIMIT_QUEUE_PER_GATEWAY。"}` | `KIS_LIMIT_QUEUE_PER_GATEWAY`＝5 |
 
 點數 `N` = 套用 `ids` 篩選後的待處理列數（Step 3 / 5，路由之前）；批次刪除為 CSV 中同時有 `name` 與 `type` 的列數。
@@ -1914,6 +1919,145 @@ CSV 裡沒有任何同時有 `name` 與 `type` 的列時，任務會立刻以 `t
     { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 200, "success": 195, "fail": 5, "skip": 0 }
   ]
 }
+```
+
+---
+
+### POST /api/kw/datatype-check （背景任務：data_type 檢查／校正）
+
+**背景**：7 月前的舊版程式把點位建成 `data_type = 0`（未指定）；之後改為預設 `8`（Float），並可逐筆覆寫（`kw_data_type`）。
+本端點讀取 Kepware 上**已建點**的 Tag，與系統推導的預期資料型態比對，不一致的才讓使用者勾選校正。
+**回傳 `task_id`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**  
+**需要 JWT（admin / operator）**，每次被接受的請求寫一筆操作日誌（`datatype_check` / `datatype_fix`）。
+
+> ⚠️ **這會寫入正式環境，而且有兩件事尚未用真實 Gateway 證實，請務必注意：**
+> 1. **`PUT /api/config/tags` 的「部分更新」語意尚待確認**。本功能只送 `channel_name` / `device_name` / `tag_name` / `data_type`
+>    （有群組才加 `tag_group`），依 Gateway 文件「關閉縮放只傳 `scaling_type:0`」的範例**推測**它是部分更新，但沒有實測。
+>    若實際是整筆取代，其他欄位（位址、縮放…）可能被洗掉——所以才有下面的**電路斷路器**。
+> 2. **「讀取單一 Tag」的回應欄位名稱尚待確認**（文件的 schema 只寫 `any`）。`app/tag_datatype.py` 的解析是依文件與常見命名
+>    推測，**判讀不出來的點一律失敗、絕不寫入**。請先用 `scripts/kw_probe_tag.py` 對真實 Gateway 實測一次，確認欄位名稱。
+>
+> **建議第一次只對 1 筆校正**（`apply=true` 且 `ids` 只放一筆），到 Kepware 確認該點只有 `data_type` 變了、其他欄位都還在，再擴大範圍。
+
+**Request Body**
+
+```json
+{
+  "gateway_id": null,
+  "ids": [101, 102],
+  "apply": false,
+  "delay": 1.1,
+  "batch_size": 50,
+  "batch_pause": 5.0
+}
+```
+
+| 欄位 | 型別 | 預設 | 說明 |
+|------|------|------|------|
+| gateway_id | int? | null | 同 Step 3：**省略＝自動依 channel 路由**；指定＝只處理屬於這台的列（其餘回報在 `excluded`）；有 `kw_gw_url` 無 `gateway_id`＝手動憑證，不路由 |
+| kw_gw_url / kw_gw_username / kw_gw_password | string? | null | 手動憑證（舊相容），同 Step 3 |
+| ids | int[]? | null | 暫存列 id。有給就把對象縮小到這些列；**必須是整數陣列**（含非整數 → 422）。`apply=true` 時**必填且不可為空** |
+| apply | bool | false | `false`＝**檢查**（唯讀，只發 GET）；`true`＝**校正**（會 PUT 寫入 Kepware） |
+| delay / batch_size / batch_pause | | 1.1 / 50 / 5.0 | 同 Step 3。共用 Kepware 限速額度，所以也走該台的佇列（不是 dry-run 專屬 key） |
+
+**對象列與預期值**：暫存表 `tb_status = 'done'`（已建點）的列；`ids` 有給再縮小到這些列（指到 pending / skip / 不存在的 id 會被排除，
+並在任務 log 留一行警告）。預期的 `data_type`、`channel` / `device` / `tag_groups` 都取 Step 3 的推導結果（**含逐筆覆寫**
+`kw_data_type` / `kw_channel` / `kw_device` / `kw_tag_groups`）。與其他背景任務一樣，**排隊中的任務使用送出當下的推導快照**。
+
+**兩種模式**
+
+| | 檢查（`apply=false`，預設） | 校正（`apply=true`） |
+|---|---|---|
+| 對 Kepware 的呼叫 | 只有 `GET`（讀取單一 Tag） | `GET` 之後，**只對 actual≠expected 的點** `PUT`（`data_type` 一個欄位） |
+| `ids` | 選填 | **必填、非空**（缺、`null`、`[]` 一律 400） |
+| 任務 `type` / 歷史 `csv_filename` | `kw_datatype_check` / `(Kepware 資料型態檢查)` | `kw_datatype_fix` / `(Kepware 資料型態校正)` |
+| 結果 | 不一致的點列在 `summary.details` | `summary.details` 為 `[]`；寫入結果看 `success` / `fail` / `skip` / `errors` |
+| 暫存表狀態欄位（`tb_status` 等） | 不改 | **不改** |
+
+> **為什麼校正一定要給 `ids`？** 這是刻意的設計：不允許「一鍵全部校正」。流程必須是「先檢查 → 使用者看過 `details`、勾選 →
+> 把勾選的 `id` 送回來校正」，讓每一次寫入都對應一個人明確選定的點位範圍。校正模式輪到時還會**重新確認**每列的 `tb_status`
+> 仍是 `done`（排隊期間被改回 pending 或被刪除的列略過，計入 `skip`）。
+
+**Response 200（立即回傳，非最終結果）**：欄位同第 2 節「三個執行端點的共通回應」（`task_id` / `queued` / `queue` / `blocked` / `excluded` / `message`）。
+
+**錯誤回應**
+
+| 狀況 | 回應 |
+|------|------|
+| `apply=true` 但 `ids` 缺、為 `null` 或空 | **400** `校正必須明確指定要校正的點位（ids）` |
+| 沒有符合條件的列（沒有 `tb_status=done` 的列，或 `ids` 全部不符） | **400** `沒有已建點的資料可檢查` |
+| 全部列都無法判斷所屬 Gateway／指定的 Gateway 沒有屬於它的列／Gateway 密碼無法解密／沒有設定任何 Gateway | 400（同 Step 3） |
+| `gateway_id` 不存在 | 404 |
+| 批次點數 N（套用 `ids` 篩選後的列數）超過 `KIS_LIMIT_KW_EXECUTE`（兩種模式都受限；等於上限允許） | **422**；`ids` 不是整數陣列也是 422 |
+| 該台 Gateway 佇列已滿 | **429** |
+| 非 admin / operator | 403 |
+
+**逐筆處理規則（`_datatype_worker`，每台 Gateway 一個）**
+
+先 `GET /api/config/channels/{channel}/devices/{device}/tags/{tag}?tag_group=…` 讀取，取出目前的 `actual`，與預期的 `expected` 比對：
+
+| 情況 | 檢查模式 | 校正模式 |
+|------|---------|---------|
+| 預期值不是 1–15 的整數（例如覆寫成 0 或亂填） | 該筆 `fail`（原因指向 Step 3 的覆寫），**不呼叫 Kepware** | 同左，絕不寫入 |
+| `GET` 回 404 | 該筆 `fail`：`Kepware 上找不到此 Tag（channel/device/群組 是否與建點時一致？）` | 同左 |
+| `GET` 其他 HTTP 錯誤／連線錯誤 | 該筆 `fail`（帶 HTTP 狀態；429 先依 `Retry-After` 退避重試最多 3 次） | 同左 |
+| 回應判讀不出資料型態（找不到欄位、值怪異、候選欄位互相矛盾） | 該筆 `fail`：`無法判讀資料型態（回應欄位：…）` | 同左，**絕不猜測、絕不寫入** |
+| `actual == expected` | 計入 `success`，**不**列入 `details` | 計入 `skip`（`已是預期型態，不需校正`），**不發 PUT** |
+| `actual != expected` | 計入 `success`，並加入 `details` | `PUT` 寫入；成功計入 `success`（前 3 筆要讀回驗證，見下） |
+
+**電路斷路器（校正模式）**：前 `3`（`_DATATYPE_VERIFY_FIRST`）筆**成功的 PUT** 會立刻再 `GET` 讀回驗證：讀回的資料型態必須等於 `expected`，
+且與寫入前的回應相比**除資料型態欄位外沒有任何欄位變動**。任何一項不符——或讀回本身失敗，無法確認——該筆記為 `fail`
+（原因含 `寫入後讀回不符` 或 `PUT 影響了其他欄位：<鍵路徑…>`，最多列 10 個），並**立即中止這一台 Gateway 其餘的筆數**
+（`cancelled_remaining` ＝未處理筆數，任務 log 記一行 error）；其他台 Gateway 不受影響。
+通過驗證的前 3 筆之後**不再逐筆讀回**（避免呼叫量變 3 倍）。
+中止時 `summary.cancelled` 仍是 `false`（沒有人取消），前端請以「`cancelled_remaining > 0` 且 `cancelled == false`」辨識斷路器中止，
+並顯示該筆 `errors` 的原因。
+
+**輪詢 `GET /api/tasks/{task_id}` 取得的 `summary`（檢查模式）**
+
+```json
+{
+  "total": 3, "success": 3, "fail": 0, "skip": 0,
+  "errors": [],
+  "cancelled": false, "cancelled_remaining": 0, "blocked": 0,
+  "gateways": [
+    { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 3, "success": 3, "fail": 0, "skip": 0 }
+  ],
+  "details": [
+    {
+      "id": 101, "tag_name": "K8_2F_CHS_A01", "channel_name": "K8CHS", "device_name": "CHS", "tag_groups": "2F.CHS",
+      "gateway": "K8 廠區 GW",
+      "actual": 0, "expected": 8, "actual_label": "未指定(0)", "expected_label": "Float"
+    }
+  ]
+}
+```
+
+| `details[]` 欄位 | 說明 |
+|------|------|
+| id | 暫存列 id —— **校正時把它放進 `ids`** |
+| tag_name / channel_name / device_name / tag_groups | 該點在 Kepware 的位置（推導結果，含覆寫）；`tag_groups` 為點分隔路徑，沒有群組時為空字串 |
+| gateway | 這筆是哪台 Gateway 讀到的（Gateway 名稱；手動憑證時為去除帳密的網址） |
+| actual / expected | Kepware 上目前的資料型態代碼／系統推導的預期代碼（0＝未指定，1–15 見 Step 3 覆寫的型態表） |
+| actual_label / expected_label | 顯示名稱（如 `未指定(0)`、`Float`、`Boolean`） |
+
+`errors[]` 的鍵是 `tag_name` / `reason` / `gateway`（登入失敗時 `tag_name` 為 `*`、該台所有列都計入 `fail`）。
+`details` 只有檢查模式才有內容；校正模式的 `summary.details` 是 `[]`。
+
+**範例（檢查 → 勾選 → 校正）**
+
+```bash
+# 1. 檢查（唯讀）
+TASK=$(curl -s -X POST http://localhost:9000/api/kw/datatype-check \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' | jq -r .task_id)
+# 務必輪詢到 done:true（見第 2 節），取得 summary.details
+curl -s http://localhost:9000/api/tasks/$TASK -H "Authorization: Bearer $TOKEN" | jq '.summary.details[] | {id, tag_name, actual_label, expected_label}'
+
+# 2. 第一次建議只校正 1 筆；確認 Kepware 上只有 data_type 變了，再擴大
+curl -s -X POST http://localhost:9000/api/kw/datatype-check \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"apply": true, "ids": [101]}'
+# 同樣輪詢；若 summary.cancelled_remaining > 0 且 cancelled=false ＝ 電路斷路器已中止，請先查 errors 的原因
 ```
 
 ---

@@ -45,6 +45,10 @@ from app.gateway_router import (
 from app.gateway_queue import GatewayQueue, QueueFullError, gateway_key, normalize_gateway_url
 from app.gateway_jobs import PartSpec, run_job
 from app.safety import check_batch_size, get_limits, SafetyError
+from app.tag_datatype import (
+    extract_tag_data_type, diff_tag_payloads, describe_payload_keys, data_type_label,
+    is_writable_data_type,
+)
 from app.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, require_role, VALID_ROLES,
@@ -597,6 +601,20 @@ class KwBatchDeleteRequest(BaseModel):
     batch_pause: float = 5.0
 
 
+class DatatypeCheckRequest(BaseModel):
+    """data_type 檢查／校正。apply=False（預設）只讀取比對；apply=True 才會寫入 Kepware，
+    且必須明確給非空的 ids（不允許一鍵全部校正）。Gateway 判斷與限速參數同 Step 3。"""
+    gateway_id: Optional[int] = None
+    kw_gw_url: Optional[str] = None
+    kw_gw_username: Optional[str] = None
+    kw_gw_password: Optional[str] = None
+    ids: Optional[list[int]] = None
+    apply: bool = False
+    delay: float = 1.1
+    batch_size: int = 50
+    batch_pause: float = 5.0
+
+
 class KwGwSettingsRequest(BaseModel):
     gateway_id: Optional[int] = None
     kw_gw_url: Optional[str] = None
@@ -934,7 +952,7 @@ async def get_task_status(task_id: str, user: dict = Depends(get_current_user)):
     舊欄位 task_id / done / progress / summary 不變；新增：
       status     task.status()：queued / running / done / cancelled
       cancelled  是否已收到取消要求
-      type       任務類型（kw_execute / pg_execute_scale / kw_delete）
+      type       任務類型（kw_execute / pg_execute_scale / kw_delete / kw_datatype_check / kw_datatype_fix）
       username   送出者
       gateways   每台 Gateway 的即時狀態 [{gateway_id, name, state, total, current,
                  success, fail, skip, position}]；position 只有 state=queued 才有值
@@ -1303,7 +1321,7 @@ async def kw_delete_route(route_id: int, request: Request,
         raise HTTPException(status_code=500, detail=f"刪除 Gateway 對應失敗: {e}")
 
 
-# ── Gateway 作業提交（Step 3 建點 / Step 5 Scale / 批次刪除 三個端點共用）─────────
+# ── Gateway 作業提交（Step 3 建點 / Step 5 Scale / 批次刪除 / data_type 檢查與校正 共用）─────────
 #
 # 請求處理函式的同步部分（都在回應 task_id 之前完成）：
 #   1. 安全鎖：批次點數上限（_check_batch，超過回 422）
@@ -1465,7 +1483,7 @@ def _job_message(plan: _GatewayPlan, ahead: dict, dry_run: bool) -> str:
 
 def _dispatch_gateway_job(task_type: str, csv_filename: str, params: dict, plan: _GatewayPlan,
                           worker, dry_run: bool = False, initial_logs: Optional[list] = None) -> dict:
-    """建 Task → 同步 enqueue → run_job → 組回應（三個端點共用）。順序不可變：
+    """建 Task → 同步 enqueue → run_job → 組回應（Step 3 / Step 5 / 批次刪除 / data_type 檢查與校正共用）。順序不可變：
 
     1. create_task（要先有 task.id 才能排隊）。
     2. enqueue_many：必須在請求處理期間「同步」完成（回應 task_id 之前），排隊順序才等於請求到達順序，
@@ -1915,6 +1933,271 @@ async def kw_delete_batch(req: KwBatchDeleteRequest, request: Request,
     return _dispatch_gateway_job("kw_delete", "(Kepware 批次刪除)", params, plan,
                                  _kw_delete_worker, dry_run=req.dry_run,
                                  initial_logs=initial_logs)
+
+
+# ── data_type 檢查／校正（POST /api/kw/datatype-check）──────────────────────────
+#
+# 7 月前的舊版程式把點位建成 data_type=0（未指定）；之後預設 8（Float）並可逐筆覆寫（kw_data_type）。
+# 本功能讀取 Kepware 上「已建點」（tb_status=done）的 Tag，與系統推導的預期型態比對：
+#   檢查（apply=False，預設）：唯讀，只發 GET；不符者放在 summary.details 讓使用者勾選。
+#   校正（apply=True）：只對明確指定的 ids 寫入（PUT 只改 data_type），不允許一鍵全部校正。
+# 這會寫入正式環境，所以一律「出錯時寧可停下來」：
+#   - 讀不到、讀不懂（actual 為 None）→ 該筆失敗，絕不猜測、絕不寫入；
+#   - 前 _DATATYPE_VERIFY_FIRST 筆成功的寫入要讀回驗證（data_type 變成預期值、且其他欄位沒被動到），
+#     任一不符就中止「這台」其餘的筆數——PUT 是否為部分更新、回應欄位名稱，都還沒用真實 Gateway 證實；
+#   - 完全不改暫存表的狀態欄位（tb_status 等）。
+
+_DATATYPE_VERIFY_FIRST = 3      # 前幾筆成功的 PUT 要讀回驗證（之後不逐筆讀回，避免 3 倍呼叫量）
+_DATATYPE_DIFF_SHOW = 10        # 「PUT 影響了其他欄位」最多列出幾個鍵路徑
+
+
+def _http_status_of(e) -> object:
+    resp = getattr(e, "response", None)
+    return resp.status_code if resp is not None else "?"
+
+
+def _datatype_verify_written(view, client, item: dict, before: dict):
+    """PUT 之後讀回驗證。通過回傳 None；否則回傳失敗原因字串（呼叫端據此記失敗並中止這台）。
+    通過的條件：讀回的 data_type 等於預期值，且與寫入前的回應相比，除 data_type 之外沒有任何欄位變動。
+    讀回本身失敗（連線、HTTP 錯誤）也算驗證失敗——無法確認寫入結果就不能繼續。"""
+    tag = item["tag_name"]
+    expected = item["data_type"]
+    try:
+        after = _kw_call_with_429_retry(
+            view, f"讀回驗證 {tag}",
+            lambda: client.get_tag(item["channel_name"], item["device_name"], tag,
+                                   item["tag_groups"] or None))
+    except Exception as e:
+        return f"寫入後讀回失敗，無法確認寫入結果：{e}"
+    problems = []
+    got = extract_tag_data_type(after)
+    if got != expected:
+        problems.append(f"寫入後讀回不符：預期 {data_type_label(expected)}，讀回 {data_type_label(got)}")
+    changed = diff_tag_payloads(before, after)
+    if changed:
+        shown = "、".join(changed[:_DATATYPE_DIFF_SHOW])
+        more = f" 等共 {len(changed)} 個" if len(changed) > _DATATYPE_DIFF_SHOW else ""
+        problems.append(f"PUT 影響了其他欄位：{shown}{more}")
+    return "；".join(problems) if problems else None
+
+
+def _datatype_worker(view, part) -> dict:
+    """data_type 檢查（view.params["apply"] 為假）或校正（為真）：每台 Gateway 呼叫一次。
+
+    每筆先 GET 讀回 Kepware 上的 Tag，取出 actual 與推導的 expected 比對（細節見上方區塊註解與
+    API_SCHEMA.md）。檢查模式只發 GET；校正模式只對 actual≠expected 的筆發 PUT。
+    摘要 {"total","success","fail","skip","errors":[{"tag_name","reason"}],"cancelled_remaining",["details"]}，
+    details（需校正的清單）只有檢查模式才有。電路斷路器中止時 cancelled_remaining＝未處理筆數，
+    此時總摘要的 cancelled 仍為 false（沒有人取消），前端以「cancelled_remaining>0 且非取消」辨識。"""
+    params = view.params
+    apply = bool(params.get("apply", False))
+    delay, batch_size, batch_pause = params["delay"], params["batch_size"], params["batch_pause"]
+    cred = part.payload
+    items = part.items
+    total = len(items)
+
+    todo = list(items)
+    prior_skipped = 0
+    if apply:
+        # 輪到時重新確認：只校正「現在仍是已建點」的列（排隊期間可能被改回 pending 或刪除）
+        statuses = pg_client.get_staging_statuses([it["id"] for it in items], "tb_status")
+        todo = []
+        for it in items:
+            if statuses.get(it["id"]) == "done":
+                todo.append(it)
+            else:
+                view.add_result(it["tag_name"], "skip", "已不是已建點狀態（tb_status 不是 done），略過")
+        prior_skipped = total - len(todo)
+        if prior_skipped:
+            view.push_log("info", f"{prior_skipped} 筆的 tb_status 已不是 done，略過")
+    if not todo:
+        view.push_progress(total, total, 0, 0, prior_skipped)
+        return {"total": total, "success": 0, "fail": 0, "skip": prior_skipped, "errors": []}
+    if view.cancelled:
+        return {"total": total, "success": 0, "fail": 0, "skip": prior_skipped, "errors": [],
+                "cancelled_remaining": len(todo)}
+
+    try:
+        client = KepwareGatewayClient(cred["url"], verify=cred["verify"])
+        client.login(cred["user"], cred["password"])
+        view.push_log("info", "Kepware Gateway 登入成功")
+    except Exception as e:
+        view.push_log("error", f"Kepware 登入失敗: {e}")
+        view.push_progress(total, total, 0, len(todo), prior_skipped)
+        return {"total": total, "success": 0, "fail": len(todo), "skip": prior_skipped,
+                "errors": [{"tag_name": "*", "reason": str(e)}]}
+
+    failed = []
+    details = []
+    success = 0
+    skip_count = 0           # 校正模式：已是預期型態而略過的筆數（與 prior_skipped 分開計）
+    hit_count = 0            # 實際打了 Kepware 的筆數（決定批次冷卻）
+    put_count = 0            # 成功的 PUT 筆數（決定要不要讀回驗證）
+    cancelled_remaining = 0
+    for idx, item in enumerate(todo, 1):
+        if view.cancelled:
+            cancelled_remaining = len(todo) - (idx - 1)
+            view.push_log("warning", f"已取消，尚有 {cancelled_remaining} 筆未處理")
+            break
+        tag = item["tag_name"]
+        ch, dev = item["channel_name"], item["device_name"]
+        grp = item["tag_groups"] or None
+        expected = item["data_type"]
+        touched = True               # 這筆有沒有打 Kepware（沒打就不必限速等待）
+        abort_reason = None
+        fail_reason = None
+        stage = "讀取"
+
+        if not is_writable_data_type(expected):
+            # 預期值本身不合法（例如覆寫成 0 或亂填的數字）：不打 Kepware，更不可能寫入
+            touched = False
+            fail_reason = (f"預期資料型態 {expected!r} 無效（需為 1–15），"
+                           "請先到 Step 3 修正該點的資料型態覆寫")
+        else:
+            try:
+                before = _kw_call_with_429_retry(
+                    view, f"讀取 Tag {tag}",
+                    lambda ch=ch, dev=dev, tag=tag, grp=grp: client.get_tag(ch, dev, tag, grp))
+                actual = extract_tag_data_type(before)
+                if actual is None:
+                    # 絕不猜測、絕不寫入
+                    fail_reason = f"無法判讀資料型態（回應欄位：{describe_payload_keys(before)}）"
+                elif actual == expected:
+                    if apply:
+                        skip_count += 1
+                        view.add_result(tag, "skip", "已是預期型態，不需校正")
+                    else:
+                        success += 1
+                        view.add_result(tag, "success", "型態正確")
+                elif not apply:
+                    success += 1
+                    details.append({
+                        "id": item["id"], "tag_name": tag,
+                        "channel_name": ch, "device_name": dev, "tag_groups": item["tag_groups"],
+                        "gateway": part.name,
+                        "actual": actual, "expected": expected,
+                        "actual_label": data_type_label(actual),
+                        "expected_label": data_type_label(expected),
+                    })
+                    view.add_result(tag, "success",
+                                    f"需校正：{data_type_label(actual)} → {data_type_label(expected)}")
+                else:
+                    stage = "寫入"
+                    _kw_call_with_429_retry(
+                        view, f"校正 Tag {tag}",
+                        lambda ch=ch, dev=dev, tag=tag, grp=grp, expected=expected:
+                            client.set_tag_data_type(ch, dev, tag, expected, tag_group=grp))
+                    put_count += 1
+                    problem = None
+                    if put_count <= _DATATYPE_VERIFY_FIRST:
+                        stage = "讀回驗證"
+                        _pace(view, delay)
+                        problem = _datatype_verify_written(view, client, item, before)
+                    if problem:
+                        fail_reason = problem
+                        abort_reason = problem
+                    else:
+                        success += 1
+                        view.push_log("info", f"[校正] {tag}: {data_type_label(actual)} → "
+                                              f"{data_type_label(expected)}")
+                        view.add_result(tag, "success",
+                                        f"{data_type_label(actual)} → {data_type_label(expected)}")
+            except requests.HTTPError as e:
+                status = _http_status_of(e)
+                if stage == "讀取" and status == 404:
+                    fail_reason = "Kepware 上找不到此 Tag（channel/device/群組 是否與建點時一致？）"
+                else:
+                    text = (e.response.text or "")[:200] if e.response is not None else str(e)
+                    fail_reason = f"{stage}失敗（HTTP {status}）" + (f": {text}" if text else "")
+            except Exception as e:
+                fail_reason = f"{stage}失敗：{e}"
+
+        if fail_reason is not None:
+            view.push_log("error", f"[失敗] {tag}: {fail_reason}")
+            failed.append({"tag_name": tag, "reason": fail_reason})
+            view.add_result(tag, "fail", fail_reason)
+
+        view.push_progress(prior_skipped + idx, total, success, len(failed),
+                           prior_skipped + skip_count)
+        if abort_reason is not None:
+            cancelled_remaining = len(todo) - idx
+            view.push_log("error", f"[中止] {part.name} 其餘 {cancelled_remaining} 筆不再處理：{abort_reason}")
+            break
+        if touched:
+            hit_count += 1
+            _pace(view, delay)
+            if batch_size > 0 and hit_count % batch_size == 0:
+                view.push_log("info", f"已處理 {hit_count} 筆，冷卻暫停 {batch_pause} 秒")
+                _sleep_interruptible(view, batch_pause)
+
+    summary = {"total": total, "success": success, "fail": len(failed),
+               "skip": prior_skipped + skip_count, "errors": failed,
+               "cancelled_remaining": cancelled_remaining}
+    if not apply:
+        summary["details"] = details
+    return summary
+
+
+@app.post("/api/kw/datatype-check")
+async def kw_datatype_check(req: DatatypeCheckRequest, request: Request,
+                            user: dict = Depends(require_role("admin", "operator"))):
+    """Kepware data_type 檢查／校正（背景任務）。
+
+    對象：暫存表 tb_status=done（已建點）的列；ids 有給就再縮小到這些列。預期型態＝Step 3 推導的
+    data_type（含逐筆覆寫），channel/device/tag_groups 同樣取推導結果（含覆寫）。
+    apply=false（預設）＝檢查：唯讀，只發 GET，不符者列在 summary.details。
+    apply=true＝校正：會寫入 Kepware，**必須**給非空 ids（不允許一鍵全部校正），只對 actual≠expected 的點 PUT，
+    前 3 筆成功的寫入會讀回驗證，不符立即中止該台其餘筆數。
+    Gateway 判斷、排隊（與建點／Scale／刪除共用同一台的佇列與限速額度）、安全鎖（共用 KIS_LIMIT_KW_EXECUTE）、
+    取消、快照語意同 /api/kw/execute；回應格式相同，需輪詢 GET /api/tasks/{task_id}。"""
+    try:
+        if req.apply and not req.ids:
+            raise HTTPException(status_code=400, detail="校正必須明確指定要校正的點位（ids）")
+        staging = pg_client.get_staging_list(page=0, page_size=None, tb_status="done")
+        rows = staging["data"]
+        requested = set(req.ids) if req.ids else None
+        if requested is not None:
+            rows = [r for r in rows if r["id"] in requested]
+        _check_batch("datatype", len(rows))
+        if not rows:
+            raise HTTPException(status_code=400, detail="沒有已建點的資料可檢查")
+
+        derived = pg_client.derive_kw_fields(rows)
+        if not derived:
+            raise HTTPException(status_code=400, detail="沒有已建點的資料可檢查")
+        plan = _plan_gateway_parts(derived, req.gateway_id, req.kw_gw_url,
+                                   req.kw_gw_username, req.kw_gw_password)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[datatypeCheck] 準備階段失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"資料型態檢查準備失敗: {e}")
+
+    mode_label = "校正" if req.apply else "檢查"
+    initial_logs = []
+    if requested is not None:
+        ineligible = len(requested) - len({r["id"] for r in rows})
+        if ineligible > 0:
+            initial_logs.append(("warning", f"ids 中有 {ineligible} 筆不存在或不是已建點狀態（tb_status≠done），已排除"))
+    log.info(f"[datatypeCheck] {mode_label}：共 {len(derived)} 筆（模式={plan.mode}，Gateway {len(plan.parts)} 台，"
+             f"無法判斷 {len(plan.blocked)} 筆），delay={req.delay}, batch_size={req.batch_size}")
+
+    ip = request.client.host if request.client else ""
+    username = user.get("sub", "") if isinstance(user, dict) else str(user)
+    params = {
+        "apply": req.apply,
+        "dry_run": not req.apply,        # 歷史紀錄用：檢查＝唯讀（True），校正＝會寫入（False）
+        "delay": req.delay, "batch_size": req.batch_size, "batch_pause": req.batch_pause,
+        "username": username, "ip": ip,
+    }
+    resp = _dispatch_gateway_job(
+        "kw_datatype_fix" if req.apply else "kw_datatype_check",
+        "(Kepware 資料型態校正)" if req.apply else "(Kepware 資料型態檢查)",
+        params, plan, _datatype_worker, initial_logs=initial_logs)
+    gateways = "、".join(p.name for p in plan.parts) or "無"
+    _log_activity(request, user, "datatype_fix" if req.apply else "datatype_check",
+                  f"Kepware 資料型態{mode_label}：{len(derived)} 點，Gateway：{gateways}（模式={plan.mode}）")
+    return resp
 
 
 # ── API: 設定管理 ─────────────────────────────────────
