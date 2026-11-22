@@ -5,10 +5,14 @@ Kepware Tag「資料型態（data_type）」的純邏輯工具（只用標準函
 用於「data_type 校正」功能：讀取 Kepware 上已建立的 Tag，取出它目前的資料型態，
 與系統推導的預期值比對；校正（PUT）之後再讀回，確認「只有 data_type 變了」。
 
-★ 重要：Gateway 的「讀取單一 Tag」回應 schema，文件只寫 any，**欄位名稱至今未經真實回應確認**。
-  這裡的 extract_tag_data_type 是「依文件與常見命名推測」的寬鬆解析，設計原則是**寧可判不出來也絕不亂猜**：
-  找不到、有歧義、值怪異一律回 None，由呼叫端當成失敗處理（不寫入）。
-  日後拿到真實回應（scripts/kw_probe_tag.py）若欄位名稱不同，只需調整本檔的
+★ Gateway 的「讀取單一 Tag」回應格式已用真實回應確認（2026-11，文件的 schema 只寫 any）：
+    {"success": true, "message": "取得成功",
+     "data": {"common.ALLTYPES_NAME": ..., "servermain.TAG_DATA_TYPE": 8,
+              "servermain.TAG_SCALING_SCALED_DATA_TYPE": 8, ...}}
+  資料型態在 data["servermain.TAG_DATA_TYPE"]；TAG_SCALING_SCALED_DATA_TYPE 是「縮放輸出型態」，是不同的欄位，
+  絕不可混用（否則 data_type=0 的舊點會被縮放型態 8 誤導成「已正確」而漏校正）。
+  extract_tag_data_type 仍維持寬鬆解析、**寧可判不出來也絕不亂猜**：找不到、有歧義、值怪異一律回 None，
+  由呼叫端當成失敗處理（不寫入）。Gateway 若日後改了欄位名稱，只需調整本檔的
   DATA_TYPE_KEYS / WRAPPER_KEYS 這兩個常數，其他地方不用動。
 
 data_type 數值（Kepware 文件）：
@@ -62,9 +66,10 @@ def data_type_label(code: Any) -> str:
     return f"未知({code})"
 
 
-# ── 從「讀取 Tag」回應取出資料型態（依文件推測、待真實回應確認）──────────
+# ── 從「讀取 Tag」回應取出資料型態（格式已用真實回應確認）──────────
 
-# 候選鍵（比對不分大小寫）。名稱全為推測：Gateway 文件未列出回應欄位。
+# 候選鍵（比對不分大小寫）。真實回應用的是 servermain.TAG_DATA_TYPE（放在 data 包裝層底下）；
+# 其餘為寬鬆備援。**不可**加入 servermain.TAG_SCALING_SCALED_DATA_TYPE（那是縮放輸出型態）。
 DATA_TYPE_KEYS: tuple[str, ...] = (
     "data_type", "dataType", "datatype", "tag_data_type", "servermain.TAG_DATA_TYPE",
 )
@@ -103,7 +108,7 @@ def _parse_data_type_value(value: Any) -> Optional[int]:
 def extract_tag_data_type(payload: Any) -> Optional[int]:
     """從「讀取單一 Tag」的回應取出資料型態代碼（0–15）；無法確定一律回 None。
 
-    ★ 依文件與常見命名推測，欄位名稱待真實 Gateway 回應確認（見模組說明）。
+    ★ 真實回應格式已確認（見模組說明）：data 包裝層底下的 servermain.TAG_DATA_TYPE。
 
     找法：在回應第一層，以及 tag／data／result／definition／properties 這幾個鍵（值為 dict）
     底下的一層，找候選鍵 data_type／dataType／datatype／tag_data_type／servermain.TAG_DATA_TYPE

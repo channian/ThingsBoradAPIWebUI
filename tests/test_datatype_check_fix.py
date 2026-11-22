@@ -1025,3 +1025,100 @@ def test_check_after_fix_finds_nothing_left_to_correct(api_client, admin_headers
     assert fix["summary"]["success"] == 2
     _, again = _run(api_client, admin_headers)
     assert again["summary"]["details"] == [] and again["summary"]["success"] == 4
+
+
+# ═══════════════════════════════════════════════════════════════
+# 八、真實 Gateway 回應格式的端到端（success/message 外殼 + data 內為 servermain.* 全名）
+# ═══════════════════════════════════════════════════════════════
+
+from tests.test_tag_datatype import _real_get_response  # noqa: E402
+
+
+def _real_shape_put_hook(state, clobber=None):
+    """讓假 Gateway 的 PUT 照真實格式生效：改的是 data["servermain.TAG_DATA_TYPE"]（不是頂層 data_type）。
+    clobber 給 {鍵: 值} 時，PUT 順便把 data 內的其他欄位也改掉（模擬 PUT 不是部分更新）。"""
+    state.put_applies_data_type = False
+
+    def hook(remote, call, n):
+        remote["data"]["servermain.TAG_DATA_TYPE"] = call["data_type"]
+        if clobber:
+            remote["data"].update(clobber)
+
+    state.put_hook = hook
+
+
+def test_real_shape_check_finds_only_the_old_tag(api_client, admin_headers, monkeypatch, make_state):
+    make_gateway("real-gw")
+    state = make_state()
+    _install(monkeypatch, state)
+    id_old = _seed(state, "T_OLD", actual=0, payload=_real_get_response(0))
+    _seed(state, "T_NEW", actual=8, payload=_real_get_response(8))
+
+    _, result = _run(api_client, admin_headers)
+    s = result["summary"]
+    assert (s["success"], s["fail"], s["errors"]) == (2, 0, [])
+    assert [(d["tag_name"], d["id"], d["actual"], d["expected"]) for d in s["details"]] == [
+        ("T_OLD", id_old, 0, 8)], "真實格式下，舊點(0)要被找出來，新點(8)不可被列出"
+    assert state.set_tag_data_type_calls == [], "檢查模式零寫入"
+
+
+def test_real_shape_apply_passes_the_breaker_when_put_changes_only_data_type(
+        api_client, admin_headers, monkeypatch, make_state):
+    """校正後讀回驗證：真實格式下 data_type 變成 8、其餘欄位完全沒動 → 通過，不中止。"""
+    make_gateway("real-gw")
+    state = make_state()
+    _install(monkeypatch, state)
+    _real_shape_put_hook(state)
+    ids = [_seed(state, f"T_OLD{i}", actual=0, payload=_real_get_response(0)) for i in range(4)]
+
+    _, result = _run(api_client, admin_headers, apply=True, ids=ids)
+    s = result["summary"]
+    assert (s["success"], s["fail"], s["cancelled_remaining"]) == (4, 0, 0), s
+    assert s["errors"] == []
+    for i in range(4):
+        remote = state.remote_snapshot()[(CH, DEV, GRP, f"T_OLD{i}")]
+        assert remote["data"]["servermain.TAG_DATA_TYPE"] == 8
+    for call in state.set_tag_data_type_calls:
+        assert (call["data_type"], call["channel_name"], call["device_name"], call["tag_group"]) == (8, CH, DEV, GRP)
+
+
+@pytest.mark.parametrize("clobbered,shown", [
+    ({"servermain.TAG_SCALING_TYPE": 0}, "data.servermain.TAG_SCALING_TYPE"),
+    ({"common.ALLTYPES_DESCRIPTION": ""}, "data.common.ALLTYPES_DESCRIPTION"),
+    ({"servermain.TAG_ADDRESS": ""}, "data.servermain.TAG_ADDRESS"),
+])
+def test_real_shape_breaker_aborts_and_names_the_field_when_put_clobbers_other_settings(
+        api_client, admin_headers, monkeypatch, make_state, clobbered, shown):
+    """PUT 若不是部分更新（Scale／描述／位址被洗掉），第一筆就要中止，且錯誤訊息點名被動到的欄位；
+    其餘筆數一個都不可再寫入。"""
+    make_gateway("real-gw")
+    state = make_state()
+    _install(monkeypatch, state)
+    _real_shape_put_hook(state, clobber=clobbered)
+    ids = [_seed(state, f"T_OLD{i}", actual=0, payload=_real_get_response(0)) for i in range(5)]
+
+    _, result = _run(api_client, admin_headers, apply=True, ids=ids)
+    s = result["summary"]
+    assert len(state.set_tag_data_type_calls) == 1, "第一筆驗證失敗後必須立刻停止寫入"
+    assert (s["success"], s["fail"], s["cancelled_remaining"]) == (0, 1, 4), s
+    assert shown in s["errors"][0]["reason"] and "PUT 影響了其他欄位" in s["errors"][0]["reason"]
+
+
+def test_real_shape_gateway_reports_write_failure_with_http_200_is_a_failed_row_not_a_success(
+        api_client, admin_headers, monkeypatch, make_state):
+    """Gateway 回 HTTP 200 + success=false（client 轉成 RuntimeError）：該筆記為失敗，後面的點照常處理；
+    這不是「讀回不符」，不應觸發斷路器中止整台。"""
+    make_gateway("real-gw")
+    state = make_state()
+    _install(monkeypatch, state)
+    _real_shape_put_hook(state)
+    ids = [_seed(state, f"T_OLD{i}", actual=0, payload=_real_get_response(0)) for i in range(3)]
+    state.queue_set_data_type_error("T_OLD0", RuntimeError("Gateway 回報寫入失敗：Tag 被鎖定"))
+
+    _, result = _run(api_client, admin_headers, apply=True, ids=ids)
+    s = result["summary"]
+    assert (s["success"], s["fail"], s["cancelled_remaining"]) == (2, 1, 0), s
+    err = _errors(s)["T_OLD0"]["reason"]
+    assert "寫入失敗" in err and "Tag 被鎖定" in err
+    assert state.remote_snapshot()[(CH, DEV, GRP, "T_OLD0")]["data"]["servermain.TAG_DATA_TYPE"] == 0, \
+        "寫入失敗的點不可被改動"

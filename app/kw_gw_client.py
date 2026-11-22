@@ -276,7 +276,13 @@ class KepwareGatewayClient:
             proxies=self.proxies,
         )
         resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        # Gateway 的回應有 {"success": bool, "message": ...} 外殼（真實回應已確認）。
+        # HTTP 200 但 success=false 代表沒有寫成功，不能當成功：呼叫端只對最初幾筆寫入做讀回驗證，
+        # 之後的寫入就靠這裡把關，否則會靜默漏掉失敗。
+        if isinstance(result, dict) and result.get("success") is False:
+            raise RuntimeError(f"Gateway 回報寫入失敗：{result.get('message') or result}")
+        return result
 
     # ── Tag Scaling ──
 

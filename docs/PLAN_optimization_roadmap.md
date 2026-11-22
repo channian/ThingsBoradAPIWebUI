@@ -376,7 +376,7 @@ Phase 4「打磨」：P2-5 小項 + P3 依使用者需求挑選
 | G2 自訂 CA 憑證對 DB Gateway 無效 | ⏸ 降為低（兩台設定相同）；若現場是「關閉 SSL 驗證」在用才需補 |
 | G3 / G6 | ❎ 不成立（Proxy 相同、同一套 KIS） |
 | G4 Collector 單一設定 | ⏸ 暫不處理；超過 20 萬點分第二套 Collector 時再設計「Collector 設定檔」 |
-| 舊點 data_type=0 校正 | 🟡 **後端完成，待前端與真實 Gateway 實測**：`POST /api/kw/datatype-check`（檢查唯讀／校正需 ids／前 3 筆讀回驗證的電路斷路器）。讀取回應的欄位名稱、PUT 是否為部分更新都尚未用真實 Gateway 證實（先跑 `scripts/kw_probe_tag.py`，第一次只校正 1 筆）；詳見 `API_SCHEMA.md` 第 7 節 |
+| 舊點 data_type=0 校正 | 🟡 **後端完成，待前端與真實 Gateway 實測**：`POST /api/kw/datatype-check`（檢查唯讀／校正需 ids／前 3 筆讀回驗證的電路斷路器）。讀取回應格式已用真實回應確認（`data` 包裝層下的 `servermain.TAG_DATA_TYPE`，11/22）；**PUT 是否為部分更新仍未證實**（第一次只校正 1 筆，挑有 Scale 與說明文字的點）；尚缺一份 7 月前建立的舊點回應，用來確認舊點的型態值確實是 0；詳見 `API_SCHEMA.md` 第 7 節 |
 
 **已知小問題（暫不處理）**：`batch_size<=0` 會使該台整台失敗（ZeroDivisionError 被最後防線接住）；`GET /api/history` 讀檔未加鎖；頂欄「KEPWARE GW · OFFLINE」恆為 OFFLINE（Gateway 物件無 status，原本就如此）；Step 5 沒有「同步結構」按鈕；`failed` 狀態的分台顯示未經瀏覽器驗證。
 

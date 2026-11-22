@@ -30,7 +30,7 @@
 >
 > **2026-11 data_type 檢查／校正（後端）**：新增 `POST /api/kw/datatype-check`（背景任務，沿用同一套路由／排隊／取消／安全鎖）；
 > 任務 `summary` 新增選填的 `details`（沒有時為 `[]`）；`type` 新增 `kw_datatype_check` / `kw_datatype_fix`。
-> ⚠️ **PUT 部分更新語意與讀取回應的欄位名稱尚待以真實 Gateway 確認**，詳見第 7 節。
+> ⚠️ **PUT 是否為部分更新尚待以真實 Gateway 確認**（讀取回應的欄位名稱已用真實回應確認），詳見第 7 節。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -1930,12 +1930,14 @@ CSV 裡沒有任何同時有 `name` 與 `type` 的列時，任務會立刻以 `t
 **回傳 `task_id`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**  
 **需要 JWT（admin / operator）**，每次被接受的請求寫一筆操作日誌（`datatype_check` / `datatype_fix`）。
 
-> ⚠️ **這會寫入正式環境，而且有兩件事尚未用真實 Gateway 證實，請務必注意：**
+> ⚠️ **這會寫入正式環境，而且有一件事尚未用真實 Gateway 證實，請務必注意：**
 > 1. **`PUT /api/config/tags` 的「部分更新」語意尚待確認**。本功能只送 `channel_name` / `device_name` / `tag_name` / `data_type`
 >    （有群組才加 `tag_group`），依 Gateway 文件「關閉縮放只傳 `scaling_type:0`」的範例**推測**它是部分更新，但沒有實測。
 >    若實際是整筆取代，其他欄位（位址、縮放…）可能被洗掉——所以才有下面的**電路斷路器**。
-> 2. **「讀取單一 Tag」的回應欄位名稱尚待確認**（文件的 schema 只寫 `any`）。`app/tag_datatype.py` 的解析是依文件與常見命名
->    推測，**判讀不出來的點一律失敗、絕不寫入**。請先用 `scripts/kw_probe_tag.py` 對真實 Gateway 實測一次，確認欄位名稱。
+> 2. **「讀取單一 Tag」的回應格式已用真實回應確認**（2026-11）：外層為 `{"success", "message", "data"}` 外殼，Tag 內容在
+>    `data`，資料型態是 `data["servermain.TAG_DATA_TYPE"]`（數字）；另有 `servermain.TAG_SCALING_SCALED_DATA_TYPE`
+>    （縮放輸出型態）是不同的欄位，解析時不會混用。**判讀不出來的點仍一律失敗、絕不寫入**。
+>    另外 PUT 的回應同樣有 `success` 外殼：HTTP 200 但 `success:false` 會被當成寫入失敗。
 >
 > **建議第一次只對 1 筆校正**（`apply=true` 且 `ids` 只放一筆），到 Kepware 確認該點只有 `data_type` 變了、其他欄位都還在，再擴大範圍。
 
