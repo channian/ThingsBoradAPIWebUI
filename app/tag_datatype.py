@@ -186,14 +186,22 @@ def _diff(before: Any, after: Any, path: str, allowed: frozenset, out: list) -> 
         out.append(path or "<root>")
 
 
+# 回應裡「不是 Tag 屬性」的專案層欄位，比對時一律忽略（不論 allowed 怎麼設）。
+# PROJECT_ID：Kepware 專案每被修改一次就會換一個值（使用者實測：同一個點 PUT 前 1670369932、PUT 後 3553139293；
+# 其他點的回應也各不相同），代表「專案被改過」，不是這個 Tag 的設定。若把它當成「其他欄位被動到」，
+# 第一筆校正的讀回驗證就一定失敗、整個功能卡死；而且別人（或其他筆）同時改專案也會讓它變，所以不能拿來比對。
+IGNORED_KEYS: tuple[str, ...] = ("PROJECT_ID",)
+
+
 def diff_tag_payloads(before: Any, after: Any,
                       allowed: Iterable[str] = DATA_TYPE_KEYS) -> list[str]:
-    """遞迴比較兩份「讀取 Tag」回應，回傳除了 allowed 鍵之外，值有變動／新增／消失的鍵路徑（排序後）。
+    """遞迴比較兩份「讀取 Tag」回應，回傳除了 allowed 與 IGNORED_KEYS 之外，值有變動／新增／消失的鍵路徑（排序後）。
 
     路徑以點串接，如 ``scaling_type``、``nested.address``。allowed 以「鍵名」比對（不分大小寫、任何層級），
     命中的鍵整棵子樹都不比較。list 視為單一值（有差異就回報該 list 所在路徑，不逐項展開）。
+    IGNORED_KEYS（專案層欄位，如 PROJECT_ID）永遠忽略，只有一邊有也不算新增／消失。
     用於寫入後檢查「PUT 有沒有影響到 data_type 以外的欄位」：回傳空 list 才算乾淨。"""
-    allowed_lower = frozenset(str(a).lower() for a in allowed)
+    allowed_lower = frozenset(str(a).lower() for a in (*allowed, *IGNORED_KEYS))
     out: list[str] = []
     _diff(before, after, "", allowed_lower, out)
     return sorted(out)

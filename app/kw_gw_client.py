@@ -301,8 +301,9 @@ class KepwareGatewayClient:
         data_type 必須是 1–15 的整數（0＝未指定是要被校正掉的狀態，不是校正目標；其餘值一律拒絕，
         在送出前就丟 ValueError，不呼叫 Gateway）。
 
-        ★ 此端點對「部分更新」的行為（只傳 data_type 會不會把其他欄位洗掉）尚未以真實 Gateway 證實，
-        所以呼叫端（_datatype_worker）對最初幾筆寫入會讀回驗證，發現其他欄位被動到就中止。"""
+        ★ 「只傳 data_type 是部分更新」已用真實 Gateway 確認（2026-11-22：描述、掃描週期、位址、讀寫權限、
+        Scale 都不受影響；PROJECT_ID 是專案層欄位，每次修改都會換，不算被動到）。呼叫端（_datatype_worker）
+        仍對最初幾筆寫入讀回驗證作為保險，發現其他欄位被動到就中止。"""
         if not is_writable_data_type(data_type):
             raise ValueError(f"data_type 必須是 1–15 的整數，收到 {data_type!r}")
         payload = {

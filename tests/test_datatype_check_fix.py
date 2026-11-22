@@ -1041,6 +1041,8 @@ def _real_shape_put_hook(state, clobber=None):
 
     def hook(remote, call, n):
         remote["data"]["servermain.TAG_DATA_TYPE"] = call["data_type"]
+        # 真實行為（使用者實測）：每次修改專案，PROJECT_ID 都會換一個值
+        remote["data"]["PROJECT_ID"] = remote["data"].get("PROJECT_ID", 0) + 1
         if clobber:
             remote["data"].update(clobber)
 

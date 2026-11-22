@@ -30,7 +30,7 @@
 >
 > **2026-11 data_type 檢查／校正（後端）**：新增 `POST /api/kw/datatype-check`（背景任務，沿用同一套路由／排隊／取消／安全鎖）；
 > 任務 `summary` 新增選填的 `details`（沒有時為 `[]`）；`type` 新增 `kw_datatype_check` / `kw_datatype_fix`。
-> ⚠️ **PUT 是否為部分更新尚待以真實 Gateway 確認**（讀取回應的欄位名稱已用真實回應確認），詳見第 7 節。
+> ✅ **PUT 只送 `data_type` 已用真實 Gateway 確認為部分更新**（2026-11-22：測試點與已設定 Scale 的正式點，描述／掃描週期／位址／讀寫權限／Scale 皆不受影響），讀取回應的欄位名稱也已確認；詳見第 7 節。
 >
 > **2026-11 Step 3 / Step 5 的 `not_applied` 警告（只記錄、不改判定）**：Kepware 逐屬性套用，HTTP 200 / `success:true` 時
 > 回應的 `data.not_applied` 仍可能列出沒套用成功的屬性。Step 3（建點）與 Step 5（Scale）現在會把它記成警告，
@@ -1993,10 +1993,12 @@ CSV 裡沒有任何同時有 `name` 與 `type` 的列時，任務會立刻以 `t
 **回傳 `task_id`，比照第 2 節「背景任務與輪詢」——不要只看 HTTP 200。**  
 **需要 JWT（admin / operator）**，每次被接受的請求寫一筆操作日誌（`datatype_check` / `datatype_fix`）。
 
-> ⚠️ **這會寫入正式環境，而且有一件事尚未用真實 Gateway 證實，請務必注意：**
-> 1. **`PUT /api/config/tags` 的「部分更新」語意尚待確認**。本功能只送 `channel_name` / `device_name` / `tag_name` / `data_type`
->    （有群組才加 `tag_group`），依 Gateway 文件「關閉縮放只傳 `scaling_type:0`」的範例**推測**它是部分更新，但沒有實測。
->    若實際是整筆取代，其他欄位（位址、縮放…）可能被洗掉——所以才有下面的**電路斷路器**。
+> ⚠️ **這會寫入正式環境，請務必注意：**
+> 1. **`PUT /api/config/tags` 只送 `data_type` 已用真實 Gateway 確認為「部分更新」**（2026-11-22 使用者實測：測試點 PUT 前後
+>    只有 `servermain.TAG_DATA_TYPE` 10→8 與 `PROJECT_ID` 變動，描述、掃描週期、位址、讀寫權限、Scale 全部不變；
+>    已設定 Scale 的正式點也確認 Scale 不受影響）。本功能只送 `channel_name` / `device_name` / `tag_name` / `data_type`
+>    （有群組才加 `tag_group`）。仍保留下面的**電路斷路器**作為保險（Gateway 行為日後改變時能立刻停下）。
+>    **`PROJECT_ID` 是專案層欄位**（每次修改專案都會換一個值），比對時一律忽略，不算「其他欄位被動到」。
 > 2. **「讀取單一 Tag」的回應格式已用真實回應確認**（2026-11）：外層為 `{"success", "message", "data"}` 外殼，Tag 內容在
 >    `data`，資料型態是 `data["servermain.TAG_DATA_TYPE"]`（數字）；另有 `servermain.TAG_SCALING_SCALED_DATA_TYPE`
 >    （縮放輸出型態）是不同的欄位，解析時不會混用。**判讀不出來的點仍一律失敗、絕不寫入**。
