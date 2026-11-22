@@ -64,13 +64,32 @@ class TagNotAppliedError(RuntimeError):
         self.keys = keys
 
 
-def _not_applied_keys(result) -> list:
-    """從 PUT 回應取出 data.not_applied 的屬性名稱（已排序）；沒有或格式不符回 []。"""
+def not_applied_keys(result) -> list:
+    """從 PUT／POST 回應取出 data.not_applied 的屬性名稱（已排序）；沒有或格式不符回 []。
+
+    只認「非空 dict」：空 dict、None、list、data 不是 dict、回應本身不是 dict 一律視為沒有
+    （不誤殺）。公開輔助函式：set_tag_data_type 用它把未套用當失敗，Step 3 / Step 5 的 worker
+    只用它「記錄警告」（不改變成功／失敗判定）。"""
     data = result.get("data") if isinstance(result, dict) else None
     not_applied = data.get("not_applied") if isinstance(data, dict) else None
     if isinstance(not_applied, dict) and not_applied:
         return sorted(str(k) for k in not_applied)
     return []
+
+
+# 舊名（既有程式與測試仍在用），行為完全相同
+_not_applied_keys = not_applied_keys
+
+
+def not_applied_message(result) -> str:
+    """取回應的 data.message（Kepware 對「為什麼有屬性沒套用」的說明）；沒有回 ""，最多 200 字。
+
+    與 not_applied_keys 各自獨立：只負責取說明文字，不判斷 not_applied 是否非空。"""
+    data = result.get("data") if isinstance(result, dict) else None
+    message = data.get("message") if isinstance(data, dict) else None
+    if not message:
+        return ""
+    return str(message)[:200]
 
 
 class KepwareGatewayClient:

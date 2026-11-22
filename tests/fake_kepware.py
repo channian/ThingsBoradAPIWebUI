@@ -37,6 +37,12 @@ data_type 檢查／校正（`/api/kw/datatype-check`）用的「Kepware 上的 T
     state.get_tag_calls / state.set_tag_data_type_calls / state.events（依序的 ("GET"|"PUT", tag_name)）記錄所有呼叫；
     get_tag 回傳深拷貝（寫入前後的兩份回應才不會是同一個物件）；Tag 不在資料表 → 404。
 
+指定 create_tag / set_tag_scaling 的回傳內容（測 Kepware 回 success 但 data.not_applied 非空的警告；預設行為不變）：
+    state.set_create_response("T1", {"success": True, "data": {"not_applied": {"servermain.X": 1}}})
+    state.set_scaling_response("2F.CHS.T1", payload)   # set_tag_scaling 的 key 是 Kepware 全名（含 tag group），同 queue_scaling_error / add_gate
+    # 沒設定的 tag 維持預設回傳（create_tag → {"name": tag}、set_tag_scaling → {"success": True}）；
+    # payload 可以是任何東西（None、list…）以測格式不符；回傳的是深拷貝；429 等例外仍會先於回傳內容生效。
+
 背景任務在獨立執行緒呼叫這裡的方法，因此所有記錄操作都用 threading.Lock 保護，
 確保 thread-safe（雖然 CPython 的 list.append 本身是原子操作，但「先查詢佇列、
 再 pop 再 raise」這種複合操作不是原子的，仍需要鎖）。
@@ -128,6 +134,8 @@ class FakeKepwareState:
         self._create_tag_errors = {}
         self._scaling_errors = {}
         self._delete_tag_errors = {}
+        self._create_responses = {}           # tag_name -> create_tag 的回傳內容（沒設定＝預設）
+        self._scaling_responses = {}          # Kepware 全名 -> set_tag_scaling 的回傳內容
         self._gates = {}
         # data_type 檢查／校正用
         self.get_tag_calls = []
@@ -178,6 +186,18 @@ class FakeKepwareState:
     def queue_delete_tag_error(self, tag_name, *errors):
         with self._lock:
             self._delete_tag_errors.setdefault(tag_name, []).extend(errors)
+
+    def set_create_response(self, tag_name, payload):
+        """指定 create_tag(tag_name=...) 成功時的回傳內容（可為任何東西，包含 None／list）；
+        之後每次成功的呼叫都回它的深拷貝。未設定的 tag 維持預設回傳 {"name": tag_name}。"""
+        with self._lock:
+            self._create_responses[tag_name] = payload
+
+    def set_scaling_response(self, tag_name, payload):
+        """指定 set_tag_scaling 成功時的回傳內容；tag_name 是 config["tag_name"]（Kepware 全名，含 tag group）。
+        未設定的維持預設回傳 {"success": True}。"""
+        with self._lock:
+            self._scaling_responses[tag_name] = payload
 
     def queue_get_tag_error(self, tag_name, *errors):
         """為指定 tag_name 的 get_tag() 呼叫依序佇列例外（每次呼叫消耗一個，包含寫入後的讀回驗證）；
@@ -288,6 +308,9 @@ def make_fake_kepware_client(state_or_map):
                 })
             state._wait_gate("create_tag", tag_name)
             state._pop_and_raise(state._create_tag_errors, tag_name)
+            with state._lock:
+                if tag_name in state._create_responses:
+                    return copy.deepcopy(state._create_responses[tag_name])
             return {"name": tag_name}
 
         def set_tag_scaling(self, config):
@@ -296,6 +319,9 @@ def make_fake_kepware_client(state_or_map):
                 state.set_tag_scaling_calls.append(dict(config))
             state._wait_gate("set_tag_scaling", config.get("tag_name"))
             state._pop_and_raise(state._scaling_errors, config.get("tag_name"))
+            with state._lock:
+                if config.get("tag_name") in state._scaling_responses:
+                    return copy.deepcopy(state._scaling_responses[config.get("tag_name")])
             return {"success": True}
 
         def get_tag(self, channel_name, device_name, tag_name, tag_group=None):

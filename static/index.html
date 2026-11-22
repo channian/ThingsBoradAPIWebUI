@@ -337,7 +337,7 @@
                         <div v-if="kwDerive.data.length" class="tbl-wrap" style="overflow-x:auto">
                             <div style="font-size:11px;color:var(--ink-3);padding:6px 4px 2px;display:flex;align-items:center;gap:6px">
                                 <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--azure);opacity:.7"></span>
-                                Channel / Device / Groups / Data Type 欄位可直接編輯，調整完成後點「儲存覆寫」（Data Type 預設為 Float）。狀態欄：✓ 路徑存在　+G 群組執行時自動建立　▲ channel 或 device 缺（不會自動建立）
+                                Channel / Device / Groups / Data Type 欄位可直接編輯，調整完成後點「儲存覆寫」（Data Type 預設為 Float；只有 {{ KW_DATA_TYPES.confirmed.map(t => t.label).join(' / ') }} 已實測確認，其餘型態標示「未驗證」，使用前請先在 Kepware 確認）。狀態欄：✓ 路徑存在　+G 群組執行時自動建立　▲ channel 或 device 缺（不會自動建立）
                             </div>
                             <table style="min-width:1200px">
                                 <thead>
@@ -352,7 +352,8 @@
                                 </thead>
                                 <tbody>
                                     <tr v-for="r in kwDerive.data" :key="r.id"
-                                        :class="{ 'kw-overridden': r.overridden, 'row-err': routeBlocked(r), 'row-dim': rowSkipped(r) }">
+                                        :class="{ 'kw-overridden': r.overridden, 'row-err': routeBlocked(r), 'row-dim': rowSkipped(r),
+                                                  'row-warn': kwTypeUnverified(r.data_type) && !routeBlocked(r) }">
                                         <td>
                                             <span v-if="r.validation" class="st-chip" :class="'st-' + rowStatus(r.validation)"
                                                   :title="{ ok: '路徑存在', add: '群組執行時會自動建立', warn: 'channel 或 device 不存在（不會自動建立）' }[rowStatus(r.validation)]">
@@ -371,9 +372,19 @@
                                         <td><input class="input input-kw" v-model="r.device_name"></td>
                                         <td><input class="input input-kw td-mono" v-model="r.tag_groups"></td>
                                         <td>
-                                            <select class="select input-kw" v-model.number="r.data_type" style="font-size:12px;padding:2px 4px">
-                                                <option v-for="t in KW_DATA_TYPES" :key="t.v" :value="t.v">{{ t.label }}</option>
-                                            </select>
+                                            <div class="dt-cell">
+                                                <select class="select input-kw" v-model.number="r.data_type" style="font-size:12px;padding:2px 4px">
+                                                    <optgroup label="已確認">
+                                                        <option v-for="t in KW_DATA_TYPES.confirmed" :key="t.v" :value="t.v">{{ t.label }}</option>
+                                                    </optgroup>
+                                                    <optgroup label="未驗證（使用前請先在 Kepware 確認）">
+                                                        <option v-for="t in KW_DATA_TYPES.unverified" :key="t.v" :value="t.v">{{ t.label }}（未驗證）</option>
+                                                        <!-- 現值不在 1–15 清單內時仍要能顯示（否則下拉會變空白） -->
+                                                        <option v-if="r.data_type != null && r.data_type !== '' && !kwTypeKnown(r.data_type)" :value="r.data_type">編號 {{ r.data_type }}（未驗證）</option>
+                                                    </optgroup>
+                                                </select>
+                                                <span v-if="kwTypeUnverified(r.data_type)" class="dt-warn" :title="KW_DATA_TYPE_UNVERIFIED_TIP" role="img" aria-label="資料型態未驗證">⚠</span>
+                                            </div>
                                         </td>
                                         <td class="td-mono" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.address }}</td>
                                         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ r.description }}</td>
@@ -1387,6 +1398,29 @@
                 <template v-if="er.gateway">[{{ er.gateway }}] </template>{{ er.name || er.tag_name }}：{{ er.reason }}
             </div>
             <div v-if="task.summary.errors.length > 10" style="color:var(--ink-3)">…其餘 {{ task.summary.errors.length - 10 }} 筆失敗未列出</div>
+        </div>
+    </div>
+
+    <!-- Kepware 回 success 但回報部分屬性未套用（summary.details 的 kind === 'not_applied'）：僅供參考，不影響上面的成功／失敗計數 -->
+    <div v-if="notApplied.length" class="banner warn na-box">
+        <div class="na-body">
+            <div style="font-weight:600">⚠ {{ notApplied.length }} 筆點位 Kepware 回報部分屬性未套用（這些點位仍視為完成，僅供參考）</div>
+            <div class="task-note">常見原因：有用戶端（例如 Collector）正在使用該點位，或該屬性目前被停用／唯讀（例如縮放類型為無時，縮放參數無法設定）。</div>
+            <button class="link-btn" :aria-expanded="naOpen" @click="naOpen = !naOpen">{{ naOpen ? '收合清單' : '展開清單' }}</button>
+            <div v-if="naOpen" class="na-list">
+                <div v-for="(x, i) in naShown" :key="i" class="na-item" :title="x.message || ''">
+                    <span class="td-mono na-tag">{{ x.tag_name || x.name || (x.id != null ? '#' + x.id : '（未知點位）') }}</span>
+                    <span v-if="x.gateway" class="na-meta">{{ x.gateway }}</span>
+                    <span v-if="naStepText(x.step)" class="na-meta">{{ naStepText(x.step) }}</span>
+                    <span class="na-keys">未套用：{{ naKeysText(x) || '（Kepware 未列出屬性名稱）' }}</span>
+                </div>
+                <div v-if="naMore && !naAll">
+                    <button class="link-btn" @click="naAll = true">還有 {{ naMore }} 筆（展開全部）</button>
+                </div>
+                <div v-else-if="naMore && naAll">
+                    <button class="link-btn" @click="naAll = false">只顯示前 {{ NOT_APPLIED_SHOWN }} 筆</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>

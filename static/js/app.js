@@ -49,7 +49,23 @@ const TaskPanel = {
             return !!(t.submitting || t.id || t.error)
         })
         const errorsShown = computed(() => (props.task.summary?.errors || []).slice(0, 10))
-        return { stateText, stateClass, pct, queuedNow, excludedText, running, visible, errorsShown }
+
+        // 「Kepware 未套用」警告：summary.details 裡 kind === 'not_applied' 的項目（Kepware 回 success，
+        // 但回報部分屬性沒被套用）。不影響成功／失敗計數；details 缺少、非陣列、夾雜其他項目都要安全忽略。
+        const NOT_APPLIED_SHOWN = 20
+        const notApplied = computed(() => {
+            const d = props.task.summary?.details
+            return Array.isArray(d) ? d.filter(x => x && x.kind === 'not_applied') : []
+        })
+        const naOpen = ref(true)         // 清單展開／收合
+        const naAll = ref(false)         // 超過 20 筆時是否展開全部
+        const naShown = computed(() => naAll.value ? notApplied.value : notApplied.value.slice(0, NOT_APPLIED_SHOWN))
+        const naMore = computed(() => Math.max(0, notApplied.value.length - NOT_APPLIED_SHOWN))
+        watch(() => props.task, () => { naOpen.value = true; naAll.value = false })   // 新任務：回到預設
+        const naStepText = (s) => (s === 'create' ? '建點' : s === 'scale' ? 'Scale' : (s || ''))
+        const naKeysText = (x) => (Array.isArray(x.keys) ? x.keys.filter(k => k).join('、') : '')
+        return { stateText, stateClass, pct, queuedNow, excludedText, running, visible, errorsShown,
+                 NOT_APPLIED_SHOWN, notApplied, naOpen, naAll, naShown, naMore, naStepText, naKeysText }
     },
     template: '#task-panel-tpl',
 }
@@ -604,14 +620,47 @@ createApp({
         const kwStale = computed(() => kwDerive.data.length > 0
             && (kwDerive.derivedGw !== selectedGwId.value || kwDerive.derivedVer !== routeDataVersion.value))
 
-        // Kepware tag 資料型別 enum（依 Kepware API Gateway 文件）；實務上 9 成為 Float
-        const KW_DATA_TYPES = [
+        // Kepware tag 資料型別 enum（依 Kepware API Gateway 文件）；實務上 9 成為 Float。
+        // 但只有 KW_DATA_TYPES_CONFIRMED 列出的編號經過實測確認，其餘編號未驗證（選錯會建出錯誤型態的點位）。
+        // 之後實測確認更多型態時，只要改這個陣列即可（下拉分組、⚠ 標記、確認視窗都會跟著變）。
+        const KW_DATA_TYPES_CONFIRMED = [1, 7, 8]
+        const _KW_DATA_TYPE_LIST = [
             { v: 1, label: 'Boolean' }, { v: 2, label: 'Char' }, { v: 3, label: 'Byte' },
             { v: 4, label: 'Short' }, { v: 5, label: 'Word' }, { v: 6, label: 'Long' },
             { v: 7, label: 'DWord' }, { v: 8, label: 'Float' }, { v: 9, label: 'Double' },
             { v: 10, label: 'String' }, { v: 11, label: 'BCD' }, { v: 12, label: 'LBCD' },
             { v: 13, label: 'Date' }, { v: 14, label: 'LLong' }, { v: 15, label: 'QWord' },
         ]
+        const KW_DATA_TYPES = {
+            confirmed: _KW_DATA_TYPE_LIST.filter(t => KW_DATA_TYPES_CONFIRMED.includes(t.v)),
+            unverified: _KW_DATA_TYPE_LIST.filter(t => !KW_DATA_TYPES_CONFIRMED.includes(t.v)),
+        }
+        const KW_DATA_TYPE_UNVERIFIED_TIP = '此資料型態編號尚未經實測確認，請先在 Kepware 確認再執行'
+
+        // 是否為未驗證型態：空值（null／undefined／''）不算（後端會用預設 Float）；不在 1–15 內的值也視為未驗證
+        function kwTypeUnverified(v) {
+            if (v === null || v === undefined || v === '') return false
+            return !KW_DATA_TYPES_CONFIRMED.includes(Number(v))
+        }
+
+        // 下拉要能顯示「不在 1–15 清單內」的現值（否則下拉會變空白）
+        function kwTypeKnown(v) {
+            return _KW_DATA_TYPE_LIST.some(t => t.v === Number(v))
+        }
+
+        function _kwTypeLabel(v) {
+            const t = _KW_DATA_TYPE_LIST.find(x => x.v === Number(v))
+            return t ? t.label : `編號 ${v}`
+        }
+
+        // 提醒文字用：已確認型態的名稱（來自單一常數）與一組列所用到的未驗證型態名稱
+        function _kwConfirmedNames() {
+            return KW_DATA_TYPES.confirmed.map(t => t.label).join('、')
+        }
+
+        function _kwUnverifiedUsed(types) {
+            return [...new Set(types)].sort((a, b) => a - b).map(_kwTypeLabel).join('、')
+        }
 
         function _stampKwOrig(row) {
             row._origChannel = row.channel_name || ''
@@ -652,6 +701,12 @@ createApp({
             if (!kwDerive.data.length) return
             const changed = kwDerive.data.filter(_kwRowChanged)
             if (!changed.length) { alert('沒有欄位變更，無需儲存'); return }
+            // 變更列中有使用未驗證資料型態者：先確認（只提醒，不禁止）
+            const unverified = changed.filter(r => kwTypeUnverified(r.data_type))
+            if (unverified.length && !confirm(
+                `有 ${unverified.length} 筆變更使用了尚未經實測確認的資料型態（${_kwUnverifiedUsed(unverified.map(r => r.data_type))}）。\n`
+                + `目前只有 ${_kwConfirmedNames()} 已確認；型態編號選錯會建出錯誤型態的點位，請先在 Kepware 確認對應的編號。\n\n`
+                + `確定要儲存這 ${changed.length} 筆變更嗎？`)) return
             kwDerive.savingOverrides = true
             let saved = 0
             let errorMsg = ''
@@ -694,8 +749,16 @@ createApp({
                 return
             }
             const unsaved = kwDerive.data.filter(_kwRowChanged).length
+            // 本次將送出的列中使用未驗證資料型態者。後端用「已儲存」的型態建點（未儲存的下拉修改不會套用），
+            // 所以以推導／儲存當時的值 _origDataType 判斷，而不是下拉目前的值。
+            const unverified = kwDerive.data.filter(r => !routeBlocked(r) && !rowSkipped(r) && kwTypeUnverified(r._origDataType))
+            const typeWarn = unverified.length
+                ? `\n\n⚠⚠ 警告：其中 ${unverified.length} 筆使用尚未經實測確認的資料型態（${_kwUnverifiedUsed(unverified.map(r => r._origDataType))}）。\n`
+                  + `目前只有 ${_kwConfirmedNames()} 已確認；型態編號選錯會建出錯誤型態的點位，請先在 Kepware 確認對應的編號。`
+                : ''
             if (!confirm(`確定要建立 ${s.willSend} 筆 Tag 到 Kepware？\nGateway：${_gwModeText()}${_sendNotes(s)}`
-                + (unsaved ? `\n⚠ 有 ${unsaved} 筆欄位修改尚未儲存，執行時不會套用（請先按「儲存覆寫」）` : ''))) return
+                + (unsaved ? `\n⚠ 有 ${unsaved} 筆欄位修改尚未儲存，執行時不會套用（請先按「儲存覆寫」）` : '')
+                + typeWarn)) return
             // 自動模式不帶 gateway_id；單台模式帶 gateway_id
             const body = { delay: kwDerive.delay, batch_size: kwDerive.batchSize, batch_pause: kwDerive.batchPause }
             if (selectedGwId.value) body.gateway_id = selectedGwId.value
@@ -1332,7 +1395,7 @@ createApp({
             importSteps, importStep,
             imp, handleFile, onDrop, importToStaging, resetUpload,
             staging, loadStaging, clearStaging, toggleStagingSelectAll, toggleStagingRow, deleteSelectedStaging,
-            kwDerive, KW_DATA_TYPES, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
+            kwDerive, KW_DATA_TYPES, KW_DATA_TYPE_UNVERIFIED_TIP, kwTypeUnverified, kwTypeKnown, deriveKw, executeKw, saveAllKwOverrides, rowStatus,
             kwRoute, kwStale, scaleRoute, scaleStale, routeBlocked, rowSkipped, routeBadge,
             cancelTask, resumeTask,
             pgDerive, derivePg, executePg,

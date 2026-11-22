@@ -667,6 +667,11 @@ mark.hl { background: rgba(79, 172, 229, 0.25); color: var(--azure-deep); paddin
   outline: none; box-shadow: 0 0 0 2px var(--azure-soft); }
 tr.kw-overridden td { background: rgba(54,122,223,0.04); }
 tr.kw-overridden .input-kw { color: var(--azure); }
+/* 資料型態：未驗證型態的 ⚠ 標記；已覆寫的列仍要看得出警示底色（兩個 class 同時存在時 row-warn 勝出） */
+.dt-cell { display: flex; align-items: center; gap: 4px; }
+.dt-cell .select { min-width: 136px; }   /* 容納「Double（未驗證）」這類較長的選項文字 */
+.dt-warn { color: var(--warn); font-size: 13px; line-height: 1; cursor: help; flex-shrink: 0; }
+tr.kw-overridden.row-warn td { background: rgba(217, 131, 36, 0.06); }
 
 /* AND/OR logic toggle buttons in query tab */
 .btn-logic {
@@ -715,6 +720,13 @@ tr.row-dim td { opacity: 0.5; }
 .task-result { padding: 12px 14px; border-radius: 8px; font-size: 13px; }
 .task-result .gw-lines { margin-top: 8px; font-size: 12px; font-family: var(--font-mono); color: var(--ink-2); display: flex; flex-direction: column; gap: 2px; }
 .task-result .errs { margin-top: 8px; font-size: 12px; font-family: var(--font-mono); }
+/* Kepware 未套用警告（task-panel 內） */
+.na-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.na-list { align-self: stretch; max-height: 520px; overflow: auto; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.na-item { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.na-tag { font-size: 12px; font-weight: 600; }
+.na-meta { color: var(--ink-3); }
+.na-keys { color: var(--ink-2); font-family: var(--font-mono); overflow-wrap: anywhere; }
 @media (max-width: 900px) { .gw-prog-row { grid-template-columns: 1fr; } }
 
 /* 作業佇列面板 */

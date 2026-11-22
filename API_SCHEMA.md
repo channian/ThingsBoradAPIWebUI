@@ -31,6 +31,11 @@
 > **2026-11 data_type 檢查／校正（後端）**：新增 `POST /api/kw/datatype-check`（背景任務，沿用同一套路由／排隊／取消／安全鎖）；
 > 任務 `summary` 新增選填的 `details`（沒有時為 `[]`）；`type` 新增 `kw_datatype_check` / `kw_datatype_fix`。
 > ⚠️ **PUT 是否為部分更新尚待以真實 Gateway 確認**（讀取回應的欄位名稱已用真實回應確認），詳見第 7 節。
+>
+> **2026-11 Step 3 / Step 5 的 `not_applied` 警告（只記錄、不改判定）**：Kepware 逐屬性套用，HTTP 200 / `success:true` 時
+> 回應的 `data.not_applied` 仍可能列出沒套用成功的屬性。Step 3（建點）與 Step 5（Scale）現在會把它記成警告，
+> 放進 `summary.details`（`kind: "not_applied"`），**但不影響成功／失敗判定**（該列照常計入 `success`、狀態照常更新）。
+> 欄位與範例見第 2 節「Step 3 / Step 5 的 `details`：未套用屬性警告」。
 
 **Base URL**: `http://localhost:9000`  
 **Content-Type**: `application/json`（除特別標註外）  
@@ -269,10 +274,55 @@ curl http://localhost:9000/api/tasks/abc12345 -H "Authorization: Bearer $TOKEN"
 | blocked | 無法判斷所屬 Gateway 而未送出的列數 |
 | cancelled | 任務是否被取消 |
 | cancelled_remaining | 因取消而**尚未處理**的列數（排隊中就被取消的整批 + 執行中被取消時還沒做的列）。data_type 校正的**電路斷路器中止**也用這個欄位表示「未處理筆數」，但此時 `cancelled` 仍為 `false` |
-| details | **選填、給前端顯示的清單**（目前只有 `kw_datatype_check` 會填：需校正的點位，結構見第 7 節）。各台 Gateway 的 details 依 Gateway 順序串接，每筆若沒有 `gateway` 欄位會補上該台名稱；沒有時為 `[]`。其他任務類型一律是 `[]` |
+| details | **選填、給前端顯示的清單**。有兩種內容，**依任務類型而不同、不會混在一起**：① `kw_datatype_check`（檢查模式）：需校正的點位，**沒有 `kind` 欄位**，結構見第 7 節；② `kw_execute`（Step 3）與 `pg_execute_scale`（Step 5）：Kepware 回應 `data.not_applied` 非空的**警告**，`kind` 固定為 `"not_applied"`，見下方小節。各台 Gateway 的 details 依 Gateway 順序串接，每筆若沒有 `gateway` 欄位會補上該台名稱；沒有時為 `[]`。批次刪除與 data_type 校正（`apply=true`）一律是 `[]` |
 
 > **相容性**：先前 `summary` 內的 `message`（例如「成功建立 58 筆 Tag」）已移除；請改讀 `success` / `fail` / `skip` / `errors`。
 > `summary` 只有任務**整個結束**時才存在。
+
+#### Step 3 / Step 5 的 `details`：未套用屬性警告（`kind: "not_applied"`）
+
+Kepware 的 `POST`／`PUT /api/config/tags` 是**逐屬性套用**：即使回 HTTP 200 與 `success:true`，回應的 `data.not_applied`
+（屬性名 → 目前值）仍可能列出「嘗試要改、但沒套用成功」的屬性，`data.message` 有說明
+（原文：`Not all properties were applied. This could be due to active client reference or property is disallowed/disabled/read-only.`）。
+真實回應範例：
+
+```json
+{"success": true, "message": "Tag 更新成功",
+ "data": {"not_applied": {"servermain.TAG_SCALING_RAW_HIGH": 1000, "servermain.TAG_SCALING_UNITS": ""},
+          "code": 200, "message": "Not all properties were applied. This could be due to active client reference or property is disallowed/disabled/read-only."}}
+```
+
+Step 3（建點）與 Step 5（Scale）呼叫成功後若 `data.not_applied` 為**非空 dict**，該台 Gateway 的摘要 `details` 會多一筆警告：
+
+```json
+"details": [
+  {
+    "kind": "not_applied", "step": "scale", "tag_name": "K8_2F_CHS_TAG050",
+    "keys": ["servermain.TAG_SCALING_RAW_HIGH", "servermain.TAG_SCALING_UNITS"],
+    "message": "Not all properties were applied. This could be due to active client reference or property is disallowed/disabled/read-only.",
+    "id": 101, "gateway": "K8 廠區 GW"
+  }
+]
+```
+
+| `details[]` 欄位 | 說明 |
+|------|------|
+| kind | 固定 `"not_applied"`，用來和 data_type 檢查的 details（沒有 `kind`）區分 |
+| step | `"create"`＝Step 3 建點、`"scale"`＝Step 5 Scale |
+| tag_name | 暫存表的 tag 名稱（Step 5 也是這個，不是含 tag group 的 Kepware 全名） |
+| keys | 沒被套用的屬性名稱，**已排序** |
+| message | Kepware 的 `data.message` 說明，最多 200 字；回應沒有時為 `""` |
+| id | 暫存列 id |
+| gateway | 這筆是哪台 Gateway 回的（Gateway 名稱；由系統補上） |
+
+> ⚠️ **僅為警告，不影響成功／失敗判定。** 有警告的列照常計入 `success`、`tb_status` / `scale_status` 照常更新為 `done`、
+> `add_result` 與 `total` / `success` / `fail` / `skip` 計數都和沒有警告時完全一致，也不會出現在 `errors`。
+> 目前先收集真實資料，之後再決定要不要改成失敗。同時也會寫一行任務日誌（`level: "warning"`）與伺服器日誌。
+>
+> - `data.not_applied` 為空 dict、`null`、list、`data` 不是 dict 等**格式不符**的回應不產生警告；沒有警告時 `details` 為 `[]`。
+> - 只有「Kepware 回應成功」的列才會檢查：409（已存在）、HTTP 失敗、Scale 被跳過（`scale_enabled=false`）或資料不全的列都不產生警告。
+> - 警告只在任務**結束後**的 `summary.details` 裡出現（任務進行中看任務日誌）；若該台 worker 中途丟出未預期的例外，該台已記的警告會一併遺失。
+> - 對照：**data_type 校正**（`/api/kw/datatype-check`）仍把 `not_applied` 非空當成失敗（它只送 `data_type`，沒套用就代表沒改成）。
 
 #### Gateway 判斷（三種模式）與排隊
 
@@ -904,6 +954,9 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
 2. 登入失敗＝這台待處理的列**全數記為失敗**（`fail`），`errors` 帶登入失敗原因。
 3. 預建所有不重複的 tag group → 逐筆建 tag；Kepware 回 409（已存在）視為成功；429 依 `Retry-After` 退避重試。
 4. **取消**：每筆之間檢查取消要求，停下時已成功的列照常寫回 `tb_status = done`。
+5. **`not_applied` 警告（只記錄）**：建 tag 成功（HTTP 200）但回應的 `data.not_applied` 非空時，該列**仍算成功**、`tb_status = done`，
+   並在 `summary.details` 多一筆 `kind: "not_applied"`、`step: "create"` 的警告（欄位見上方「Step 3 / Step 5 的 `details`：未套用屬性警告」）。
+   409（已存在）沒有回應內容，不檢查。
 
 **輪詢 `GET /api/tasks/abc12345` 取得的 `summary`（`done:true` 之後）**
 
@@ -916,9 +969,15 @@ curl -X POST http://localhost:9000/api/pg/staging/kw-override \
   "cancelled": false, "cancelled_remaining": 0, "blocked": 0,
   "gateways": [
     { "gateway_id": 1, "name": "K8 廠區 GW", "state": "done", "total": 245, "success": 240, "fail": 5, "skip": 0 }
+  ],
+  "details": [
+    { "kind": "not_applied", "step": "create", "tag_name": "K8_2F_CHS_TAG001",
+      "keys": ["servermain.TAG_DESCRIPTION"], "message": "Not all properties were applied. ...",
+      "id": 12, "gateway": "K8 廠區 GW" }
   ]
 }
 ```
+（`details` 只是警告，上面的 240 筆成功已包含這一筆；沒有警告時為 `[]`。）
 
 **curl 範例**
 
@@ -1194,6 +1253,9 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 3. 其餘（`scale_enabled=true` 且範圍值齊全）→ 才真正呼叫 Kepware `set_tag_scaling` API；
    成功則 `scale_status = done`、計入 `summary.success`；HTTP 失敗則計入 `summary.errors`、
    `scale_status` 維持 `pending`。
+   - **`not_applied` 警告（只記錄）**：HTTP 200 但回應的 `data.not_applied` 非空（例如 `servermain.TAG_SCALING_RAW_HIGH`
+     沒套用）時，該列**仍算成功**、`scale_status = done`，並在 `summary.details` 多一筆 `kind: "not_applied"`、`step: "scale"` 的警告
+     （欄位見上方「Step 3 / Step 5 的 `details`：未套用屬性警告」）。第 1、2 種結果（資料不全、未啟用 Scale）沒有呼叫 Kepware，不會有警告。
 
 登入失敗＝這台待處理的列全數記為失敗。**取消**時已處理完的列（`done` / `skip`）照常寫回狀態。
 
@@ -1219,6 +1281,7 @@ Collector，若有）都寫完才回應，不會回傳 `task_id`，不需要輪�
 | skip | `scale_enabled=false` 而跳過（不需要 Scale）的筆數，`scale_status` 已更新為 `skip`；加上「輪到時發現已被先前任務處理」而略過的筆數 |
 | fail | `scale_error`（資料不全）+ 實際呼叫 Kepware 失敗 + `blocked`，三者合計；這些筆 `scale_status` 皆維持 `pending` |
 | errors | `[{"tag_name","reason","gateway"}]`，資料不全與 Kepware 呼叫失敗混在同一個陣列裡，可用 `reason` 文字（`scale_enabled 為 true 但缺少 ...` 開頭）分辨是否為資料不全；`blocked` 的列用 `name` 鍵且 `gateway` 為 `null` |
+| details | `kind: "not_applied"` 的警告清單（Kepware 回 200 但 `data.not_applied` 非空；**仍計入 `success`**，僅供參考）；沒有時為 `[]`。欄位見「Step 3 / Step 5 的 `details`：未套用屬性警告」 |
 
 **curl 範例**
 

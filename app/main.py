@@ -38,7 +38,7 @@ from pydantic import BaseModel, field_validator
 from app.task_manager import TaskManager, _smart_get
 from app.config_manager import ConfigManager
 from app.pg_client import PGClient
-from app.kw_gw_client import KepwareGatewayClient
+from app.kw_gw_client import KepwareGatewayClient, not_applied_keys, not_applied_message
 from app.gateway_router import (
     resolve_gateway, find_unmapped, localize_reason, group_by_gateway, is_routable,
 )
@@ -1555,6 +1555,44 @@ def _dispatch_gateway_job(task_type: str, csv_filename: str, params: dict, plan:
 #   （被先前排在前面的任務處理過了）直接略過、不呼叫 Kepware。
 # - 取消：每筆之間輪詢 view.cancelled；所有等待都用可中斷的睡眠；已成功的列在 finally 寫回狀態。
 # - 登入失敗＝這台待處理的列全數記為 fail。
+# - Step 3 / Step 5 對 Kepware 回應的 data.not_applied 只「記錄警告」（見 _record_not_applied），
+#   不改變成功／失敗判定。
+
+_NOT_APPLIED_STEP_LABEL = {"create": "建點", "scale": "Scale 設定"}
+
+
+def _record_not_applied(view, part, details: list, step: str, item: dict, result) -> None:
+    """Step 3（step="create"）／Step 5（step="scale"）呼叫 Kepware 成功後，檢查回應的 data.not_applied：
+    非空就記一筆警告，**只記錄、不改判定**（先收集一陣子真實資料，再決定要不要改成失敗）。
+
+    Kepware 是逐屬性套用：HTTP 200 / success:true 時 data.not_applied 仍可能列出「要改但沒套用」的屬性
+    （有用戶端使用中、屬性唯讀…）。記錄三處：
+    1. details（worker 回傳摘要的選填清單，gateway_jobs 會補上 gateway 欄位）：
+       {"kind": "not_applied", "step", "tag_name", "keys"（已排序）, "message", "id"（暫存列 id）}；
+    2. view.push_log("warning", ...) 一行（任務日誌）；
+    3. Python log.warning（伺服器日誌，含 Gateway 名稱）。
+
+    呼叫端是在「該筆已記為成功」之後才呼叫本函式，所以這裡**任何例外都不可外洩**（否則會被呼叫端的
+    except 當成這筆失敗，把已成功的列翻成失敗）；出錯只寫伺服器日誌。回傳值恆為 None。"""
+    try:
+        keys = not_applied_keys(result)
+        if not keys:
+            return
+        tag = item["tag_name"]
+        message = not_applied_message(result)
+        details.append({"kind": "not_applied", "step": step, "tag_name": tag,
+                        "keys": keys, "message": message, "id": item["id"]})
+        label = _NOT_APPLIED_STEP_LABEL.get(step, step)
+        key_text = "、".join(keys)
+        note = f"；Kepware 說明：{' '.join(message.split())}" if message else ""
+        view.push_log("warning",
+                      f"[未套用屬性] {tag} 的{label}回應成功，但有 {len(keys)} 個屬性未被套用"
+                      f"（{key_text}）{note}（僅記錄，不影響成功判定）")
+        log.warning(f"[not_applied] {label}（Gateway {part.name}）{tag}: Kepware 回應成功，"
+                    f"但屬性未套用 {keys}；僅記錄，不影響成功判定")
+    except Exception as e:
+        log.warning(f"[not_applied] 記錄警告失敗（Gateway {part.name}，已忽略、不影響判定）: {e}")
+
 
 def _kw_execute_worker(view, part) -> dict:
     """Step 3 建點：預建 tag group → 逐筆建 tag → 成功的列 tb_status 改 done。"""
@@ -1613,6 +1651,7 @@ def _kw_execute_worker(view, part) -> dict:
 
     success_ids = []
     failed = []
+    warnings = []                # not_applied 警告（只記錄；不影響成功／失敗判定與計數）
     success_count = 0
     cancelled_remaining = 0
     try:
@@ -1623,7 +1662,7 @@ def _kw_execute_worker(view, part) -> dict:
                 break
             tag = item["tag_name"]
             try:
-                _kw_call_with_429_retry(
+                created = _kw_call_with_429_retry(
                     view, f"Tag {tag}",
                     lambda item=item: client.create_tag(
                         channel_name=item["channel_name"],
@@ -1637,6 +1676,7 @@ def _kw_execute_worker(view, part) -> dict:
                 success_ids.append(item["id"])
                 success_count += 1
                 view.add_result(tag, "success", "")
+                _record_not_applied(view, part, warnings, "create", item, created)
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 409:
                     success_ids.append(item["id"])
@@ -1669,8 +1709,11 @@ def _kw_execute_worker(view, part) -> dict:
     except Exception as e:
         log.warning(f"[activity_log] 寫入失敗: {e}")
 
-    return {"total": total, "success": len(success_ids), "fail": len(failed), "skip": skipped,
-            "errors": failed, "cancelled_remaining": cancelled_remaining}
+    summary = {"total": total, "success": len(success_ids), "fail": len(failed), "skip": skipped,
+               "errors": failed, "cancelled_remaining": cancelled_remaining}
+    if warnings:                 # 只有非空才放進摘要（gateway_jobs 會補上 gateway 欄位）
+        summary["details"] = warnings
+    return summary
 
 
 def _scale_worker(view, part) -> dict:
@@ -1711,6 +1754,7 @@ def _scale_worker(view, part) -> dict:
 
     success_ids = []
     failed = []
+    warnings = []                # not_applied 警告（只記錄；不影響成功／失敗判定與計數）
     skip_ids = []
     success_count = 0
     skipped_count = 0            # 「未啟用 Scale」的略過；與 prior_skipped（已被先前任務處理）分開計
@@ -1764,12 +1808,13 @@ def _scale_worker(view, part) -> dict:
                 })
 
             try:
-                _kw_call_with_429_retry(
+                scaled = _kw_call_with_429_retry(
                     view, f"Scale {tag_name}",
                     lambda config=config: client.set_tag_scaling(config))
                 success_ids.append(item["id"])
                 success_count += 1
                 view.add_result(tag_name, "success", "")
+                _record_not_applied(view, part, warnings, "scale", item, scaled)
             except Exception as e:
                 view.push_log("error", f"{tag_name} 失敗: {e}")
                 failed.append({"tag_name": tag_name, "reason": str(e)})
@@ -1796,9 +1841,12 @@ def _scale_worker(view, part) -> dict:
     except Exception as e:
         log.warning(f"[activity_log] 寫入失敗: {e}")
 
-    return {"total": total, "success": len(success_ids), "fail": len(failed),
-            "skip": prior_skipped + skipped_count, "errors": failed,
-            "cancelled_remaining": cancelled_remaining}
+    summary = {"total": total, "success": len(success_ids), "fail": len(failed),
+               "skip": prior_skipped + skipped_count, "errors": failed,
+               "cancelled_remaining": cancelled_remaining}
+    if warnings:                 # 只有非空才放進摘要（gateway_jobs 會補上 gateway 欄位）
+        summary["details"] = warnings
+    return summary
 
 
 def _kw_delete_worker(view, part) -> dict:
