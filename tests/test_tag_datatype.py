@@ -498,3 +498,63 @@ def test_set_tag_data_type_without_a_boolean_false_success_flag_is_not_rejected(
     monkeypatch.setattr(mod.requests, "put", lambda url, **kw: _FakeHttpResponse(200, body))
     assert _logged_in_client().set_tag_data_type("CH1", "DEV1", "T1", 8) == body
 
+
+# ═══════════════════════════════════════════════════════════════
+# 真實 PUT 回應：success=true 但 data.not_applied 非空（使用者實測，2026-11）
+# ═══════════════════════════════════════════════════════════════
+
+REAL_PUT_NOT_APPLIED = {
+    "success": True,
+    "message": "Tag 更新成功",
+    "data": {
+        "not_applied": {
+            "servermain.TAG_SCALING_CLAMP_HIGH": False,
+            "servermain.TAG_SCALING_CLAMP_LOW": False,
+            "servermain.TAG_SCALING_NEGATE_VALUE": False,
+            "servermain.TAG_SCALING_RAW_HIGH": 1000,
+            "servermain.TAG_SCALING_SCALED_DATA_TYPE": 9,
+            "servermain.TAG_SCALING_SCALED_HIGH": 1000,
+            "servermain.TAG_SCALING_UNITS": "",
+        },
+        "code": 200,
+        "message": "Not all properties were applied. This could be due to active client reference "
+                   "or property is disallowed/disabled/read-only.",
+    },
+}
+
+
+def test_set_tag_data_type_not_applied_is_a_failure_even_though_success_is_true(monkeypatch):
+    """真實回應：HTTP 200 + success=true，但 data.not_applied 列出沒被套用的屬性。
+    本函式只送 data_type，所以 not_applied 非空＝資料型態沒改成，必須是失敗，並點名屬性與 Kepware 的說明。"""
+    import app.kw_gw_client as mod
+    from app.kw_gw_client import TagNotAppliedError
+    monkeypatch.setattr(mod.requests, "put", lambda url, **kw: _FakeHttpResponse(200, REAL_PUT_NOT_APPLIED))
+    with pytest.raises(TagNotAppliedError) as exc:
+        _logged_in_client().set_tag_data_type("CH1", "DEV1", "T1", 8)
+    msg = str(exc.value)
+    assert "servermain.TAG_SCALING_RAW_HIGH" in msg and "active client reference" in msg and "Collector" in msg
+    assert exc.value.keys == sorted(REAL_PUT_NOT_APPLIED["data"]["not_applied"])
+    assert isinstance(exc.value, RuntimeError), "要能被 worker 的一般例外處理接住（該筆記為失敗）"
+
+
+@pytest.mark.parametrize("body", [
+    {"success": True, "message": "Tag 更新成功"},                                   # 沒有 data
+    {"success": True, "data": {}},                                                  # 沒有 not_applied
+    {"success": True, "data": {"not_applied": {}, "code": 200}},                    # 空的 not_applied
+    {"success": True, "data": {"not_applied": None}},
+    {"success": True, "data": {"not_applied": ["x"]}},                              # 格式不符（不是 dict）→ 不誤殺
+    {"success": True, "data": "ok"},
+])
+def test_set_tag_data_type_without_a_nonempty_not_applied_dict_is_a_success(monkeypatch, body):
+    import app.kw_gw_client as mod
+    monkeypatch.setattr(mod.requests, "put", lambda url, **kw: _FakeHttpResponse(200, body))
+    assert _logged_in_client().set_tag_data_type("CH1", "DEV1", "T1", 8) == body
+
+
+def test_not_applied_keys_helper():
+    from app.kw_gw_client import _not_applied_keys
+    assert _not_applied_keys(REAL_PUT_NOT_APPLIED) == sorted(REAL_PUT_NOT_APPLIED["data"]["not_applied"])
+    assert _not_applied_keys({"data": {"not_applied": {"b": 1, "a": 2}}}) == ["a", "b"]
+    for bad in (None, [], "x", {}, {"data": None}, {"data": {"not_applied": {}}}):
+        assert _not_applied_keys(bad) == []
+

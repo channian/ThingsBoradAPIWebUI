@@ -46,6 +46,33 @@ def _resolve_proxies():
     return {"http": None, "https": None}
 
 
+class TagNotAppliedError(RuntimeError):
+    """Gateway 回 HTTP 200 / success=true，但回應的 data.not_applied 列出「沒有被套用」的屬性。
+
+    真實回應範例（Kepware 不是整筆失敗，而是逐屬性套用，套不上的列在 not_applied）::
+
+        {"success": true, "message": "Tag 更新成功",
+         "data": {"not_applied": {"servermain.TAG_SCALING_RAW_HIGH": 1000, ...}, "code": 200,
+                  "message": "Not all properties were applied. This could be due to active client
+                              reference or property is disallowed/disabled/read-only."}}
+
+    所以「success=true」不代表「我要改的屬性真的改到了」。呼叫端要把它當成寫入失敗。
+    屬性：keys＝沒被套用的屬性名稱（已排序）。"""
+
+    def __init__(self, message: str, keys: list) -> None:
+        super().__init__(message)
+        self.keys = keys
+
+
+def _not_applied_keys(result) -> list:
+    """從 PUT 回應取出 data.not_applied 的屬性名稱（已排序）；沒有或格式不符回 []。"""
+    data = result.get("data") if isinstance(result, dict) else None
+    not_applied = data.get("not_applied") if isinstance(data, dict) else None
+    if isinstance(not_applied, dict) and not_applied:
+        return sorted(str(k) for k in not_applied)
+    return []
+
+
 class KepwareGatewayClient:
     """Kepware API Gateway 連線封裝"""
 
@@ -282,6 +309,17 @@ class KepwareGatewayClient:
         # 之後的寫入就靠這裡把關，否則會靜默漏掉失敗。
         if isinstance(result, dict) and result.get("success") is False:
             raise RuntimeError(f"Gateway 回報寫入失敗：{result.get('message') or result}")
+        # 逐屬性套用：success=true 也可能有屬性沒被套用（常見原因：有用戶端正在使用此點位、屬性唯讀）。
+        # 本函式只送 data_type，所以 not_applied 非空就代表資料型態沒改成，必須當成失敗。
+        keys = _not_applied_keys(result)
+        if keys:
+            detail = ""
+            data = result.get("data")
+            if isinstance(data, dict) and data.get("message"):
+                detail = f"；Kepware 說明：{str(data['message'])[:200]}"
+            raise TagNotAppliedError(
+                f"Kepware 未套用資料型態修改（未套用的屬性：{', '.join(keys)}）。"
+                f"可能有用戶端（例如 Collector）正在使用此點位，或屬性為唯讀{detail}", keys)
         return result
 
     # ── Tag Scaling ──

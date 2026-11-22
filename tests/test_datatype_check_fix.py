@@ -1122,3 +1122,30 @@ def test_real_shape_gateway_reports_write_failure_with_http_200_is_a_failed_row_
     assert "寫入失敗" in err and "Tag 被鎖定" in err
     assert state.remote_snapshot()[(CH, DEV, GRP, "T_OLD0")]["data"]["servermain.TAG_DATA_TYPE"] == 0, \
         "寫入失敗的點不可被改動"
+
+
+def test_real_shape_not_applied_row_fails_with_reason_and_others_continue(
+        api_client, admin_headers, monkeypatch, make_state):
+    """Gateway 回 success=true 但 data.not_applied 列出沒套用的屬性（client 轉成 TagNotAppliedError）：
+    該筆記為失敗並帶說明（可能有用戶端正在使用此點位），Kepware 上的資料不變；
+    這不是「讀回不符」，不觸發斷路器，其他點照常處理。"""
+    from app.kw_gw_client import TagNotAppliedError
+    make_gateway("real-gw")
+    state = make_state()
+    _install(monkeypatch, state)
+    _real_shape_put_hook(state)
+    ids = [_seed(state, f"T_OLD{i}", actual=0, payload=_real_get_response(0)) for i in range(3)]
+    state.queue_set_data_type_error(
+        "T_OLD1", TagNotAppliedError(
+            "Kepware 未套用資料型態修改（未套用的屬性：servermain.TAG_DATA_TYPE）。"
+            "可能有用戶端（例如 Collector）正在使用此點位，或屬性為唯讀", ["servermain.TAG_DATA_TYPE"]))
+
+    _, result = _run(api_client, admin_headers, apply=True, ids=ids)
+    s = result["summary"]
+    assert (s["success"], s["fail"], s["cancelled_remaining"]) == (2, 1, 0), s
+    reason = _errors(s)["T_OLD1"]["reason"]
+    assert "未套用" in reason and "Collector" in reason
+    snap = state.remote_snapshot()
+    assert snap[(CH, DEV, GRP, "T_OLD1")]["data"]["servermain.TAG_DATA_TYPE"] == 0, "沒套用的點不可被改動"
+    assert snap[(CH, DEV, GRP, "T_OLD0")]["data"]["servermain.TAG_DATA_TYPE"] == 8
+    assert snap[(CH, DEV, GRP, "T_OLD2")]["data"]["servermain.TAG_DATA_TYPE"] == 8

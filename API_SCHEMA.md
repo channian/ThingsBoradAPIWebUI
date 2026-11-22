@@ -1938,6 +1938,9 @@ CSV 裡沒有任何同時有 `name` 與 `type` 的列時，任務會立刻以 `t
 >    `data`，資料型態是 `data["servermain.TAG_DATA_TYPE"]`（數字）；另有 `servermain.TAG_SCALING_SCALED_DATA_TYPE`
 >    （縮放輸出型態）是不同的欄位，解析時不會混用。**判讀不出來的點仍一律失敗、絕不寫入**。
 >    另外 PUT 的回應同樣有 `success` 外殼：HTTP 200 但 `success:false` 會被當成寫入失敗。
+>    **Kepware 是逐屬性套用**：PUT 即使回 `success:true`，`data.not_applied` 仍可能列出沒被套用的屬性
+>    （原因可能是有用戶端正在使用該點位、或屬性唯讀／被停用）。校正只送 `data_type`，所以 `not_applied` 非空
+>    就代表型態沒改成，該筆記為失敗並在原因中列出未套用的屬性與 Kepware 的說明。
 >
 > **建議第一次只對 1 筆校正**（`apply=true` 且 `ids` 只放一筆），到 Kepware 確認該點只有 `data_type` 變了、其他欄位都還在，再擴大範圍。
 
